@@ -496,13 +496,15 @@ def kiosk_dashboard():
         )
         st.divider()
 
-        if st.button("⭐  Guest Experience", use_container_width=True, key="home_btn_guest"):
-            st.session_state["kiosk_view"] = "guest"
-            refresh()
+        _, home_col, _ = st.columns([0.08, 0.84, 0.08])
+        with home_col:
+            if st.button("⭐  Guest Experience", use_container_width=True, key="home_btn_guest"):
+                st.session_state["kiosk_view"] = "guest"
+                refresh()
 
-        if st.button("👤  Staff Check In", use_container_width=True, key="home_btn_staff"):
-            st.session_state["kiosk_view"] = "staff"
-            refresh()
+            if st.button("👤  Staff Check In", use_container_width=True, key="home_btn_staff"):
+                st.session_state["kiosk_view"] = "staff"
+                refresh()
 
     # ==============================================================
     # GUEST EXPERIENCE
