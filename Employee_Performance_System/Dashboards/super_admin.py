@@ -271,6 +271,24 @@ def super_admin_dashboard():
     if "sa_nav_open" not in st.session_state:
         st.session_state["sa_nav_open"] = True
 
+    def nav_selectbox(label, options, key, **kwargs):
+        if is_mobile:
+            return st.selectbox(label, options, key=key, **kwargs)
+        with st.sidebar:
+            return st.selectbox(label, options, key=key, **kwargs)
+
+    def nav_radio(label, options, key, horizontal=False, **kwargs):
+        if is_mobile:
+            return st.radio(label, options, key=key, horizontal=horizontal, **kwargs)
+        with st.sidebar:
+            return st.radio(label, options, key=key, **kwargs)
+
+    def nav_date_input(label, value, key, **kwargs):
+        if is_mobile:
+            return st.date_input(label, value=value, key=key, **kwargs)
+        with st.sidebar:
+            return st.date_input(label, value=value, key=key, **kwargs)
+
     nav_items = [
         "Overview",
         "Management",
@@ -352,16 +370,29 @@ def super_admin_dashboard():
                     key="sa_risk_view",
                 )
 
+    branch_scope_options = ["All Branches"] + branches
+    selected_branch_scope = nav_selectbox("Branch View", branch_scope_options, key="sa_branch_scope")
+    branch_scope = None if selected_branch_scope == "All Branches" else selected_branch_scope
+
+    def apply_branch_scope(df, branch_col="branch"):
+        if df is None or getattr(df, "empty", True):
+            return df
+        if branch_scope and branch_col in df.columns:
+            return df[df[branch_col].astype(str) == str(branch_scope)]
+        return df
+
     # =========================================================
     # OVERVIEW
     # =========================================================
     if menu == "Overview":
         st.subheader("Overview")
 
-        users_df     = safe_read("SELECT * FROM users WHERE organization=?",    conn, params=(org,))
-        ratings_df   = safe_read("SELECT * FROM ratings WHERE organization=?",  conn, params=(org,))
+        users_df     = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?",    conn, params=(org,)))
+        ratings_df   = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?",  conn, params=(org,)))
         branches_all = safe_read("SELECT * FROM branches WHERE organization=?", conn, params=(org,))
-        kiosks_df    = safe_read("SELECT * FROM kiosks WHERE organization=?",   conn, params=(org,))
+        if branch_scope and not branches_all.empty and "name" in branches_all.columns:
+            branches_all = branches_all[branches_all["name"].astype(str) == str(branch_scope)]
+        kiosks_df    = apply_branch_scope(safe_read("SELECT * FROM kiosks WHERE organization=?",   conn, params=(org,)))
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Users",    len(users_df))
@@ -391,7 +422,9 @@ def super_admin_dashboard():
         if not ANALYTICS_OK:
             st.warning("Analytics module unavailable.")
         else:
-            sel_branch = st.selectbox("Filter by Branch (optional)", ["— All Branches —"] + branches, key="intel_branch")
+            intel_options = ["— All Branches —"] + branches
+            intel_default_idx = intel_options.index(branch_scope) if branch_scope in intel_options else 0
+            sel_branch = nav_selectbox("Filter by Branch (optional)", intel_options, key="intel_branch", index=intel_default_idx)
             branch_filter = None if sel_branch == "— All Branches —" else sel_branch
             
             if st.button("🔄 Run Intelligence Analysis", type="primary"):
@@ -706,10 +739,13 @@ def super_admin_dashboard():
                 pass
             
             # Filter by severity
-            severity_sel = st.selectbox("Filter by Severity", ["All", "critical", "warning", "info"], key="alert_sev")
+            severity_sel = nav_selectbox("Filter by Severity", ["All", "critical", "warning", "info"], key="alert_sev")
             
             try:
                 alerts = get_unread_alerts(org)
+
+                if branch_scope:
+                    alerts = [a for a in alerts if str(a.get("branch", "")).strip() == str(branch_scope)]
                 
                 if severity_sel != "All":
                     alerts = [a for a in alerts if a.get("severity") == severity_sel]
@@ -749,6 +785,7 @@ def super_admin_dashboard():
             conn,
             params=(org,),
         )
+        warns_df = apply_branch_scope(warns_df)
 
         if warns_df.empty:
             st.success("No warning records found.")
@@ -773,13 +810,10 @@ def super_admin_dashboard():
             c2.metric("Unique Users", warns_view["username"].astype(str).nunique())
             c3.metric("Categories", warns_view["category"].astype(str).nunique())
 
-            col_a, col_b = st.columns(2)
-            with col_a:
-                cat_options = ["All"] + sorted(warns_view["category"].dropna().astype(str).unique().tolist())
-                selected_category = st.selectbox("Filter by Category", cat_options, key="risk_warn_cat")
-            with col_b:
-                type_options = ["All"] + sorted(warns_view["warning_type"].dropna().astype(str).unique().tolist())
-                selected_type = st.selectbox("Filter by Warning Type", type_options, key="risk_warn_type")
+            cat_options = ["All"] + sorted(warns_view["category"].dropna().astype(str).unique().tolist())
+            selected_category = nav_selectbox("Filter by Category", cat_options, key="risk_warn_cat")
+            type_options = ["All"] + sorted(warns_view["warning_type"].dropna().astype(str).unique().tolist())
+            selected_type = nav_selectbox("Filter by Warning Type", type_options, key="risk_warn_type")
 
             filtered = warns_view.copy()
             if selected_category != "All":
@@ -806,10 +840,10 @@ def super_admin_dashboard():
     elif menu == "Management" and management_view == "Users":
         st.subheader("Users")
 
-        users_df = safe_read(
+        users_df = apply_branch_scope(safe_read(
             "SELECT id, username, role, phone, branch, organization, status FROM users WHERE organization=?",
             conn, params=(org,)
-        )
+        ))
 
         role_view_df = users_df.copy()
         if safe_df(role_view_df):
@@ -855,11 +889,16 @@ def super_admin_dashboard():
 
         with tab_branch:
             if branches:
-                sel_branch = st.selectbox("Select Branch", branches, key="user_branch_view")
-                branch_users = safe_read(
-                    "SELECT id, username, role, phone, branch, status FROM users WHERE organization=? AND branch=?",
-                    conn, params=(org, sel_branch)
-                )
+                user_branch_options = ["All Branches"] + branches
+                user_branch_default_idx = user_branch_options.index(branch_scope) if branch_scope in user_branch_options else 0
+                sel_branch = nav_selectbox("Select Branch", user_branch_options, key="user_branch_view", index=user_branch_default_idx)
+                if sel_branch == "All Branches":
+                    branch_users = users_df.copy()
+                else:
+                    branch_users = safe_read(
+                        "SELECT id, username, role, phone, branch, status FROM users WHERE organization=? AND branch=?",
+                        conn, params=(org, sel_branch)
+                    )
                 if safe_df(branch_users):
                     st.dataframe(branch_users, use_container_width=True)
                     if st.button("Show / Hide Passwords", key="show_pw_branch"):
@@ -1132,10 +1171,11 @@ def super_admin_dashboard():
                 "SELECT * FROM leaves WHERE organization=? ORDER BY id DESC",
                 conn, params=(org,)
             )
+            leaves_df = apply_branch_scope(leaves_df)
             if leaves_df.empty:
                 st.info("No leave requests.")
             else:
-                f_status = st.selectbox(
+                f_status = nav_selectbox(
                     "Filter by Status", ["All", "pending", "approved", "rejected", "reapply"],
                     key="leave_filter"
                 )
@@ -1173,6 +1213,7 @@ def super_admin_dashboard():
                 "SELECT * FROM messages WHERE organization=? ORDER BY id DESC",
                 conn, params=(org,)
             )
+            msgs_df = apply_branch_scope(msgs_df)
             if msgs_df.empty:
                 st.info("No messages.")
             else:
@@ -1266,6 +1307,10 @@ def super_admin_dashboard():
                 params=(org,),
             )
             users_all      = safe_read("SELECT * FROM users WHERE organization=?",     conn, params=(org,))
+            ratings_all = apply_branch_scope(ratings_all)
+            attendance_all = apply_branch_scope(attendance_all)
+            lateness_all = apply_branch_scope(lateness_all)
+            users_all = apply_branch_scope(users_all)
 
             smart_warns = []
 
@@ -1374,6 +1419,7 @@ def super_admin_dashboard():
                             st.success(f"Warning sent to {w_user}.")
 
             warns_history = safe_read("SELECT * FROM warnings WHERE organization=?", conn, params=(org,))
+            warns_history = apply_branch_scope(warns_history)
             if safe_df(warns_history):
                 st.divider()
                 st.markdown("### Warning History")
@@ -1382,6 +1428,7 @@ def super_admin_dashboard():
         # ---- KIOSK (inside Management) ----
         with tab_kiosk:
             kiosks_df = safe_read("SELECT * FROM kiosks WHERE organization=?", conn, params=(org,))
+            kiosks_df = apply_branch_scope(kiosks_df)
             if safe_df(kiosks_df):
                 st.dataframe(kiosks_df, use_container_width=True)
             st.divider()
@@ -1423,6 +1470,7 @@ def super_admin_dashboard():
                 "SELECT * FROM leaves WHERE organization=? AND status='pending' ORDER BY id DESC",
                 conn, params=(org,)
             )
+            pending_lv = apply_branch_scope(pending_lv)
             if pending_lv.empty:
                 st.success("No pending leave requests.")
             else:
@@ -1458,6 +1506,8 @@ def super_admin_dashboard():
         st.subheader("Payments")
 
         branches_all = safe_read("SELECT * FROM branches WHERE organization=?", conn, params=(org,))
+        if branch_scope and not branches_all.empty and "name" in branches_all.columns:
+            branches_all = branches_all[branches_all["name"].astype(str) == str(branch_scope)]
         org_row = safe_read(
             "SELECT name, expires_at, status FROM organizations WHERE name=?",
             conn,
@@ -1568,7 +1618,9 @@ def super_admin_dashboard():
         if not ANALYTICS_OK:
             st.warning("Analytics module unavailable.")
         else:
-            sel_br_demo = st.selectbox("Filter by Branch", ["— All Branches —"] + branches, key="demo_branch_sel")
+            demo_options = ["— All Branches —"] + branches
+            demo_default_idx = demo_options.index(branch_scope) if branch_scope in demo_options else 0
+            sel_br_demo = nav_selectbox("Filter by Branch", demo_options, key="demo_branch_sel", index=demo_default_idx)
             branch_filter_demo = None if sel_br_demo == "— All Branches —" else sel_br_demo
             
             if st.button("Analyze Demographics", type="primary"):
@@ -1642,7 +1694,7 @@ def super_admin_dashboard():
             st.divider()
             st.markdown("### 📋 Group Details")
             
-            risk_filter = st.selectbox("Filter by Risk Level", ["All", "high", "medium", "low"], key="demo_risk_sel")
+            risk_filter = nav_selectbox("Filter by Risk Level", ["All", "high", "medium", "low"], key="demo_risk_sel")
             risk_val = None if risk_filter == "All" else risk_filter
             
             try:
@@ -1666,13 +1718,24 @@ def super_admin_dashboard():
 
         with tab_by_branch:
             if branches:
-                sel_br    = st.selectbox("Select Branch", branches, key="analytics_br_sel")
-                ratings   = safe_read("SELECT * FROM ratings WHERE organization=? AND branch=?",    conn, params=(org, sel_br))
-                attendance = safe_read("SELECT * FROM attendance WHERE organization=? AND branch=?", conn, params=(org, sel_br))
-                schedules  = safe_read("SELECT * FROM schedules WHERE organization=? AND branch=?",  conn, params=(org, sel_br))
-                users_br   = safe_read("SELECT * FROM users WHERE organization=? AND branch=?",      conn, params=(org, sel_br))
-                leaves_br  = safe_read("SELECT * FROM leaves WHERE organization=? AND branch=?",     conn, params=(org, sel_br))
-                messages_br = safe_read("SELECT * FROM messages WHERE organization=? AND branch=?",  conn, params=(org, sel_br))
+                perf_branch_options = ["All Branches"] + branches
+                perf_branch_default_idx = perf_branch_options.index(branch_scope) if branch_scope in perf_branch_options else 0
+                sel_br = nav_selectbox("Select Branch", perf_branch_options, key="analytics_br_sel", index=perf_branch_default_idx)
+
+                if sel_br == "All Branches":
+                    ratings = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?", conn, params=(org,)))
+                    attendance = apply_branch_scope(safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,)))
+                    schedules = apply_branch_scope(safe_read("SELECT * FROM schedules WHERE organization=?", conn, params=(org,)))
+                    users_br = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?", conn, params=(org,)))
+                    leaves_br = apply_branch_scope(safe_read("SELECT * FROM leaves WHERE organization=?", conn, params=(org,)))
+                    messages_br = apply_branch_scope(safe_read("SELECT * FROM messages WHERE organization=?", conn, params=(org,)))
+                else:
+                    ratings = safe_read("SELECT * FROM ratings WHERE organization=? AND branch=?", conn, params=(org, sel_br))
+                    attendance = safe_read("SELECT * FROM attendance WHERE organization=? AND branch=?", conn, params=(org, sel_br))
+                    schedules = safe_read("SELECT * FROM schedules WHERE organization=? AND branch=?", conn, params=(org, sel_br))
+                    users_br = safe_read("SELECT * FROM users WHERE organization=? AND branch=?", conn, params=(org, sel_br))
+                    leaves_br = safe_read("SELECT * FROM leaves WHERE organization=? AND branch=?", conn, params=(org, sel_br))
+                    messages_br = safe_read("SELECT * FROM messages WHERE organization=? AND branch=?", conn, params=(org, sel_br))
 
                 bm1, bm2, bm3 = st.columns(3)
                 bm1.metric("Ratings",           len(ratings))
@@ -1775,12 +1838,12 @@ def super_admin_dashboard():
                 st.info("No branches available.")
 
         with tab_overall:
-            ratings_all    = safe_read("SELECT * FROM ratings WHERE organization=?",   conn, params=(org,))
-            attendance_all = safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,))
-            users_all      = safe_read("SELECT * FROM users WHERE organization=?",     conn, params=(org,))
-            leaves_all     = safe_read("SELECT * FROM leaves WHERE organization=?",    conn, params=(org,))
-            messages_all   = safe_read("SELECT * FROM messages WHERE organization=?",  conn, params=(org,))
-            schedules_all  = safe_read("SELECT * FROM schedules WHERE organization=?", conn, params=(org,))
+            ratings_all = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?", conn, params=(org,)))
+            attendance_all = apply_branch_scope(safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,)))
+            users_all = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?", conn, params=(org,)))
+            leaves_all = apply_branch_scope(safe_read("SELECT * FROM leaves WHERE organization=?", conn, params=(org,)))
+            messages_all = apply_branch_scope(safe_read("SELECT * FROM messages WHERE organization=?", conn, params=(org,)))
+            schedules_all = apply_branch_scope(safe_read("SELECT * FROM schedules WHERE organization=?", conn, params=(org,)))
 
             if ratings_all.empty:
                 st.info("No ratings data yet.")
@@ -1790,20 +1853,127 @@ def super_admin_dashboard():
                 ob2.metric("Attendance Records",    len(attendance_all))
 
                 st.markdown("**Branch Performance Comparison**")
-                branch_avg = ratings_all.groupby("branch")["score"].mean().reset_index()
-                branch_avg.columns = ["Branch", "Avg Score"]
+                branch_avg = ratings_all.groupby("branch").agg(
+                    Avg_Score=("score", "mean"),
+                    Rating_Count=("score", "count"),
+                    Rated_Users=("rated", "nunique"),
+                ).reset_index().rename(columns={"branch": "Branch"})
+                branch_avg["Avg_Score"] = branch_avg["Avg_Score"].round(2)
+
+                if not attendance_all.empty and "branch" in attendance_all.columns and "status" in attendance_all.columns:
+                    attendance_compare = attendance_all.copy()
+                    attendance_compare["is_late"] = attendance_compare["status"].astype(str).str.upper() == "LATE"
+                    late_view = attendance_compare.groupby("branch").agg(
+                        Late_Records=("is_late", "sum"),
+                        Attendance_Records=("is_late", "count"),
+                    ).reset_index()
+                    late_view["Late_Rate_%"] = (
+                        (late_view["Late_Records"] / late_view["Attendance_Records"].replace(0, 1)) * 100
+                    ).round(1)
+                    branch_avg = branch_avg.merge(
+                        late_view.rename(columns={"branch": "Branch"})[["Branch", "Late_Rate_%"]],
+                        on="Branch",
+                        how="left",
+                    )
+
+                branch_avg = branch_avg.sort_values(["Avg_Score", "Rating_Count"], ascending=[False, False])
+                compare_scope_label = "All Branches" if not branch_scope else f"{branch_scope} (selected branch)"
+                st.caption(f"Scope: {compare_scope_label}")
+
+                if len(branch_avg) >= 2:
+                    best_branch_name = str(branch_avg.iloc[0]["Branch"])
+                    best_branch_score = float(branch_avg.iloc[0]["Avg_Score"])
+                    worst_branch_name = str(branch_avg.iloc[-1]["Branch"])
+                    worst_branch_score = float(branch_avg.iloc[-1]["Avg_Score"])
+                    gap = best_branch_score - worst_branch_score
+                    bc1, bc2, bc3 = st.columns(3)
+                    bc1.metric("Best Branch", f"{best_branch_name} ({best_branch_score:.1f})")
+                    bc2.metric("Lowest Branch", f"{worst_branch_name} ({worst_branch_score:.1f})")
+                    bc3.metric("Performance Gap", f"{gap:.1f}")
+                elif len(branch_avg) == 1:
+                    only_branch_name = str(branch_avg.iloc[0]["Branch"])
+                    only_branch_score = float(branch_avg.iloc[0]["Avg_Score"])
+                    st.info(f"Current comparison scope has one branch: {only_branch_name} (avg score {only_branch_score:.1f}).")
+
                 if PLOTLY_OK:
                     try:
                         fig = px.bar(
-                            branch_avg, x="Branch", y="Avg Score",
-                            color="Avg Score", color_continuous_scale="Teal",
-                            title="All Branches Performance"
+                            branch_avg, x="Branch", y="Avg_Score",
+                            color="Avg_Score", color_continuous_scale="Teal",
+                            title="Branch Comparison Performance"
                         )
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception:
                         st.dataframe(branch_avg, use_container_width=True)
                 else:
                     st.dataframe(branch_avg, use_container_width=True)
+
+                st.markdown("### Overall Best Performers")
+                with st.expander("How Ranking Is Calculated", expanded=False):
+                    st.markdown(
+                        """
+                        - Primary rule: higher average score ranks higher.
+                        - Tie-breaker 1: if average scores are equal, higher rating count ranks higher.
+                        - Tie-breaker 2: if still tied, current dataframe order is used.
+                        - Best Employee: top ranked user with role = employee.
+                        - Best Admin: top ranked user with role in admin/superadmin.
+                        - Best Overall: top ranked user across all roles in current scope.
+                        - Scope rule: ranking uses current Branch View selection (All Branches or one branch).
+                        """
+                    )
+                user_scores = ratings_all.groupby("rated").agg(
+                    avg_score=("score", "mean"),
+                    rating_count=("score", "count"),
+                ).reset_index().rename(columns={"rated": "username"})
+                user_scores["avg_score"] = user_scores["avg_score"].round(2)
+
+                role_map = pd.DataFrame(columns=["username", "role", "branch"])
+                if not users_all.empty and "username" in users_all.columns:
+                    role_cols = [c for c in ["username", "role", "branch"] if c in users_all.columns]
+                    role_map = users_all[role_cols].copy()
+                    role_map["role"] = role_map.get("role", "").astype(str).str.lower()
+                    role_map = role_map.drop_duplicates(subset=["username"], keep="last")
+
+                ranked = user_scores.merge(role_map, on="username", how="left")
+                ranked["role"] = ranked["role"].fillna("unknown")
+                ranked["branch"] = ranked.get("branch", "").fillna("")
+                ranked = ranked.sort_values(["avg_score", "rating_count"], ascending=[False, False])
+
+                employee_ranked = ranked[ranked["role"] == "employee"].copy()
+                admin_ranked = ranked[ranked["role"].isin(["admin", "superadmin", "super_admin"])].copy()
+
+                best_all = ranked.head(1)
+                best_employee = employee_ranked.head(1)
+                best_admin = admin_ranked.head(1)
+
+                p1, p2, p3 = st.columns(3)
+                p1.metric(
+                    "Best Employee",
+                    f"{best_employee.iloc[0]['username']} ({best_employee.iloc[0]['avg_score']:.1f})" if not best_employee.empty else "N/A",
+                )
+                p2.metric(
+                    "Best Admin",
+                    f"{best_admin.iloc[0]['username']} ({best_admin.iloc[0]['avg_score']:.1f})" if not best_admin.empty else "N/A",
+                )
+                p3.metric(
+                    "Best Overall",
+                    f"{best_all.iloc[0]['username']} ({best_all.iloc[0]['avg_score']:.1f})" if not best_all.empty else "N/A",
+                )
+
+                st.markdown("**Top Performers - Employees**")
+                if employee_ranked.empty:
+                    st.info("No employee performance rows in this scope.")
+                else:
+                    st.dataframe(employee_ranked[["username", "branch", "avg_score", "rating_count"]].head(10), use_container_width=True)
+
+                st.markdown("**Top Performers - Admins**")
+                if admin_ranked.empty:
+                    st.info("No admin performance rows in this scope.")
+                else:
+                    st.dataframe(admin_ranked[["username", "branch", "avg_score", "rating_count"]].head(10), use_container_width=True)
+
+                st.markdown("**Top Performers - All Roles**")
+                st.dataframe(ranked[["username", "role", "branch", "avg_score", "rating_count"]].head(15), use_container_width=True)
 
                 st.divider()
                 st.markdown("### Organization Leadership Intelligence")
@@ -1867,18 +2037,18 @@ def super_admin_dashboard():
             )
             feedback_df["stars_display"] = feedback_df["stars"].apply(lambda s: "⭐" * int(s) if int(s) > 0 else "—")
 
-            view_mode = st.radio(
+            view_mode = nav_radio(
                 "View Mode",
                 ["Whole Organization", "By Branch"],
-                horizontal=True,
                 key="feedback_view_mode",
+                horizontal=True,
             )
 
             view_df = feedback_df.copy()
             if view_mode == "By Branch":
                 branch_options = sorted([b for b in view_df["branch"].dropna().astype(str).unique().tolist() if b])
                 if branch_options:
-                    selected_branch = st.selectbox("Branch", branch_options, key="feedback_branch_filter")
+                    selected_branch = nav_selectbox("Branch", branch_options, key="feedback_branch_filter")
                     view_df = view_df[view_df["branch"].astype(str) == selected_branch]
 
             m1, m2, m3, m4 = st.columns(4)
@@ -1959,26 +2129,32 @@ def super_admin_dashboard():
     elif menu == "Attendance":
         st.subheader("Attendance Dashboard")
 
-        all_att = safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,))
-        all_lateness = safe_read(
+        all_att = apply_branch_scope(safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,)))
+        all_lateness = apply_branch_scope(safe_read(
             "SELECT username, approved_for_date, reason, approved_by, status, actual_reason, used_at FROM lateness_approvals WHERE organization=?",
             conn,
             params=(org,),
-        )
+        ))
 
         att_ind, att_br, att_all, att_adm = st.tabs([
             "Individual", "Per Branch", "All Branches", "Admins"
         ])
 
         with att_ind:
-            all_users_df = safe_read(
-                "SELECT username FROM users WHERE organization=? ORDER BY username",
-                conn, params=(org,)
-            )
+            if branch_scope:
+                all_users_df = safe_read(
+                    "SELECT username FROM users WHERE organization=? AND branch=? ORDER BY username",
+                    conn, params=(org, branch_scope)
+                )
+            else:
+                all_users_df = safe_read(
+                    "SELECT username FROM users WHERE organization=? ORDER BY username",
+                    conn, params=(org,)
+                )
             if all_users_df.empty:
                 st.info("No users.")
             else:
-                sel_emp = st.selectbox("Select Employee", all_users_df["username"].tolist(), key="att_emp_sel")
+                sel_emp = nav_selectbox("Select Employee", all_users_df["username"].tolist(), key="att_emp_sel")
                 emp_att = safe_read(
                     "SELECT date, clock_in, clock_out, status FROM attendance WHERE organization=? AND username=? ORDER BY date DESC",
                     conn, params=(org, sel_emp)
@@ -1987,7 +2163,7 @@ def super_admin_dashboard():
                     st.info(f"No attendance records for {sel_emp}.")
                 else:
                     emp_att["date"] = pd.to_datetime(emp_att["date"], errors="coerce")
-                    ar = st.selectbox("Range", ["All","Today","This Week","This Month"], key="ind_att_range")
+                    ar = nav_selectbox("Range", ["All","Today","This Week","This Month"], key="ind_att_range")
                     if ar == "Today":
                         emp_att = emp_att[emp_att["date"].dt.date == date.today()]
                     elif ar == "This Week":
@@ -2009,16 +2185,21 @@ def super_admin_dashboard():
 
         with att_br:
             if branches:
-                br_sel = st.selectbox("Select Branch", branches, key="att_br_sel")
-                br_att = safe_read(
-                    "SELECT username, date, clock_in, clock_out, status FROM attendance WHERE organization=? AND branch=? ORDER BY date DESC",
-                    conn, params=(org, br_sel)
-                )
+                att_branch_options = ["All Branches"] + branches
+                att_branch_default_idx = att_branch_options.index(branch_scope) if branch_scope in att_branch_options else 0
+                br_sel = nav_selectbox("Select Branch", att_branch_options, key="att_br_sel", index=att_branch_default_idx)
+                if br_sel == "All Branches":
+                    br_att = all_att.copy()
+                else:
+                    br_att = safe_read(
+                        "SELECT username, date, clock_in, clock_out, status FROM attendance WHERE organization=? AND branch=? ORDER BY date DESC",
+                        conn, params=(org, br_sel)
+                    )
                 if br_att.empty:
                     st.info("No attendance for this branch.")
                 else:
                     br_att["date"] = pd.to_datetime(br_att["date"], errors="coerce")
-                    br_range = st.selectbox("Range", ["All","Today","This Week","This Month"], key="br_att_range")
+                    br_range = nav_selectbox("Range", ["All","Today","This Week","This Month"], key="br_att_range")
                     if br_range == "Today":
                         br_att = br_att[br_att["date"].dt.date == date.today()]
                     elif br_range == "This Week":
@@ -2076,7 +2257,7 @@ def super_admin_dashboard():
             else:
                 all_att2 = all_att.copy()
                 all_att2["date"] = pd.to_datetime(all_att2["date"], errors="coerce")
-                ov_r = st.selectbox("Range", ["All","Today","This Week","This Month"], key="ov_att_range")
+                ov_r = nav_selectbox("Range", ["All","Today","This Week","This Month"], key="ov_att_range")
                 if ov_r == "Today":
                     all_att2 = all_att2[all_att2["date"].dt.date == date.today()]
                 elif ov_r == "This Week":
@@ -2118,8 +2299,9 @@ def super_admin_dashboard():
             if adm_att.empty:
                 st.info("No admin attendance records.")
             else:
+                adm_att = apply_branch_scope(adm_att)
                 adm_att["date"] = pd.to_datetime(adm_att["date"], errors="coerce")
-                ar2 = st.selectbox("Range", ["All","Today","This Week","This Month"], key="adm_att_range")
+                ar2 = nav_selectbox("Range", ["All","Today","This Week","This Month"], key="adm_att_range")
                 if ar2 == "Today":
                     adm_att = adm_att[adm_att["date"].dt.date == date.today()]
                 elif ar2 == "This Week":
@@ -2506,16 +2688,14 @@ def super_admin_dashboard():
     elif menu == "Logs":
         st.subheader("Audit Logs")
 
-        col_d1, col_d2, _ = st.columns([2, 2, 1])
-        with col_d1:
-            log_from = st.date_input("From", value=date.today() - timedelta(days=30), key="log_from")
-        with col_d2:
-            log_to = st.date_input("To", value=date.today(), key="log_to")
+        log_from = nav_date_input("From", value=date.today() - timedelta(days=30), key="log_from")
+        log_to = nav_date_input("To", value=date.today(), key="log_to")
 
         logs = safe_read(
             "SELECT * FROM audit_logs WHERE organization=? ORDER BY created_at DESC",
             conn, params=(org,)
         )
+        logs = apply_branch_scope(logs)
 
         if logs.empty:
             st.info("No logs found.")

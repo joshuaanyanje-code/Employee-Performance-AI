@@ -130,6 +130,12 @@ def admin_dashboard():
     if "admin_nav_open" not in st.session_state:
         st.session_state["admin_nav_open"] = True
 
+    def nav_selectbox(label, options, key, **kwargs):
+        if is_mobile:
+            return st.selectbox(label, options, key=key, **kwargs)
+        with st.sidebar:
+            return st.selectbox(label, options, key=key, **kwargs)
+
     menu_items = [
         "Profile",
         "Users",
@@ -489,7 +495,7 @@ def admin_dashboard():
         st.subheader("Attendance")
         st.caption("Users clock in/out from kiosk. This view monitors lateness, absentism, and early clock-outs.")
 
-        range_sel = st.selectbox(
+        range_sel = nav_selectbox(
             "Range",
             ["Day", "Week", "Month", "Custom (Sidebar Date Filter)"],
             key="admin_attendance_range",
@@ -955,7 +961,7 @@ def admin_dashboard():
                         refresh()
 
         with tab_branch:
-            status_filter = st.selectbox(
+            status_filter = nav_selectbox(
                 "Status",
                 ["All", "pending", "approved", "rejected", "reapply"],
                 key="admin_leave_status_filter",
@@ -1144,7 +1150,7 @@ def admin_dashboard():
     elif menu == "My Score":
         st.subheader("My Score")
 
-        range_sel = st.selectbox(
+        range_sel = nav_selectbox(
             "Performance Range",
             ["Day", "Week", "Month", "Custom (Sidebar Date Filter)"],
             key="admin_my_score_range",
@@ -1204,7 +1210,7 @@ def admin_dashboard():
         st.subheader("Branch Analytics (Leadership View)")
         st.caption("Shows branch performance and top performers only.")
 
-        range_sel = st.selectbox(
+        range_sel = nav_selectbox(
             "Range",
             ["Day", "Week", "Month", "Custom (Sidebar Date Filter)"],
             key="admin_analytics_range",

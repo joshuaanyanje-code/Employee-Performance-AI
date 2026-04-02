@@ -142,6 +142,12 @@ def employee_dashboard():
     if "employee_nav_open" not in st.session_state:
         st.session_state["employee_nav_open"] = True
 
+    def nav_selectbox(label, options, key, **kwargs):
+        if is_mobile:
+            return st.selectbox(label, options, key=key, **kwargs)
+        with st.sidebar:
+            return st.selectbox(label, options, key=key, **kwargs)
+
     page_items = [
         "Profile", "Schedule", "Attendance", "Leave",
         "Notifications", "Rate", "My Score",
@@ -306,7 +312,7 @@ def employee_dashboard():
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             today_dt = pd.to_datetime(date.today())
 
-            att_range = st.selectbox(
+            att_range = nav_selectbox(
                 "Attendance Range",
                 ["Day", "Week", "Month", "Custom (Sidebar Date Filter)"],
                 key="att_range"
@@ -560,7 +566,7 @@ def employee_dashboard():
             st.info("No analytics yet")
         else:
             df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
-            range_sel = st.selectbox(
+            range_sel = nav_selectbox(
                 "Performance Range",
                 ["Day", "Week", "Month", "Custom (Sidebar Date Filter)"],
                 key="analytics_range"

@@ -580,6 +580,18 @@ def master_admin_dashboard():
     if "master_nav_open" not in st.session_state:
         st.session_state["master_nav_open"] = True
 
+    def nav_selectbox(label, options, key, **kwargs):
+        if is_mobile:
+            return st.selectbox(label, options, key=key, **kwargs)
+        with st.sidebar:
+            return st.selectbox(label, options, key=key, **kwargs)
+
+    def nav_multiselect(label, options, default, key, **kwargs):
+        if is_mobile:
+            return st.multiselect(label, options, default=default, key=key, **kwargs)
+        with st.sidebar:
+            return st.multiselect(label, options, default=default, key=key, **kwargs)
+
     menu_items = [
         "📊 Overview",
         "🏢 Organizations",
@@ -719,18 +731,15 @@ def master_admin_dashboard():
             )
 
         st.markdown("#### Custom Export Builder")
-        custom_col1, custom_col2 = st.columns(2)
-        with custom_col1:
-            export_kind = st.selectbox(
-                "Dataset",
-                ["Users", "Organizations", "Compliance"],
-                key="master_export_kind",
-            )
-        with custom_col2:
-            org_filter_opt = ["All"]
-            if not users_export_df.empty and "organization" in users_export_df.columns:
-                org_filter_opt += sorted(users_export_df["organization"].dropna().unique().tolist())
-            selected_org_filter = st.selectbox("Organization Filter", org_filter_opt, key="master_export_org_filter")
+        export_kind = nav_selectbox(
+            "Dataset",
+            ["Users", "Organizations", "Compliance"],
+            key="master_export_kind",
+        )
+        org_filter_opt = ["All"]
+        if not users_export_df.empty and "organization" in users_export_df.columns:
+            org_filter_opt += sorted(users_export_df["organization"].dropna().unique().tolist())
+        selected_org_filter = nav_selectbox("Organization Filter", org_filter_opt, key="master_export_org_filter")
 
         base_df = export_sources.get(export_kind, pd.DataFrame()).copy()
         if selected_org_filter != "All" and not base_df.empty:
@@ -744,7 +753,7 @@ def master_admin_dashboard():
         else:
             available_columns = base_df.columns.tolist()
             default_columns = available_columns[: min(len(available_columns), 8)]
-            selected_columns = st.multiselect(
+            selected_columns = nav_multiselect(
                 "Columns to Export",
                 available_columns,
                 default=default_columns,
@@ -1315,17 +1324,12 @@ def master_admin_dashboard():
         if users_all.empty:
             st.info("No users in the system yet.")
         else:
-            cs, co, cb, cr = st.columns([3, 2, 2, 2])
-            with cs:
-                search = st.text_input("🔍 Search Username", placeholder="Type to search...")
-            with co:
-                org_opts   = ["All"] + sorted(users_all["organization"].dropna().unique().tolist())
-                org_filter = st.selectbox("Organization", org_opts, key="emp_org")
-            with cb:
-                branch_opts   = ["All"] + sorted(users_all["branch"].dropna().unique().tolist())
-                branch_filter = st.selectbox("Branch", branch_opts, key="emp_branch")
-            with cr:
-                role_filter = st.selectbox("Role", ["All", "superadmin", "admin", "employee", "kiosk"], key="emp_role")
+            search = st.text_input("🔍 Search Username", placeholder="Type to search...")
+            org_opts = ["All"] + sorted(users_all["organization"].dropna().unique().tolist())
+            org_filter = nav_selectbox("Organization", org_opts, key="emp_org")
+            branch_opts = ["All"] + sorted(users_all["branch"].dropna().unique().tolist())
+            branch_filter = nav_selectbox("Branch", branch_opts, key="emp_branch")
+            role_filter = nav_selectbox("Role", ["All", "superadmin", "admin", "employee", "kiosk"], key="emp_role")
 
             df_emp = users_all.copy()
             if search:

@@ -310,11 +310,20 @@ def kiosk_dashboard():
         <style>
         .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
         button {height:65px; font-size:20px; font-weight:bold;}
-        .stButton > button, .stDownloadButton > button {width: 100%; border-radius: 14px;}
+        .stButton > button, .stDownloadButton > button {
+            width: 100%;
+            border-radius: 14px;
+            box-shadow: 0 6px 14px rgba(10, 20, 38, 0.28) !important;
+            overflow: hidden;
+            background-clip: padding-box;
+        }
         .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 58px; font-size: 18px;}
+            .stButton > button, .stDownloadButton > button {
+                box-shadow: 0 4px 10px rgba(10, 20, 38, 0.22) !important;
+            }
         }
         </style>
     """, unsafe_allow_html=True)
@@ -530,33 +539,7 @@ def kiosk_dashboard():
     # STAFF CHECK IN
     # ==============================================================
     elif kiosk_view == "staff":
-
-        attendance_today = _safe_read(conn, """
-            SELECT username, clock_in, clock_out, status
-            FROM attendance
-            WHERE branch=? AND organization=? AND date=?
-        """, params=(branch, org, today))
-
-        users_today = _safe_read(
-            conn,
-            "SELECT username FROM users WHERE branch=? AND organization=? AND role IN ('employee','admin') AND status='active'",
-            params=(branch, org),
-        )
-
-        present = int(attendance_today["clock_in"].notna().sum()) if not attendance_today.empty else 0
-        late_count_staff = 0
-        if not attendance_today.empty and "status" in attendance_today.columns:
-            late_count_staff = len(attendance_today[attendance_today["status"].astype(str).str.upper() == "LATE"])
-        absent_staff = 0
-        if not users_today.empty:
-            present_set = set(attendance_today["username"].astype(str).tolist()) if not attendance_today.empty else set()
-            absent_staff = len(set(users_today["username"].astype(str).tolist()) - present_set)
-
         st.subheader("👤 Staff Check In")
-        sc1, sc2, sc3 = st.columns(3)
-        sc1.metric("Present", present)
-        sc2.metric("Late", late_count_staff)
-        sc3.metric("Absent", absent_staff)
         st.divider()
 
         if "kiosk_user" not in st.session_state:
