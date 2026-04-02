@@ -13,7 +13,12 @@ except Exception:
     HOLIDAYS_OK = False
 
 from database.db import get_connection, hash_password, log_action
-from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+from Dashboards.ui_responsive import apply_responsive_ui
+try:
+    from Dashboards.ui_responsive import is_mobile_device
+except Exception:
+    def is_mobile_device():
+        return False
 
 # ==============================
 # OPTIONAL ANALYTICS IMPORTS

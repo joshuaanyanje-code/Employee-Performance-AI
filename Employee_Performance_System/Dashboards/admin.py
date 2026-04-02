@@ -3,7 +3,12 @@ import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import get_connection, hash_password, verify_password, log_action
-from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+from Dashboards.ui_responsive import apply_responsive_ui
+try:
+    from Dashboards.ui_responsive import is_mobile_device
+except Exception:
+    def is_mobile_device():
+        return False
 from Analytics.badges import compute_badges_for_organization, get_badge_icon
 
 

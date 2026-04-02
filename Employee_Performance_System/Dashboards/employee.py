@@ -5,7 +5,11 @@ from database.db import get_connection, verify_password, hash_password, execute_
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 
-from Dashboards.ui_responsive import is_mobile_device
+try:
+    from Dashboards.ui_responsive import is_mobile_device
+except Exception:
+    def is_mobile_device():
+        return False
 # ==============================
 # REFRESH
 # ==============================

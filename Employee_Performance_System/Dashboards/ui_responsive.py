@@ -60,7 +60,7 @@ def apply_responsive_ui(mode="default"):
             padding-bottom: calc(1.1rem + var(--safe-bottom));
         }}
 
-        [data-testid="stVerticalBlock"] {{
+        [data-testid="stMain"] [data-testid="stVerticalBlock"] {{
             border: 1px solid var(--surface-border);
             border-radius: 14px;
             background: var(--surface-glass);
@@ -115,6 +115,25 @@ def apply_responsive_ui(mode="default"):
         [data-testid="stDataFrame"],
         [data-testid="stTable"] {{
             width: 100% !important;
+        }}
+
+        @media (min-width: 761px) {{
+            [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{
+                border: none;
+                border-radius: 0;
+                background: transparent;
+                box-shadow: none;
+            }}
+
+            [data-testid="stSidebar"] .stRadio > div,
+            [data-testid="stSidebar"] .stRadio label,
+            [data-testid="stSidebar"] .stMarkdown,
+            [data-testid="stSidebar"] .stSelectbox,
+            [data-testid="stSidebar"] .stDateInput {{
+                text-align: left;
+                justify-content: flex-start;
+                align-items: flex-start;
+            }}
         }}
 
         @media (max-width: 1024px) {{

@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import secrets
 import importlib
@@ -56,12 +57,32 @@ body {
     color: var(--text);
 }
 
-div[data-testid="stVerticalBlock"] {
+[data-testid="stMain"] div[data-testid="stVerticalBlock"] {
     background: var(--card);
     padding: 25px;
     border: 1px solid var(--line);
     border-radius: 14px;
     box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+}
+
+@media (min-width: 761px) {
+    [data-testid="stSidebar"] div[data-testid="stVerticalBlock"] {
+        background: transparent;
+        padding: 0;
+        border: 0;
+        border-radius: 0;
+        box-shadow: none;
+    }
+
+    [data-testid="stSidebar"] .stRadio > div,
+    [data-testid="stSidebar"] .stRadio label,
+    [data-testid="stSidebar"] .stMarkdown,
+    [data-testid="stSidebar"] .stSelectbox,
+    [data-testid="stSidebar"] .stDateInput {
+        text-align: left;
+        justify-content: flex-start;
+        align-items: flex-start;
+    }
 }
 
 button {
@@ -72,6 +93,33 @@ button {
     font-family: 'Plus Jakarta Sans', sans-serif;
     font-weight: 600;
     letter-spacing: 0.2px;
+}
+
+.global-sidebar-toggle {
+    position: fixed;
+    left: 12px;
+    top: 12px;
+    z-index: 100000;
+    min-width: 230px;
+    min-height: 66px;
+    border-radius: 16px;
+    border: 1px solid rgba(160, 204, 255, 0.34);
+    background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
+    color: #fff;
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    font-size: 1.14rem;
+    font-weight: 800;
+    letter-spacing: 0.2px;
+    box-shadow: 0 14px 30px rgba(11, 25, 49, 0.45);
+    cursor: pointer;
+}
+
+.global-sidebar-toggle:hover {
+    filter: brightness(1.04);
+}
+
+.global-sidebar-toggle:active {
+    transform: translateY(1px);
 }
 
 h1, h2, h3 {
@@ -103,9 +151,77 @@ p, label, span, div {
         min-height: 44px;
         width: 100%;
     }
+
+    .global-sidebar-toggle {
+        left: 10px;
+        right: 10px;
+        top: 10px;
+        width: auto;
+        min-height: 58px;
+        min-width: 0;
+        font-size: 1.06rem;
+    }
 }
 </style>
 """, unsafe_allow_html=True)
+
+
+def render_global_sidebar_toggle_button():
+    components.html(
+        """
+        <script>
+        (function() {
+            const doc = window.parent.document;
+            const BTN_ID = "global-sidebar-toggle-btn";
+
+            function findToggleControl() {
+                const selectors = [
+                    '[data-testid="stSidebarCollapseButton"]',
+                    '[data-testid="stSidebarCollapseButton"] button',
+                    '[data-testid="collapsedControl"]',
+                    '[data-testid="collapsedControl"] button',
+                    'button[aria-label="Close sidebar"]',
+                    'button[aria-label="Open sidebar"]',
+                    'button[title="Close sidebar"]',
+                    'button[title="Open sidebar"]'
+                ];
+
+                for (const sel of selectors) {
+                    const el = doc.querySelector(sel);
+                    if (!el) continue;
+                    const style = window.parent.getComputedStyle(el);
+                    if (style.display !== 'none' && style.visibility !== 'hidden') {
+                        return el;
+                    }
+                }
+                return null;
+            }
+
+            function triggerSidebarToggle() {
+                const control = findToggleControl();
+                if (control) {
+                    control.click();
+                }
+            }
+
+            let btn = doc.getElementById(BTN_ID);
+            if (!btn) {
+                btn = doc.createElement('button');
+                btn.id = BTN_ID;
+                btn.type = 'button';
+                btn.className = 'global-sidebar-toggle';
+                btn.innerText = 'Show/Hide Menu';
+                btn.onclick = triggerSidebarToggle;
+                doc.body.appendChild(btn);
+            } else {
+                btn.onclick = triggerSidebarToggle;
+            }
+        })();
+        </script>
+        """,
+        height=0,
+        width=0,
+    )
 
 
 # =====================================================
@@ -478,6 +594,8 @@ def login():
 if not st.session_state.logged:
     login()
     st.stop()
+
+render_global_sidebar_toggle_button()
 
 
 # =====================================================

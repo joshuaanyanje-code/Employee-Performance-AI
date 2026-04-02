@@ -3,7 +3,12 @@ import pandas as pd
 import os
 from datetime import datetime, timedelta
 from database.db import get_connection, hash_password, verify_password, execute_write
-from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+from Dashboards.ui_responsive import apply_responsive_ui
+try:
+    from Dashboards.ui_responsive import is_mobile_device
+except Exception:
+    def is_mobile_device():
+        return False
 
 # ==============================
 # OPTIONAL IMPORTS
