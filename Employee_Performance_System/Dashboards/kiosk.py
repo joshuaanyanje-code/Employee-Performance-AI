@@ -721,7 +721,6 @@ def kiosk_dashboard():
                 st.error("Photo quality too low. Retake clearly in good lighting.")
                 return
 
-            st.image(photo_bytes, caption=f"Captured for {user}", use_container_width=True)
             st.download_button(
                 "Save Photo to Device",
                 data=photo_bytes,
