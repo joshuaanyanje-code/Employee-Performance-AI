@@ -44,6 +44,18 @@ def clear_kiosk_staff_transient_state():
     st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
 
 
+def compact_kiosk_button(label, key, *, use_container_width=True, **kwargs):
+    _, center_col, _ = st.columns([0.11, 0.78, 0.11])
+    with center_col:
+        return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
+
+
+def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwargs):
+    _, center_col, _ = st.columns([0.11, 0.78, 0.11])
+    with center_col:
+        return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
+
+
 def _safe_read(conn, query, params=None):
     try:
         if params is None:
@@ -319,7 +331,7 @@ def kiosk_dashboard():
     st.markdown("""
         <style>
         .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
-        button {height:65px; font-size:20px; font-weight:bold;}
+        button {height:58px; font-size:18px; font-weight:bold;}
         .stButton > button, .stDownloadButton > button {
             width: 100%;
             border-radius: 14px;
@@ -360,7 +372,7 @@ def kiosk_dashboard():
         
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
-            button {height: 58px; font-size: 18px;}
+            button {height: 54px; font-size: 17px;}
             .stButton > button, .stDownloadButton > button {
                 box-shadow: 0 2px 6px rgba(10, 20, 38, 0.20) !important;
             }
@@ -496,15 +508,13 @@ def kiosk_dashboard():
         )
         st.divider()
 
-        _, home_col, _ = st.columns([0.08, 0.84, 0.08])
-        with home_col:
-            if st.button("⭐  Guest Experience", use_container_width=True, key="home_btn_guest"):
-                st.session_state["kiosk_view"] = "guest"
-                refresh()
+        if compact_kiosk_button("⭐  Guest Experience", key="home_btn_guest"):
+            st.session_state["kiosk_view"] = "guest"
+            refresh()
 
-            if st.button("👤  Staff Check In", use_container_width=True, key="home_btn_staff"):
-                st.session_state["kiosk_view"] = "staff"
-                refresh()
+        if compact_kiosk_button("👤  Staff Check In", key="home_btn_staff"):
+            st.session_state["kiosk_view"] = "staff"
+            refresh()
 
     # ==============================================================
     # GUEST EXPERIENCE
@@ -557,7 +567,7 @@ def kiosk_dashboard():
             else:
                 client_name = ""
 
-            if st.form_submit_button("✅ Send Feedback", use_container_width=True):
+            if compact_kiosk_form_submit_button("✅ Send Feedback"):
                 feedback_scope = "general" if target_choice == "The whole team" else "individual"
                 target_username = "" if feedback_scope == "general" else target_choice
                 final_name = client_name.strip() if allow_named_feedback else ""
@@ -617,7 +627,7 @@ def kiosk_dashboard():
             pin_widget_key = f"kiosk_pin_{st.session_state.get('kiosk_pin_nonce', 0)}"
             pin = st.text_input("Enter PIN", type="password", key=pin_widget_key)
 
-            if st.button("🔐 Verify & Continue", use_container_width=True):
+            if compact_kiosk_button("🔐 Verify & Continue", key="kiosk_verify_continue"):
                 clear_kiosk_pin_input()
                 if not pin:
                     st.warning("Enter PIN")
@@ -670,7 +680,7 @@ def kiosk_dashboard():
                 st.session_state["kiosk_show_lateness_request"] = False
 
             st.divider()
-            if st.button("📩 Request Lateness Approval", use_container_width=True, key="kiosk_toggle_lateness_request"):
+            if compact_kiosk_button("📩 Request Lateness Approval", key="kiosk_toggle_lateness_request"):
                 st.session_state["kiosk_show_lateness_request"] = not st.session_state["kiosk_show_lateness_request"]
                 refresh()
 
@@ -699,7 +709,7 @@ def kiosk_dashboard():
                         key="kiosk_lateness_request_reason",
                         placeholder="Explain why you may arrive late on the selected date.",
                     )
-                    submit_lateness_request = st.form_submit_button("✅ Submit Lateness Request")
+                    submit_lateness_request = compact_kiosk_form_submit_button("✅ Submit Lateness Request")
 
                     if submit_lateness_request:
                         request_date_tag = lateness_request_date.strftime("%Y-%m-%d")
@@ -1030,7 +1040,7 @@ def kiosk_dashboard():
                             key="kiosk_early_request_reason",
                             placeholder="Explain why you need to leave before end of shift.",
                         )
-                        if st.button("📩 Request Early Clock Out", use_container_width=True, key="kiosk_request_early_out"):
+                        if compact_kiosk_button("📩 Request Early Clock Out", key="kiosk_request_early_out"):
                             if not request_reason.strip():
                                 st.error("Reason is required to request early clock-out.")
                                 return
