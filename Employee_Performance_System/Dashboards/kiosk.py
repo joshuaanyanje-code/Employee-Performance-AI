@@ -28,6 +28,12 @@ def clear_kiosk_pin_input():
     st.session_state["kiosk_pin_nonce"] = st.session_state.get("kiosk_pin_nonce", 0) + 1
 
 
+def clear_kiosk_photo_state():
+    st.session_state["kiosk_photo_bytes"] = None
+    st.session_state["kiosk_photo_confirmed"] = False
+    st.session_state["kiosk_cam_key"] = st.session_state.get("kiosk_cam_key", 0) + 1
+
+
 def _safe_read(conn, query, params=None):
     try:
         if params is None:
@@ -437,38 +443,9 @@ def kiosk_dashboard():
         )
         st.divider()
 
-        attendance_today = _safe_read(conn, """
-            SELECT username, clock_in, clock_out, status
-            FROM attendance
-            WHERE branch=? AND organization=? AND date=?
-        """, params=(branch, org, today))
-
-        users_today = _safe_read(
-            conn,
-            "SELECT username FROM users WHERE branch=? AND organization=? AND role IN ('employee','admin') AND status='active'",
-            params=(branch, org),
-        )
-
-        present = int(attendance_today["clock_in"].notna().sum()) if not attendance_today.empty else 0
-        late_count_home = 0
-        if not attendance_today.empty and "status" in attendance_today.columns:
-            late_count_home = len(attendance_today[attendance_today["status"].astype(str).str.upper() == "LATE"])
-        absent_home = 0
-        if not users_today.empty:
-            present_set = set(attendance_today["username"].astype(str).tolist()) if not attendance_today.empty else set()
-            absent_home = len(set(users_today["username"].astype(str).tolist()) - present_set)
-
-        hc1, hc2, hc3 = st.columns(3)
-        hc1.metric("Present", present)
-        hc2.metric("Late", late_count_home)
-        hc3.metric("Absent", absent_home)
-
-        st.divider()
-
-        if feedback_enabled:
-            if st.button("⭐  Guest Experience", use_container_width=True, key="home_btn_guest"):
-                st.session_state["kiosk_view"] = "guest"
-                refresh()
+        if st.button("⭐  Guest Experience", use_container_width=True, key="home_btn_guest"):
+            st.session_state["kiosk_view"] = "guest"
+            refresh()
 
         if st.button("👤  Staff Check In", use_container_width=True, key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
@@ -554,13 +531,40 @@ def kiosk_dashboard():
     # ==============================================================
     elif kiosk_view == "staff":
 
+        attendance_today = _safe_read(conn, """
+            SELECT username, clock_in, clock_out, status
+            FROM attendance
+            WHERE branch=? AND organization=? AND date=?
+        """, params=(branch, org, today))
+
+        users_today = _safe_read(
+            conn,
+            "SELECT username FROM users WHERE branch=? AND organization=? AND role IN ('employee','admin') AND status='active'",
+            params=(branch, org),
+        )
+
+        present = int(attendance_today["clock_in"].notna().sum()) if not attendance_today.empty else 0
+        late_count_staff = 0
+        if not attendance_today.empty and "status" in attendance_today.columns:
+            late_count_staff = len(attendance_today[attendance_today["status"].astype(str).str.upper() == "LATE"])
+        absent_staff = 0
+        if not users_today.empty:
+            present_set = set(attendance_today["username"].astype(str).tolist()) if not attendance_today.empty else set()
+            absent_staff = len(set(users_today["username"].astype(str).tolist()) - present_set)
+
+        st.subheader("👤 Staff Check In")
+        sc1, sc2, sc3 = st.columns(3)
+        sc1.metric("Present", present)
+        sc2.metric("Late", late_count_staff)
+        sc3.metric("Absent", absent_staff)
+        st.divider()
+
         if "kiosk_user" not in st.session_state:
             if st.button("← Back", key="staff_back"):
+                clear_kiosk_photo_state()
                 clear_kiosk_pin_input()
                 st.session_state["kiosk_view"] = "home"
                 refresh()
-
-            st.subheader("👤 Staff Check In")
 
             users = _safe_read(conn, """
                 SELECT username FROM users
@@ -594,6 +598,7 @@ def kiosk_dashboard():
                     st.error("❌ Invalid PIN")
                     return
                 st.session_state.kiosk_user = selected_user
+                clear_kiosk_photo_state()
                 st.success("✅ Verified")
                 refresh()
 
@@ -606,6 +611,7 @@ def kiosk_dashboard():
             with col_next:
                 if st.button("Next User", use_container_width=True):
                     st.session_state.pop("kiosk_user", None)
+                    clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
@@ -689,6 +695,7 @@ def kiosk_dashboard():
                         conn.commit()
                         st.success("Lateness request sent to admin for review.")
                         st.session_state.pop("kiosk_user", None)
+                        clear_kiosk_photo_state()
                         clear_kiosk_pin_input()
                         st.session_state.pop("kiosk_lateness_request_reason", None)
                         st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
@@ -698,46 +705,38 @@ def kiosk_dashboard():
             st.markdown("### 📸 Capture Face")
             if "kiosk_cam_key" not in st.session_state:
                 st.session_state["kiosk_cam_key"] = 0
+            if "kiosk_photo_bytes" not in st.session_state:
+                st.session_state["kiosk_photo_bytes"] = None
+            if "kiosk_photo_confirmed" not in st.session_state:
+                st.session_state["kiosk_photo_confirmed"] = False
 
-            photo = st.camera_input("", key=f"kiosk_camera_{st.session_state['kiosk_cam_key']}")
+            if st.session_state["kiosk_photo_bytes"] is None:
+                photo = st.camera_input("Take Photo", key=f"kiosk_camera_{st.session_state['kiosk_cam_key']}")
+                if photo is not None:
+                    captured_photo_bytes = photo.getvalue()
+                    if not captured_photo_bytes or len(captured_photo_bytes) < 15000:
+                        st.error("Photo quality too low. Retake clearly in good lighting.")
+                    else:
+                        st.session_state["kiosk_photo_bytes"] = captured_photo_bytes
+                        st.session_state["kiosk_photo_confirmed"] = False
+                        refresh()
+                return
+
+            photo_bytes = st.session_state["kiosk_photo_bytes"]
+            st.image(photo_bytes, caption="Photo Preview", use_container_width=True)
 
             cam_col1, cam_col2 = st.columns(2)
             with cam_col1:
                 if st.button("Retake Photo", use_container_width=True, key="kiosk_retake_photo"):
-                    st.session_state["kiosk_cam_key"] += 1
-                    st.session_state["kiosk_photo_confirmed"] = False
+                    clear_kiosk_photo_state()
                     refresh()
             with cam_col2:
-                if st.button("Clear Photo", use_container_width=True, key="kiosk_clear_photo"):
-                    st.session_state["kiosk_cam_key"] += 1
-                    st.session_state["kiosk_photo_confirmed"] = False
+                if st.button("Save Photo", use_container_width=True, key="kiosk_confirm_photo"):
+                    st.session_state["kiosk_photo_confirmed"] = True
                     refresh()
 
-            if photo is None:
-                return
-
-            photo_bytes = photo.getvalue()
-            if not photo_bytes or len(photo_bytes) < 15000:
-                st.error("Photo quality too low. Retake clearly in good lighting.")
-                return
-
-            st.download_button(
-                "Save Photo to Device",
-                data=photo_bytes,
-                file_name=f"{user}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg",
-                mime="image/jpeg",
-                use_container_width=True,
-            )
-
-            if "kiosk_photo_confirmed" not in st.session_state:
-                st.session_state["kiosk_photo_confirmed"] = False
-
-            if st.button("Use This Photo And Continue", use_container_width=True, key="kiosk_confirm_photo"):
-                st.session_state["kiosk_photo_confirmed"] = True
-                refresh()
-
             if not st.session_state.get("kiosk_photo_confirmed", False):
-                st.info("Save photo or retake, then tap 'Use This Photo And Continue' to proceed.")
+                st.info("Tap Save Photo to continue, or Retake Photo.")
                 return
 
             current_hash = _photo_hash(photo_bytes)
@@ -926,8 +925,8 @@ def kiosk_dashboard():
 
                     st.success("✅ Clock In Successful")
                     st.session_state.pop("kiosk_user", None)
+                    clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
-                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     refresh()
 
@@ -940,8 +939,8 @@ def kiosk_dashboard():
                 if record.iloc[0]["clock_out"]:
                     st.info("Already completed today")
                     st.session_state.pop("kiosk_user", None)
+                    clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
-                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     return
 
@@ -1034,7 +1033,7 @@ def kiosk_dashboard():
 
                     st.success("✅ Clock Out Successful")
                     st.session_state.pop("kiosk_user", None)
+                    clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
-                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     refresh()
