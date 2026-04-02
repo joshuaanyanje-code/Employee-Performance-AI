@@ -688,6 +688,11 @@ def kiosk_dashboard():
                         _notify_branch_admins_for_lateness_request(conn, org, branch, user, request_date_tag, lateness_reason.strip())
                         conn.commit()
                         st.success("Lateness request sent to admin for review.")
+                        st.session_state.pop("kiosk_user", None)
+                        clear_kiosk_pin_input()
+                        st.session_state.pop("kiosk_lateness_request_reason", None)
+                        st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
+                        st.session_state["kiosk_view"] = "home"
                         refresh()
 
             st.markdown("### 📸 Capture Face")
@@ -700,10 +705,12 @@ def kiosk_dashboard():
             with cam_col1:
                 if st.button("Retake Photo", use_container_width=True, key="kiosk_retake_photo"):
                     st.session_state["kiosk_cam_key"] += 1
+                    st.session_state["kiosk_photo_confirmed"] = False
                     refresh()
             with cam_col2:
                 if st.button("Clear Photo", use_container_width=True, key="kiosk_clear_photo"):
                     st.session_state["kiosk_cam_key"] += 1
+                    st.session_state["kiosk_photo_confirmed"] = False
                     refresh()
 
             if photo is None:
@@ -722,6 +729,17 @@ def kiosk_dashboard():
                 mime="image/jpeg",
                 use_container_width=True,
             )
+
+            if "kiosk_photo_confirmed" not in st.session_state:
+                st.session_state["kiosk_photo_confirmed"] = False
+
+            if st.button("Use This Photo And Continue", use_container_width=True, key="kiosk_confirm_photo"):
+                st.session_state["kiosk_photo_confirmed"] = True
+                refresh()
+
+            if not st.session_state.get("kiosk_photo_confirmed", False):
+                st.info("Save photo or retake, then tap 'Use This Photo And Continue' to proceed.")
+                return
 
             current_hash = _photo_hash(photo_bytes)
             image_size = len(photo_bytes)
@@ -910,6 +928,7 @@ def kiosk_dashboard():
                     st.success("✅ Clock In Successful")
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_pin_input()
+                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     refresh()
 
@@ -923,6 +942,7 @@ def kiosk_dashboard():
                     st.info("Already completed today")
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_pin_input()
+                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     return
 
@@ -1016,5 +1036,6 @@ def kiosk_dashboard():
                     st.success("✅ Clock Out Successful")
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_pin_input()
+                    st.session_state["kiosk_photo_confirmed"] = False
                     st.session_state["kiosk_view"] = "home"
                     refresh()
