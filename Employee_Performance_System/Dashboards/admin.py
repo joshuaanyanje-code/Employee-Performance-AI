@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import get_connection, hash_password, verify_password, log_action
-from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default
+from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
 from Analytics.badges import compute_badges_for_organization, get_badge_icon
 
 
@@ -116,33 +116,59 @@ def admin_dashboard():
     st.title("Admin Dashboard")
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
 
-    with st.expander("Navigation and Filter", expanded=navigation_expander_open_default()):
-        date_range = st.date_input(
-            "Select Range",
-            value=(date.today(), date.today()),
-            key="admin_sidebar_date",
-        )
-        menu = st.radio(
-            "Menu",
-            [
-                "Profile",
-                "Users",
-                "Schedules",
-                "Attendance",
-                "Leaves",
-                "Alerts",
-                "Warnings",
-                "Rate",
-                "My Score",
-                "Analytics",
-                "Badges",
-                "Topics",
-                "Messages",
-                "Staff Check In",
-                "Settings",
-            ],
-            key="admin_menu",
-        )
+    is_mobile = is_mobile_device()
+
+    def _collapse_admin_mobile_nav():
+        if is_mobile:
+            st.session_state["admin_nav_open"] = False
+
+    if "admin_nav_open" not in st.session_state:
+        st.session_state["admin_nav_open"] = True
+
+    menu_items = [
+        "Profile",
+        "Users",
+        "Schedules",
+        "Attendance",
+        "Leaves",
+        "Alerts",
+        "Warnings",
+        "Rate",
+        "My Score",
+        "Analytics",
+        "Badges",
+        "Topics",
+        "Messages",
+        "Staff Check In",
+        "Settings",
+    ]
+
+    if is_mobile:
+        if st.button("Change Menu / Filter", key="admin_reopen_nav", use_container_width=True):
+            st.session_state["admin_nav_open"] = True
+            st.rerun()
+        with st.expander("Navigation and Filter", expanded=bool(st.session_state.get("admin_nav_open", True))):
+            date_range = st.date_input(
+                "Select Range",
+                value=(date.today(), date.today()),
+                key="admin_sidebar_date",
+                on_change=_collapse_admin_mobile_nav,
+            )
+            menu = st.radio(
+                "Menu",
+                menu_items,
+                key="admin_menu",
+                on_change=_collapse_admin_mobile_nav,
+            )
+    else:
+        with st.sidebar:
+            st.markdown("### Navigation")
+            date_range = st.date_input(
+                "Select Range",
+                value=(date.today(), date.today()),
+                key="admin_sidebar_date",
+            )
+            menu = st.radio("Menu", menu_items, key="admin_menu")
 
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
@@ -829,7 +855,7 @@ def admin_dashboard():
                             key=f"admin_lateness_response_{request_id}",
                         )
                         lr1, lr2 = st.columns(2)
-                        if lr1.button("Approve Lateness", key=f"approve_lateness_request_{request_id}"):
+                        if lr1.button("Approve Request", key=f"approve_lateness_request_{request_id}"):
                             conn.execute(
                                 """
                                 UPDATE lateness_approvals
@@ -842,7 +868,7 @@ def admin_dashboard():
                             log_action(conn, username, "APPROVE LATENESS REQUEST", request_user, org)
                             st.success("Lateness request approved.")
                             refresh()
-                        if lr2.button("Reject Lateness", key=f"reject_lateness_request_{request_id}"):
+                        if lr2.button("Decline Request", key=f"reject_lateness_request_{request_id}"):
                             conn.execute(
                                 """
                                 UPDATE lateness_approvals
