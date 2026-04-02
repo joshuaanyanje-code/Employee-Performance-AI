@@ -5,6 +5,11 @@ import secrets
 import importlib
 from datetime import datetime, timedelta
 from Dashboards.ui_responsive import apply_responsive_ui
+try:
+    from Dashboards.ui_responsive import is_mobile_device
+except Exception:
+    def is_mobile_device():
+        return False
 
 # =====================================================
 # PAGE CONFIG
@@ -628,12 +633,15 @@ if role == "master":
 
 # ================= SUPER ADMIN =================
 elif role == "superadmin":
-
-    menu = st.sidebar.radio("Navigate", [
+    superadmin_nav_items = [
         "Super Admin",
         "Attendance Dashboard",
         "Staff Check In"
-    ], key="superadmin_nav")
+    ]
+    if is_mobile_device():
+        menu = st.radio("Navigate", superadmin_nav_items, key="superadmin_nav")
+    else:
+        menu = st.sidebar.radio("Navigate", superadmin_nav_items, key="superadmin_nav")
 
     log_action(conn, st.session_state.username, "NAVIGATE", menu, st.session_state.organization)
 

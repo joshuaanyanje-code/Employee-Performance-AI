@@ -299,31 +299,58 @@ def super_admin_dashboard():
     risk_view = None
 
     if menu == "Management":
-        management_view = st.radio(
-            "Management Area",
-            ["Users", "Branches", "Operations"],
-            horizontal=True,
-            key="sa_management_view",
-            on_change=_collapse_sa_mobile_nav if is_mobile else None,
-        )
+        if is_mobile:
+            management_view = st.radio(
+                "Management Area",
+                ["Users", "Branches", "Operations"],
+                horizontal=True,
+                key="sa_management_view",
+                on_change=_collapse_sa_mobile_nav,
+            )
+        else:
+            with st.sidebar:
+                st.markdown("### Management Area")
+                management_view = st.radio(
+                    "Management Area",
+                    ["Users", "Branches", "Operations"],
+                    key="sa_management_view",
+                )
 
     if menu == "Analytics":
-        analytics_view = st.radio(
-            "Analytics Area",
-            ["Performance", "Intelligence", "Demographics", "Guest Experience"],
-            horizontal=True,
-            key="sa_analytics_view",
-            on_change=_collapse_sa_mobile_nav if is_mobile else None,
-        )
+        if is_mobile:
+            analytics_view = st.radio(
+                "Analytics Area",
+                ["Performance", "Intelligence", "Demographics", "Guest Experience"],
+                horizontal=True,
+                key="sa_analytics_view",
+                on_change=_collapse_sa_mobile_nav,
+            )
+        else:
+            with st.sidebar:
+                st.markdown("### Analytics Area")
+                analytics_view = st.radio(
+                    "Analytics Area",
+                    ["Performance", "Intelligence", "Demographics", "Guest Experience"],
+                    key="sa_analytics_view",
+                )
 
     if menu == "Risk Center":
-        risk_view = st.radio(
-            "Risk Area",
-            ["Alerts", "Warnings"],
-            horizontal=True,
-            key="sa_risk_view",
-            on_change=_collapse_sa_mobile_nav if is_mobile else None,
-        )
+        if is_mobile:
+            risk_view = st.radio(
+                "Risk Area",
+                ["Alerts", "Warnings"],
+                horizontal=True,
+                key="sa_risk_view",
+                on_change=_collapse_sa_mobile_nav,
+            )
+        else:
+            with st.sidebar:
+                st.markdown("### Risk Area")
+                risk_view = st.radio(
+                    "Risk Area",
+                    ["Alerts", "Warnings"],
+                    key="sa_risk_view",
+                )
 
     # =========================================================
     # OVERVIEW
