@@ -4,6 +4,7 @@ import pandas as pd
 from datetime import datetime, timedelta
 import os
 import hashlib
+import time
 import importlib
 
 try:
@@ -32,6 +33,15 @@ def clear_kiosk_photo_state():
     st.session_state["kiosk_photo_bytes"] = None
     st.session_state["kiosk_photo_confirmed"] = False
     st.session_state["kiosk_cam_key"] = st.session_state.get("kiosk_cam_key", 0) + 1
+
+
+def clear_kiosk_staff_transient_state():
+    st.session_state["kiosk_show_lateness_request"] = False
+    st.session_state.pop("kiosk_lateness_request_reason", None)
+    st.session_state.pop("kiosk_early_request_reason", None)
+    st.session_state.pop("kiosk_early_clockout_reason", None)
+    st.session_state.pop("kiosk_selected_user", None)
+    st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
 
 
 def _safe_read(conn, query, params=None):
@@ -313,16 +323,50 @@ def kiosk_dashboard():
         .stButton > button, .stDownloadButton > button {
             width: 100%;
             border-radius: 14px;
-            box-shadow: 0 6px 14px rgba(10, 20, 38, 0.28) !important;
+            box-shadow: 0 3px 8px rgba(10, 20, 38, 0.25) !important;
+            overflow: visible;
+            filter: drop-shadow(0 0 0);
+        }
+        .stButton, .stDownloadButton {
             overflow: hidden;
-            background-clip: padding-box;
+            border-radius: 14px;
         }
         .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
+        
+        /* Camera Widget Styling */
+        [data-testid="stImage"] {
+            border-radius: 10px;
+            overflow: hidden;
+            margin: 1rem 0;
+        }
+        
+        /* Clock In/Out Button Emphasis */
+        .clock-action-btn > button {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
+            color: white !important;
+            border: none !important;
+            height: 80px !important;
+            font-size: 24px !important;
+            font-weight: 900 !important;
+            letter-spacing: 1px !important;
+            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4) !important;
+            margin: 1.5rem 0 !important;
+        }
+        
+        .clock-action-btn > button:hover {
+            transform: scale(1.02);
+            box-shadow: 0 12px 24px rgba(102, 126, 234, 0.6) !important;
+        }
+        
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 58px; font-size: 18px;}
             .stButton > button, .stDownloadButton > button {
-                box-shadow: 0 4px 10px rgba(10, 20, 38, 0.22) !important;
+                box-shadow: 0 2px 6px rgba(10, 20, 38, 0.20) !important;
+            }
+            .clock-action-btn > button {
+                height: 72px !important;
+                font-size: 20px !important;
             }
         }
         </style>
@@ -531,7 +575,14 @@ def kiosk_dashboard():
                      str(message or "").strip(), is_anon, final_name),
                     commit=True,
                 )
-                st.success("🙏 Thank you! Your feedback means a lot.")
+                st.markdown("""
+                <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+                    <h1 style='font-size: 3rem; margin: 0;'>🙏</h1>
+                    <h2 style='margin: 0.5rem 0 0 0;'>Feedback Sent Successfully</h2>
+                    <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
+                </div>
+                """, unsafe_allow_html=True)
+                time.sleep(1.5)
                 st.session_state["kiosk_view"] = "home"
                 refresh()
 
@@ -546,6 +597,7 @@ def kiosk_dashboard():
             if st.button("← Back", key="staff_back"):
                 clear_kiosk_photo_state()
                 clear_kiosk_pin_input()
+                clear_kiosk_staff_transient_state()
                 st.session_state["kiosk_view"] = "home"
                 refresh()
 
@@ -596,6 +648,7 @@ def kiosk_dashboard():
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
+                    clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
 
@@ -611,81 +664,92 @@ def kiosk_dashboard():
                 params=(user, branch, org, today, (datetime.now() + timedelta(days=2)).strftime("%Y-%m-%d")),
             )
 
-            st.markdown("### Lateness Approval Request")
-            st.caption("Request for today, tomorrow, or the next day so approved lateness is not flagged as late.")
-            if not lateness_requests.empty:
-                request_view = lateness_requests.copy()
-                request_view["request_note"] = request_view["actual_reason"].fillna("")
-                st.dataframe(
-                    request_view[["approved_for_date", "status", "reason", "approved_by", "request_note", "used_at"]],
-                    use_container_width=True,
-                )
+            if "kiosk_show_lateness_request" not in st.session_state:
+                st.session_state["kiosk_show_lateness_request"] = False
 
-            with st.form("kiosk_lateness_request_form", clear_on_submit=False):
-                lateness_request_date = st.date_input(
-                    "Request lateness for",
-                    value=datetime.now().date(),
-                    min_value=datetime.now().date(),
-                    max_value=(datetime.now() + timedelta(days=2)).date(),
-                    key="kiosk_lateness_request_date",
-                )
-                lateness_reason = st.text_area(
-                    "Reason for lateness request",
-                    key="kiosk_lateness_request_reason",
-                    placeholder="Explain why you may arrive late on the selected date.",
-                )
-                submit_lateness_request = st.form_submit_button("📩 Request Lateness Approval")
+            st.divider()
+            if st.button("📩 Request Lateness Approval", use_container_width=True, key="kiosk_toggle_lateness_request"):
+                st.session_state["kiosk_show_lateness_request"] = not st.session_state["kiosk_show_lateness_request"]
+                refresh()
 
-                if submit_lateness_request:
-                    request_date_tag = lateness_request_date.strftime("%Y-%m-%d")
-                    existing_lateness = _safe_read(
-                        conn,
-                        """
-                        SELECT id, status FROM lateness_approvals
-                        WHERE username=? AND organization=? AND branch=? AND approved_for_date=?
-                        ORDER BY id DESC LIMIT 1
-                        """,
-                        params=(user, org, branch, request_date_tag),
+            if st.session_state.get("kiosk_show_lateness_request", False):
+                st.markdown("### Lateness Approval Request")
+                st.caption("Request for today, tomorrow, or the next day so approved lateness is not flagged as late.")
+
+                if not lateness_requests.empty:
+                    request_view = lateness_requests.copy()
+                    request_view["request_note"] = request_view["actual_reason"].fillna("")
+                    st.dataframe(
+                        request_view[["approved_for_date", "status", "reason", "approved_by", "request_note", "used_at"]],
+                        use_container_width=True,
                     )
-                    if not lateness_reason.strip():
-                        st.error("Reason is required to request lateness approval.")
-                    elif not existing_lateness.empty and str(existing_lateness.iloc[0].get("status", "")).lower() == "approved":
-                        st.info("A lateness approval already exists for that date.")
-                    else:
-                        if existing_lateness.empty:
-                            execute_write(
-                                conn,
-                                """
-                                INSERT INTO lateness_approvals(
-                                    username, organization, branch, approved_for_date,
-                                    reason, approved_by, status, actual_reason, created_at
-                                )
-                                VALUES (?,?,?,?,?,?,?,?,datetime('now'))
-                                """,
-                                (user, org, branch, request_date_tag, lateness_reason.strip(), "", "pending", ""),
-                            )
+
+                with st.form("kiosk_lateness_request_form", clear_on_submit=False):
+                    lateness_request_date = st.date_input(
+                        "Request lateness for",
+                        value=datetime.now().date(),
+                        min_value=datetime.now().date(),
+                        max_value=(datetime.now() + timedelta(days=2)).date(),
+                        key="kiosk_lateness_request_date",
+                    )
+                    lateness_reason = st.text_area(
+                        "Reason for lateness request",
+                        key="kiosk_lateness_request_reason",
+                        placeholder="Explain why you may arrive late on the selected date.",
+                    )
+                    submit_lateness_request = st.form_submit_button("✅ Submit Lateness Request")
+
+                    if submit_lateness_request:
+                        request_date_tag = lateness_request_date.strftime("%Y-%m-%d")
+                        existing_lateness = _safe_read(
+                            conn,
+                            """
+                            SELECT id, status FROM lateness_approvals
+                            WHERE username=? AND organization=? AND branch=? AND approved_for_date=?
+                            ORDER BY id DESC LIMIT 1
+                            """,
+                            params=(user, org, branch, request_date_tag),
+                        )
+                        if not lateness_reason.strip():
+                            st.error("Reason is required to request lateness approval.")
+                        elif not existing_lateness.empty and str(existing_lateness.iloc[0].get("status", "")).lower() == "approved":
+                            st.info("A lateness approval already exists for that date.")
                         else:
-                            execute_write(
-                                conn,
-                                """
-                                UPDATE lateness_approvals
-                                SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
-                                WHERE id=?
-                                """,
-                                (lateness_reason.strip(), int(existing_lateness.iloc[0]["id"])),
-                            )
-                        _notify_branch_admins_for_lateness_request(conn, org, branch, user, request_date_tag, lateness_reason.strip())
-                        conn.commit()
-                        st.success("Lateness request sent to admin for review.")
-                        st.session_state.pop("kiosk_user", None)
-                        clear_kiosk_photo_state()
-                        clear_kiosk_pin_input()
-                        st.session_state.pop("kiosk_lateness_request_reason", None)
-                        st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
-                        st.session_state["kiosk_view"] = "home"
-                        refresh()
+                            if existing_lateness.empty:
+                                execute_write(
+                                    conn,
+                                    """
+                                    INSERT INTO lateness_approvals(
+                                        username, organization, branch, approved_for_date,
+                                        reason, approved_by, status, actual_reason, created_at
+                                    )
+                                    VALUES (?,?,?,?,?,?,?,?,datetime('now'))
+                                    """,
+                                    (user, org, branch, request_date_tag, lateness_reason.strip(), "", "pending", ""),
+                                )
+                            else:
+                                execute_write(
+                                    conn,
+                                    """
+                                    UPDATE lateness_approvals
+                                    SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
+                                    WHERE id=?
+                                    """,
+                                    (lateness_reason.strip(), int(existing_lateness.iloc[0]["id"])),
+                                )
+                            _notify_branch_admins_for_lateness_request(conn, org, branch, user, request_date_tag, lateness_reason.strip())
+                            conn.commit()
+                            st.success("Lateness request sent to admin for review.")
+                            st.session_state.pop("kiosk_user", None)
+                            clear_kiosk_photo_state()
+                            clear_kiosk_pin_input()
+                            clear_kiosk_staff_transient_state()
+                            st.session_state["kiosk_view"] = "home"
+                            refresh()
 
             st.markdown("### 📸 Capture Face")
+            st.caption("Take a clear photo in good lighting. Your face should be centered and visible.")
+            
             if "kiosk_cam_key" not in st.session_state:
                 st.session_state["kiosk_cam_key"] = 0
             if "kiosk_photo_bytes" not in st.session_state:
@@ -698,7 +762,7 @@ def kiosk_dashboard():
                 if photo is not None:
                     captured_photo_bytes = photo.getvalue()
                     if not captured_photo_bytes or len(captured_photo_bytes) < 15000:
-                        st.error("Photo quality too low. Retake clearly in good lighting.")
+                        st.error("❌ Photo quality too low. Retake clearly in good lighting.")
                     else:
                         st.session_state["kiosk_photo_bytes"] = captured_photo_bytes
                         st.session_state["kiosk_photo_confirmed"] = False
@@ -706,20 +770,21 @@ def kiosk_dashboard():
                 return
 
             photo_bytes = st.session_state["kiosk_photo_bytes"]
-            st.image(photo_bytes, caption="Photo Preview", use_container_width=True)
+            st.image(photo_bytes, caption="📷 Photo Preview", use_container_width=True)
 
+            st.markdown("#### Review & Confirm")
             cam_col1, cam_col2 = st.columns(2)
             with cam_col1:
-                if st.button("Retake Photo", use_container_width=True, key="kiosk_retake_photo"):
+                if st.button("🔄 Retake Photo", use_container_width=True, key="kiosk_retake_photo"):
                     clear_kiosk_photo_state()
                     refresh()
             with cam_col2:
-                if st.button("Save Photo", use_container_width=True, key="kiosk_confirm_photo"):
+                if st.button("✅ Save Photo", use_container_width=True, key="kiosk_confirm_photo"):
                     st.session_state["kiosk_photo_confirmed"] = True
                     refresh()
 
             if not st.session_state.get("kiosk_photo_confirmed", False):
-                st.info("Tap Save Photo to continue, or Retake Photo.")
+                st.info("ℹ️ Tap **Save Photo** to confirm, or **Retake Photo** for a new picture.")
                 return
 
             current_hash = _photo_hash(photo_bytes)
@@ -843,11 +908,15 @@ def kiosk_dashboard():
             # CLOCK IN
             # ==============================
             if record.empty:
+                st.divider()
+                st.markdown("<div style='text-align: center; margin: 1.5rem 0 1rem 0;'><h3>✅ Ready to Clock In</h3></div>", unsafe_allow_html=True)
+                
                 if now < earliest_clockin_dt:
-                    st.error(f"Clock-in opens at {earliest_clockin_dt.strftime('%H:%M')}. Maximum early clock-in is 30 minutes before shift.")
+                    st.error(f"⏰ Clock-in opens at {earliest_clockin_dt.strftime('%H:%M')}. Maximum early clock-in is 30 minutes before shift.")
                 elif now_time < work_start:
-                    st.warning("⚠ Early clock-in allowed within 30 minutes before shift start.")
+                    st.warning("⚠️ Early clock-in allowed within 30 minutes before shift start.")
 
+                st.markdown("<div class='clock-action-btn'>", unsafe_allow_html=True)
                 if st.button("🟢 CLOCK IN", use_container_width=True):
                     if now < earliest_clockin_dt:
                         st.error(f"Too early. You can only clock in from {earliest_clockin_dt.strftime('%H:%M')}.")
@@ -906,24 +975,34 @@ def kiosk_dashboard():
                             )
                         conn.commit()
 
-                    st.success("✅ Clock In Successful")
+                    st.markdown("""
+                    <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+                        <h1 style='font-size: 3rem; margin: 0;'>✅</h1>
+                        <h2 style='margin: 0.5rem 0 0 0;'>Clock In Successful</h2>
+                        <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    time.sleep(1.5)
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
+                    clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
+                st.markdown("</div>", unsafe_allow_html=True)
 
             # ==============================
             # CLOCK OUT
             # ==============================
             else:
-                st.info("You are already clocked in today. Only clock-out is allowed now.")
+                st.info("✅ You are already clocked in today. Only clock-out is allowed now.")
 
                 if record.iloc[0]["clock_out"]:
-                    st.info("Already completed today")
+                    st.info("✔️ Already completed today")
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
+                    clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     return
 
@@ -931,9 +1010,9 @@ def kiosk_dashboard():
                 request_reason = ""
 
                 if now_time < work_end:
-                    st.warning("⚠ Early clock-out")
+                    st.warning("⚠️ Early clock-out")
                     if approved_early_request.empty:
-                        st.error("Early clock-out is blocked until admin approves it for today.")
+                        st.error("❌ Early clock-out is blocked until admin approves it for today.")
                         if not today_requests.empty:
                             req_row = today_requests.iloc[0]
                             req_status = str(req_row.get("status", "pending")).lower()
@@ -982,19 +1061,23 @@ def kiosk_dashboard():
                                 )
                             _notify_branch_admins_for_early_request(conn, org, branch, user, request_reason.strip())
                             conn.commit()
-                            st.success("Early clock-out request sent to admin for review.")
+                            st.success("✅ Early clock-out request sent to admin for review.")
                             refresh()
                     else:
                         approval_row = approved_early_request.iloc[0]
-                        st.success(f"Admin approval found for today by {approval_row['approved_by']}. Reason: {approval_row['reason']}")
+                        st.success(f"✅ Admin approval found for today by {approval_row['approved_by']}. Reason: {approval_row['reason']}")
                     reason = st.text_area("Enter reason for leaving early", key="kiosk_early_clockout_reason")
 
+                st.divider()
+                st.markdown("<div style='text-align: center; margin: 1.5rem 0 1rem 0;'><h3>🕐 Ready to Clock Out</h3></div>", unsafe_allow_html=True)
+                
+                st.markdown("<div class='clock-action-btn'>", unsafe_allow_html=True)
                 if st.button("🔴 CLOCK OUT", use_container_width=True):
                     if now_time < work_end and not reason.strip():
-                        st.error("Reason required")
+                        st.error("❌ Reason required")
                         return
                     if now_time < work_end and approved_early_request.empty:
-                        st.error("Admin approval is required before early clock-out.")
+                        st.error("❌ Admin approval is required before early clock-out.")
                         return
 
                     filepath = _save_photo(org, branch, user, photo_bytes)
@@ -1014,9 +1097,18 @@ def kiosk_dashboard():
 
                     conn.commit()
 
-                    st.success("✅ Clock Out Successful")
+                    st.markdown("""
+                    <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
+                        <h1 style='font-size: 3rem; margin: 0;'>✅</h1>
+                        <h2 style='margin: 0.5rem 0 0 0;'>Clock Out Successful</h2>
+                        <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+                    time.sleep(1.5)
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
                     clear_kiosk_pin_input()
+                    clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
+                st.markdown("</div>", unsafe_allow_html=True)
