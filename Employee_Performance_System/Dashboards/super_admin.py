@@ -36,9 +36,12 @@ try:
     from Analytics.group_demographics import get_demographic_statistics, get_group_details_for_super_admin
     from Analytics.analytics_filter import filter_ratings_by_role, filter_users_by_role
     from Analytics.badges import compute_badge_summary_for_super_admin, get_badge_holders_table
+    from Analytics.ai_recommendations import get_cached_recommendations
     ANALYTICS_OK = True
 except Exception as _ae:
     ANALYTICS_OK = False
+    def get_cached_recommendations():
+        return {"articles": [], "fetched_at": "", "sources_ok": 0, "error": "Analytics module unavailable."}
 
 try:
     import plotly.express as px
@@ -69,11 +72,16 @@ def build_favorite_relationship_tables(ratings_df):
     if ratings_df is None or ratings_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
+    rel = ratings_df.copy()
+
+    # Backward-compatible support for schemas that still use `ratee`.
+    if "rated" not in rel.columns and "ratee" in rel.columns:
+        rel = rel.rename(columns={"ratee": "rated"})
+
     required_cols = {"rater", "rated", "score"}
-    if not required_cols.issubset(set(ratings_df.columns)):
+    if not required_cols.issubset(set(rel.columns)):
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-    rel = ratings_df.copy()
     rel["rater"] = rel["rater"].astype(str).str.strip()
     rel["rated"] = rel["rated"].astype(str).str.strip()
     rel = rel[(rel["rater"] != "") & (rel["rated"] != "")]
@@ -143,28 +151,40 @@ def render_favorite_relationship_section(ratings_df, scope_label):
     st.markdown("### Favorite Relationships")
     st.caption(f"Scope: {scope_label}")
 
-    fav_to_df, favored_by_df, top_pairs_df = build_favorite_relationship_tables(ratings_df)
-    if fav_to_df.empty and favored_by_df.empty:
-        st.info("Not enough rating relationship data yet to determine favorites.")
-        return
+    try:
+        fav_to_df, favored_by_df, top_pairs_df = build_favorite_relationship_tables(ratings_df)
+        if fav_to_df.empty and favored_by_df.empty:
+            st.info("Not enough rating relationship data yet to determine favorites.")
+            return
 
-    rel_col1, rel_col2 = st.columns(2)
-    with rel_col1:
-        st.markdown("**Who Is Favorite To Who**")
-        if fav_to_df.empty:
-            st.info("No outbound favorite links yet.")
-        else:
-            st.dataframe(fav_to_df.sort_values(["User"]), use_container_width=True)
+        rel_col1, rel_col2 = st.columns(2)
+        with rel_col1:
+            st.markdown("**Who Is Favorite To Who**")
+            if fav_to_df.empty:
+                st.info("No outbound favorite links yet.")
+            else:
+                fav_to_df = fav_to_df.copy().fillna("")
+                fav_to_df["User"] = fav_to_df["User"].astype(str)
+                fav_to_df["Favorite To"] = fav_to_df["Favorite To"].astype(str)
+                st.dataframe(fav_to_df.sort_values(["User"]), use_container_width=True)
 
-    with rel_col2:
-        st.markdown("**Who Is Favored By Who (Vice Versa)**")
-        if favored_by_df.empty:
-            st.info("No inbound favorite links yet.")
-        else:
-            st.dataframe(favored_by_df.sort_values(["User"]), use_container_width=True)
+        with rel_col2:
+            st.markdown("**Who Is Favored By Who (Vice Versa)**")
+            if favored_by_df.empty:
+                st.info("No inbound favorite links yet.")
+            else:
+                favored_by_df = favored_by_df.copy().fillna("")
+                favored_by_df["User"] = favored_by_df["User"].astype(str)
+                favored_by_df["Favored By"] = favored_by_df["Favored By"].astype(str)
+                st.dataframe(favored_by_df.sort_values(["User"]), use_container_width=True)
 
-    st.markdown("**Top Rating Relationships**")
-    st.dataframe(top_pairs_df.head(25), use_container_width=True)
+        st.markdown("**Top Rating Relationships**")
+        top_pairs_df = top_pairs_df.copy().fillna("")
+        top_pairs_df["From"] = top_pairs_df["From"].astype(str)
+        top_pairs_df["To"] = top_pairs_df["To"].astype(str)
+        st.dataframe(top_pairs_df.head(25), use_container_width=True)
+    except Exception as e:
+        st.warning(f"Favorite relationship analytics unavailable: {e}")
 
 
 def get_holiday_preview(country_code, subdivision, year):
@@ -756,6 +776,15 @@ def super_admin_dashboard():
                 # --- RECOMMENDATIONS ---
                 st.divider()
                 st.markdown("### 📋 AI Recommendations")
+
+                rec_ctx = intel.get("recommendation_context", {})
+                if rec_ctx:
+                    st.caption(
+                        f"Recommendation stage: {str(rec_ctx.get('stage', 'early')).upper()} "
+                        f"| ratings: {int(rec_ctx.get('ratings_count', 0))} "
+                        f"| months: {int(rec_ctx.get('history_months', 0))} "
+                        f"| drift: {int(rec_ctx.get('drift_score', 0))}"
+                    )
                 
                 recs = intel.get("recommendations", [])
                 if recs:
@@ -768,7 +797,52 @@ def super_admin_dashboard():
                             st.success(rec)
                 else:
                     st.info("No recommendations at this time.")
-                
+
+                # --- LIVE INTERNET AI RECOMMENDATIONS ---
+                st.divider()
+                st.markdown("### 🌐 Live Industry AI Recommendations")
+                st.caption("Pulled automatically from SHRM, HR Dive, MIT Sloan & HBR – refreshed every 6 hours.")
+
+                with st.spinner("Fetching latest HR & management insights from the web…"):
+                    live_data = get_cached_recommendations()
+
+                if live_data.get("error"):
+                    st.warning(f"Could not fetch live recommendations: {live_data['error']}")
+                else:
+                    st.caption(
+                        f"Last fetched: {live_data.get('fetched_at', 'unknown')} "
+                        f"| Sources online: {live_data.get('sources_ok', 0)}"
+                    )
+                    articles = live_data.get("articles", [])
+                    if articles:
+                        # Group by category for a cleaner layout
+                        categories = {}
+                        for art in articles:
+                            cat = art.get("category", "General")
+                            categories.setdefault(cat, []).append(art)
+
+                        for cat, items in categories.items():
+                            with st.expander(f"📂 {cat} ({len(items)} articles)", expanded=False):
+                                for art in items:
+                                    title = art.get("title", "Untitled")
+                                    link = art.get("link", "")
+                                    source = art.get("source", "")
+                                    summary = art.get("summary", "")
+                                    pub = art.get("published", "")
+
+                                    if link:
+                                        st.markdown(f"**[{title}]({link})**  _— {source}_")
+                                    else:
+                                        st.markdown(f"**{title}**  _— {source}_")
+
+                                    if summary:
+                                        st.caption(summary + ("…" if len(summary) >= 200 else ""))
+                                    if pub:
+                                        st.caption(f"Published: {pub}")
+                                    st.markdown("---")
+                    else:
+                        st.info("No live articles retrieved at this time.")
+
                 # --- INDIVIDUALS OF FOCUS ---
                 st.divider()
                 st.markdown("### 👤 Individuals of Focus")
@@ -779,18 +853,30 @@ def super_admin_dashboard():
                 
                 with ia:
                     st.markdown("**🚨 Problematic**")
-                    for emp in focus.get("problematic", []):
-                        st.error(f"• {emp}")
+                    problematic = focus.get("problematic", [])
+                    if problematic:
+                        for emp in problematic:
+                            st.error(f"• {emp}")
+                    else:
+                        st.info("No problematic users detected.")
                 
                 with ib:
                     st.markdown("**⚠ At-Risk (Retention)**")
-                    for emp in focus.get("at_risk_retention", []):
-                        st.warning(f"• {emp}")
+                    at_risk_retention = focus.get("at_risk_retention", [])
+                    if at_risk_retention:
+                        for emp in at_risk_retention:
+                            st.warning(f"• {emp}")
+                    else:
+                        st.info("No at-risk users detected.")
                 
                 with ic:
                     st.markdown("**⭐ High Performers**")
-                    for emp in focus.get("high_performers", []):
-                        st.success(f"• {emp}")
+                    high_performers = focus.get("high_performers", [])
+                    if high_performers:
+                        for emp in high_performers:
+                            st.success(f"• {emp}")
+                    else:
+                        st.info("No high performers detected yet.")
                 
                 # --- POSITIVE HIGHLIGHTS ---
                 st.divider()
@@ -809,8 +895,32 @@ def super_admin_dashboard():
                 groups = group_analysis.get("group_details", [])
                 
                 if groups:
-                    groups_df = pd.DataFrame(groups)[["group_type", "members", "risk_level", "avg_rating"]]
+                    group_rows = []
+                    for idx, g in enumerate(groups, start=1):
+                        members = g.get("members", [])
+                        if isinstance(members, str):
+                            member_list = [m.strip() for m in members.split(",") if m.strip()]
+                        elif isinstance(members, list):
+                            member_list = [str(m).strip() for m in members if str(m).strip()]
+                        else:
+                            member_list = []
+
+                        group_rows.append({
+                            "Allied Group": f"Group {idx}",
+                            "Group Type": g.get("group_type", "unknown"),
+                            "Members": ", ".join(member_list) if member_list else "No member names available",
+                            "Risk": g.get("risk_level", "info"),
+                            "Avg Rating": round(float(g.get("avg_rating", 0) or 0), 2),
+                        })
+
+                    groups_df = pd.DataFrame(group_rows)
                     st.dataframe(groups_df, use_container_width=True)
+
+                    st.markdown("**Allied Groups and Member Names**")
+                    for row in group_rows:
+                        with st.expander(f"{row['Allied Group']} • {row['Group Type']} • {row['Risk']}"):
+                            st.write(f"Members: {row['Members']}")
+                            st.write(f"Average Rating: {row['Avg Rating']}")
                 else:
                     st.info("No significant groups detected.")
             

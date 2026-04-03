@@ -374,6 +374,178 @@ def _build_branch_action_plan(branch_snapshot):
     }
 
 
+def _build_adaptive_recommendations(
+    ratings_df,
+    attendance_df,
+    users_df,
+    payments_df,
+    monthly_trends,
+    business_intelligence,
+    branch_action_plan,
+    base_recommendations,
+):
+    recs = []
+
+    ratings_count = int(len(ratings_df)) if ratings_df is not None and not ratings_df.empty else 0
+    attendance_count = int(len(attendance_df)) if attendance_df is not None and not attendance_df.empty else 0
+    users_count = int(len(users_df)) if users_df is not None and not users_df.empty else 0
+    payments_count = int(len(payments_df)) if payments_df is not None and not payments_df.empty else 0
+
+    month_depth = 0
+    if monthly_trends and monthly_trends.get("monthly_rows"):
+        month_depth = len(monthly_trends.get("monthly_rows", []))
+
+    drift_signals = []
+    drift_score = 0
+
+    # Detect behavior drift from recent window vs baseline window.
+    if ratings_df is not None and not ratings_df.empty and "created_at" in ratings_df.columns and "score" in ratings_df.columns:
+        ratings_w = ratings_df.copy()
+        ratings_w["created_at"] = pd.to_datetime(ratings_w["created_at"], errors="coerce")
+        ratings_w["score"] = pd.to_numeric(ratings_w["score"], errors="coerce")
+        ratings_w = ratings_w.dropna(subset=["created_at", "score"])
+        if not ratings_w.empty:
+            now = datetime.now()
+            recent_cutoff = now - timedelta(days=30)
+            baseline_cutoff = now - timedelta(days=120)
+            recent = ratings_w[ratings_w["created_at"] >= recent_cutoff]
+            baseline = ratings_w[(ratings_w["created_at"] >= baseline_cutoff) & (ratings_w["created_at"] < recent_cutoff)]
+
+            if not recent.empty and not baseline.empty:
+                recent_avg = float(recent["score"].mean())
+                baseline_avg = float(baseline["score"].mean())
+                delta = recent_avg - baseline_avg
+                if abs(delta) >= 3:
+                    drift_score += 1
+                    trend_word = "up" if delta > 0 else "down"
+                    drift_signals.append(
+                        f"Recent rating behavior shifted {trend_word} by {abs(delta):.1f} points versus prior baseline."
+                    )
+
+                # Dynamic volatility threshold (higher volatility implies instability).
+                baseline_std = float(baseline["score"].std()) if len(baseline) > 1 else 0.0
+                recent_std = float(recent["score"].std()) if len(recent) > 1 else 0.0
+                if baseline_std > 0 and recent_std > (baseline_std * 1.35):
+                    drift_score += 1
+                    drift_signals.append("Score volatility increased materially in the recent period.")
+
+    if attendance_df is not None and not attendance_df.empty and "status" in attendance_df.columns:
+        att_w = attendance_df.copy()
+        date_col = "date" if "date" in att_w.columns else "clock_in" if "clock_in" in att_w.columns else None
+        if date_col:
+            att_w[date_col] = pd.to_datetime(att_w[date_col], errors="coerce")
+            att_w = att_w.dropna(subset=[date_col])
+            if not att_w.empty:
+                now = datetime.now()
+                recent_cutoff = now - timedelta(days=30)
+                baseline_cutoff = now - timedelta(days=120)
+                recent_att = att_w[att_w[date_col] >= recent_cutoff]
+                baseline_att = att_w[(att_w[date_col] >= baseline_cutoff) & (att_w[date_col] < recent_cutoff)]
+
+                def _late_rate(df):
+                    if df is None or df.empty:
+                        return 0.0
+                    s = df["status"].astype(str).str.upper()
+                    return float((s == "LATE").sum()) / max(len(df), 1)
+
+                if not recent_att.empty and not baseline_att.empty:
+                    rr = _late_rate(recent_att)
+                    br = _late_rate(baseline_att)
+                    if (rr - br) >= 0.08:
+                        drift_score += 1
+                        drift_signals.append("Late attendance pattern increased compared with previous baseline.")
+
+    if ratings_count < 40 or month_depth < 2:
+        maturity_stage = "early"
+    elif ratings_count < 160 or month_depth < 4:
+        maturity_stage = "growing"
+    else:
+        maturity_stage = "mature"
+
+    recs.append(
+        f"DATA STAGE: {maturity_stage.upper()} (ratings={ratings_count}, months={month_depth}, attendance={attendance_count}, payments={payments_count})."
+    )
+
+    if drift_signals:
+        recs.append(f"DRIFT STATUS: CHANGING ({len(drift_signals)} signal(s) detected).")
+        recs.extend([f"DRIFT: {s}" for s in drift_signals[:3]])
+    else:
+        recs.append("DRIFT STATUS: STABLE (no major recent behavior shifts detected).")
+
+    if maturity_stage == "early":
+        recs.extend([
+            "ACTION: Prioritize data capture consistency for 30 days before heavy strategic changes.",
+            "ACTION: Ensure each branch submits enough ratings weekly (target: at least 10 per branch per week).",
+            "GUIDE: Use recommendations as directional signals while evidence is still limited.",
+        ])
+    elif maturity_stage == "growing":
+        recs.extend([
+            "ACTION: Start branch-level A/B operating interventions and compare results month-over-month.",
+            "ACTION: Track manager impact per branch using trend lines, not single snapshots.",
+            "GUIDE: Escalate only repeated issues that persist across at least 2 periods.",
+        ])
+    else:
+        recs.extend([
+            "ACTION: Apply predictive planning for staffing, training, and branch expansion from established trends.",
+            "ACTION: Standardize the best branch playbook and enforce KPI-linked manager accountability.",
+            "GUIDE: Use rolling 90-day performance windows for board-level decisions.",
+        ])
+
+    health_status = str(business_intelligence.get("business_health_status", "")).lower()
+    payment_trend = str(business_intelligence.get("payment_trend", {}).get("trend_direction", "Stable")).lower()
+    trend_notes = monthly_trends.get("trend_summary", []) if isinstance(monthly_trends, dict) else []
+
+    if health_status == "needs attention":
+        recs.append("ACTION: Freeze expansion and focus on recovery in weak branches until health stabilizes.")
+    elif health_status == "strong":
+        recs.append("KEEP: Business health is strong; scale high-performing routines with controlled governance.")
+
+    if payment_trend == "declining":
+        recs.append("ACTION: Trigger revenue recovery plan: collections follow-up, branch accountability, and weekly cash tracking.")
+    elif payment_trend == "growing":
+        recs.append("KEEP: Collection trend is positive; reinvest in retention and quality improvement to sustain growth.")
+
+    if trend_notes:
+        recs.extend([f"TREND: {note}" for note in trend_notes[:3]])
+
+    if drift_score >= 2:
+        recs.append("ACTION: Move to weekly governance cadence until drift stabilizes (rapid check-ins, corrective actions, and owner tracking).")
+    elif drift_score == 1:
+        recs.append("GUIDE: Increase monitoring frequency for affected KPIs and validate if the shift persists next cycle.")
+
+    target_branch = branch_action_plan.get("target_branch") if isinstance(branch_action_plan, dict) else None
+    branch_actions = branch_action_plan.get("actions", []) if isinstance(branch_action_plan, dict) else []
+    if target_branch and branch_actions:
+        recs.append(f"PRIORITY BRANCH: {target_branch} requires focused intervention.")
+        recs.extend([f"BRANCH ACTION: {a}" for a in branch_actions[:2]])
+
+    if users_count > 0 and attendance_count == 0:
+        recs.append("ACTION: Attendance data is missing; enforce check-in usage before relying on attendance-driven intelligence.")
+
+    for base_rec in (base_recommendations or []):
+        if isinstance(base_rec, str) and base_rec.strip():
+            recs.append(base_rec.strip())
+
+    deduped = []
+    seen = set()
+    for item in recs:
+        norm = item.lower().strip()
+        if norm and norm not in seen:
+            deduped.append(item)
+            seen.add(norm)
+
+    return deduped[:20], {
+        "stage": maturity_stage,
+        "ratings_count": ratings_count,
+        "attendance_count": attendance_count,
+        "payments_count": payments_count,
+        "users_count": users_count,
+        "history_months": month_depth,
+        "drift_score": drift_score,
+        "drift_signals": drift_signals[:5],
+    }
+
+
 # =====================================================
 # SUPER ADMIN DASHBOARD - INTELLIGENT VIEW
 # =====================================================
@@ -616,6 +788,19 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
     dashboard["branch_action_plan"] = _build_branch_action_plan(
         dashboard["business_intelligence"].get("branch_snapshot", {})
     )
+
+    adaptive_recs, rec_context = _build_adaptive_recommendations(
+        ratings_df,
+        attendance_df if not attendance_df.empty else None,
+        users_df if not users_df.empty else None,
+        payments_df if not payments_df.empty else None,
+        dashboard["monthly_trends"],
+        dashboard["business_intelligence"],
+        dashboard["branch_action_plan"],
+        intelligence.get("recommendations", [])[:15],
+    )
+    dashboard["recommendations"] = adaptive_recs
+    dashboard["recommendation_context"] = rec_context
     
     return dashboard
 
