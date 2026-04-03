@@ -65,6 +65,108 @@ def safe_read(query, conn, params=None):
         return pd.DataFrame()
 
 
+def build_favorite_relationship_tables(ratings_df):
+    if ratings_df is None or ratings_df.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    required_cols = {"rater", "rated", "score"}
+    if not required_cols.issubset(set(ratings_df.columns)):
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    rel = ratings_df.copy()
+    rel["rater"] = rel["rater"].astype(str).str.strip()
+    rel["rated"] = rel["rated"].astype(str).str.strip()
+    rel = rel[(rel["rater"] != "") & (rel["rated"] != "")]
+    rel = rel[rel["rater"] != rel["rated"]]
+    rel["score"] = pd.to_numeric(rel["score"], errors="coerce")
+    rel = rel.dropna(subset=["score"])
+
+    if rel.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+
+    agg_map = {
+        "ratings_count": ("score", "count"),
+        "avg_score": ("score", "mean"),
+    }
+    if "created_at" in rel.columns:
+        rel["created_at"] = pd.to_datetime(rel["created_at"], errors="coerce")
+        agg_map["last_rating"] = ("created_at", "max")
+
+    pair_summary = rel.groupby(["rater", "rated"], as_index=False).agg(**agg_map)
+    pair_summary["avg_score"] = pair_summary["avg_score"].round(2)
+    if "last_rating" in pair_summary.columns:
+        pair_summary["last_rating"] = pair_summary["last_rating"].dt.strftime("%Y-%m-%d %H:%M").fillna("")
+    else:
+        pair_summary["last_rating"] = ""
+
+    ranked_pairs = pair_summary.sort_values(["ratings_count", "avg_score"], ascending=[False, False]).reset_index(drop=True)
+
+    favorite_to = ranked_pairs.groupby("rater", as_index=False).head(1).copy()
+    favorite_to = favorite_to.rename(
+        columns={
+            "rater": "User",
+            "rated": "Favorite To",
+            "ratings_count": "Ratings Given",
+            "avg_score": "Avg Score Given",
+            "last_rating": "Last Rating",
+        }
+    )
+    favorite_to = favorite_to[["User", "Favorite To", "Ratings Given", "Avg Score Given", "Last Rating"]]
+
+    favored_by = ranked_pairs.groupby("rated", as_index=False).head(1).copy()
+    favored_by = favored_by.rename(
+        columns={
+            "rated": "User",
+            "rater": "Favored By",
+            "ratings_count": "Ratings Received",
+            "avg_score": "Avg Score Received",
+            "last_rating": "Last Rating",
+        }
+    )
+    favored_by = favored_by[["User", "Favored By", "Ratings Received", "Avg Score Received", "Last Rating"]]
+
+    relationship_top = ranked_pairs.rename(
+        columns={
+            "rater": "From",
+            "rated": "To",
+            "ratings_count": "Ratings Count",
+            "avg_score": "Avg Score",
+            "last_rating": "Last Rating",
+        }
+    )
+    relationship_top = relationship_top[["From", "To", "Ratings Count", "Avg Score", "Last Rating"]]
+
+    return favorite_to, favored_by, relationship_top
+
+
+def render_favorite_relationship_section(ratings_df, scope_label):
+    st.markdown("### Favorite Relationships")
+    st.caption(f"Scope: {scope_label}")
+
+    fav_to_df, favored_by_df, top_pairs_df = build_favorite_relationship_tables(ratings_df)
+    if fav_to_df.empty and favored_by_df.empty:
+        st.info("Not enough rating relationship data yet to determine favorites.")
+        return
+
+    rel_col1, rel_col2 = st.columns(2)
+    with rel_col1:
+        st.markdown("**Who Is Favorite To Who**")
+        if fav_to_df.empty:
+            st.info("No outbound favorite links yet.")
+        else:
+            st.dataframe(fav_to_df.sort_values(["User"]), use_container_width=True)
+
+    with rel_col2:
+        st.markdown("**Who Is Favored By Who (Vice Versa)**")
+        if favored_by_df.empty:
+            st.info("No inbound favorite links yet.")
+        else:
+            st.dataframe(favored_by_df.sort_values(["User"]), use_container_width=True)
+
+    st.markdown("**Top Rating Relationships**")
+    st.dataframe(top_pairs_df.head(25), use_container_width=True)
+
+
 def get_holiday_preview(country_code, subdivision, year):
     if not HOLIDAYS_OK:
         return pd.DataFrame()
@@ -1779,6 +1881,9 @@ def super_admin_dashboard():
                             else:
                                 st.success(f"KEEP: {user_name} ({user_score:.1f}) is stable but should maintain consistency.")
 
+                    branch_scope_label = sel_br if sel_br != "All Branches" else (branch_scope if branch_scope else "All Branches")
+                    render_favorite_relationship_section(ratings, branch_scope_label)
+
                     st.divider()
 
                     at1, at2, at3, at4, at5, at6 = st.tabs([
@@ -1974,6 +2079,8 @@ def super_admin_dashboard():
 
                 st.markdown("**Top Performers - All Roles**")
                 st.dataframe(ranked[["username", "role", "branch", "avg_score", "rating_count"]].head(15), use_container_width=True)
+
+                render_favorite_relationship_section(ratings_all, compare_scope_label)
 
                 st.divider()
                 st.markdown("### Organization Leadership Intelligence")
