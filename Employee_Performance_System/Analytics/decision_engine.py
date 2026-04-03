@@ -244,7 +244,17 @@ def generate_super_admin_intelligence(
         report["positive_highlights"].append("✅ Branch showing strong engagement and cooperation")
     
     report["positive_highlights"] = list(set(report["positive_highlights"]))[:10]
-    
+
+    # =========================
+    # BIASNESS & FAVORITISM (full detail for dedicated UI section)
+    # =========================
+    report["favoritism_analysis"] = favoritism_flags
+
+    # =========================
+    # ISOLATION ANALYSIS (full detail for dedicated UI section)
+    # =========================
+    report["isolation_analysis"] = isolation_flags
+
     return report
 
 

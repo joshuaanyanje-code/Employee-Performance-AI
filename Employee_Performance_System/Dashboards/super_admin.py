@@ -1,6 +1,7 @@
-import streamlit as st
+﻿import streamlit as st
 import pandas as pd
 import json
+import re
 from datetime import date, datetime, timedelta
 from urllib.parse import quote
 import importlib
@@ -33,7 +34,7 @@ try:
     from Analytics.decision_engine import management_recommendations
     from Analytics.super_admin_dashboard import get_super_admin_dashboard
     from Analytics.alerts_system import get_unread_alerts, resolve_alert, get_alert_statistics
-    from Analytics.group_demographics import get_demographic_statistics, get_group_details_for_super_admin
+    from Analytics.group_demographics import analyze_group_demographics, get_demographic_statistics, get_group_details_for_super_admin
     from Analytics.analytics_filter import filter_ratings_by_role, filter_users_by_role
     from Analytics.badges import compute_badge_summary_for_super_admin, get_badge_holders_table
     from Analytics.ai_recommendations import get_cached_recommendations
@@ -66,6 +67,23 @@ def safe_read(query, conn, params=None):
         return pd.read_sql(query, conn, params=params) if params else pd.read_sql(query, conn)
     except Exception:
         return pd.DataFrame()
+
+
+def extract_user_mentions(findings, usernames):
+    if not findings or not usernames:
+        return []
+
+    findings_text = "\n".join(str(item) for item in findings)
+    mentioned = []
+    for username in usernames:
+        candidate = str(username).strip()
+        if not candidate:
+            continue
+        pattern = rf"(?<!\w){re.escape(candidate)}(?!\w)"
+        if re.search(pattern, findings_text, flags=re.IGNORECASE):
+            mentioned.append(candidate)
+
+    return sorted(set(mentioned), key=str.lower)
 
 
 def build_favorite_relationship_tables(ratings_df):
@@ -379,10 +397,29 @@ def super_admin_dashboard():
         st.error("Organization not assigned")
         st.stop()
 
-    st.title(f"Managing Director — {org}")
+    # Fetch business type once per session so every section can use it
+    if "sa_business_type" not in st.session_state or st.session_state.get("sa_org_for_btype") != org:
+        try:
+            _org_meta = safe_read(
+                "SELECT business_type FROM organizations WHERE name=?", conn, params=(org,)
+            )
+            st.session_state["sa_business_type"] = (
+                str(_org_meta["business_type"].iloc[0])
+                if not _org_meta.empty and _org_meta["business_type"].iloc[0]
+                else "Office"
+            )
+        except Exception:
+            st.session_state["sa_business_type"] = "Office"
+        st.session_state["sa_org_for_btype"] = org
+
+    org_business_type = st.session_state["sa_business_type"]
+
+    st.title(f"Managing Director â€” {org}")
 
     branches_raw = safe_read("SELECT name FROM branches WHERE organization=?", conn, params=(org,))
     branches = branches_raw["name"].tolist() if not branches_raw.empty else []
+    usernames_raw = safe_read("SELECT username FROM users WHERE organization=?", conn, params=(org,))
+    org_usernames = usernames_raw["username"].dropna().astype(str).tolist() if not usernames_raw.empty else []
 
     is_mobile = is_mobile_device()
 
@@ -509,8 +546,9 @@ def super_admin_dashboard():
     if menu == "Overview":
         st.subheader("Overview")
 
-        users_df     = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?",    conn, params=(org,)))
-        ratings_df   = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?",  conn, params=(org,)))
+        users_df      = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?",    conn, params=(org,)))
+        ratings_df    = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?",  conn, params=(org,)))
+        attendance_df = apply_branch_scope(safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,)))
         branches_all = safe_read("SELECT * FROM branches WHERE organization=?", conn, params=(org,))
         if branch_scope and not branches_all.empty and "name" in branches_all.columns:
             branches_all = branches_all[branches_all["name"].astype(str) == str(branch_scope)]
@@ -521,6 +559,30 @@ def super_admin_dashboard():
         c2.metric("Branches", len(branches_all))
         c3.metric("Ratings",  len(ratings_df))
         c4.metric("Kiosks",   len(kiosks_df))
+
+        try:
+            overview_group_data = analyze_group_demographics(
+                ratings_df,
+                attendance_df=attendance_df,
+                users_df=users_df,
+                organization=org,
+                branch=branch_scope,
+            )
+            overview_groups = overview_group_data.get("group_details", [])
+        except Exception:
+            overview_groups = []
+
+        dating_count = len([g for g in overview_groups if str(g.get("group_type", "")).lower() == "dating"])
+        conflict_count = len([g for g in overview_groups if str(g.get("group_type", "")).lower() == "conflict_pair"])
+        sync_count = len([g for g in overview_groups if str(g.get("group_type", "")).lower() == "synchronized"])
+
+        if dating_count or conflict_count or sync_count:
+            st.divider()
+            st.markdown("**Relationship and Conflict Alerts**")
+            oa1, oa2, oa3 = st.columns(3)
+            oa1.metric("Dating / Relationship", dating_count)
+            oa2.metric("Conflict Pairs", conflict_count)
+            oa3.metric("Synchronized Pairs", sync_count)
 
         if safe_df(ratings_df):
             st.divider()
@@ -536,20 +598,20 @@ def super_admin_dashboard():
         st.info("Payment methods, reminders, and upgrade plans are available in the Payments menu.")
 
     # =========================================================
-    # 🧠 INTELLIGENCE DASHBOARD
+    # ðŸ§  INTELLIGENCE DASHBOARD
     # =========================================================
     elif menu == "Analytics" and analytics_view == "Intelligence":
-        st.subheader("🧠 Managing Director Intelligence Dashboard")
+        st.subheader("ðŸ§  Managing Director Intelligence Dashboard")
         
         if not ANALYTICS_OK:
             st.warning("Analytics module unavailable.")
         else:
-            intel_options = ["— All Branches —"] + branches
+            intel_options = ["â€” All Branches â€”"] + branches
             intel_default_idx = intel_options.index(branch_scope) if branch_scope in intel_options else 0
             sel_branch = nav_selectbox("Filter by Branch (optional)", intel_options, key="intel_branch", index=intel_default_idx)
-            branch_filter = None if sel_branch == "— All Branches —" else sel_branch
+            branch_filter = None if sel_branch == "â€” All Branches â€”" else sel_branch
             
-            if st.button("🔄 Run Intelligence Analysis", type="primary"):
+            if st.button("ðŸ”„ Run Intelligence Analysis", type="primary"):
                 with st.spinner("Analyzing..."):
                     try:
                         intelligence = get_super_admin_dashboard(org, branch_filter, user)
@@ -563,7 +625,7 @@ def super_admin_dashboard():
                 
                 # --- EXECUTIVE SUMMARY ---
                 st.divider()
-                st.markdown("### 📊 Executive Summary")
+                st.markdown("### ðŸ“Š Executive Summary")
                 
                 meta = intel.get("executive_summary", {})
                 total_emp = meta.get("total_employees", 0)
@@ -581,7 +643,7 @@ def super_admin_dashboard():
 
                 # --- BUSINESS INTELLIGENCE ---
                 st.divider()
-                st.markdown("### 💼 Business Intelligence")
+                st.markdown("### ðŸ’¼ Business Intelligence")
 
                 biz = intel.get("business_intelligence", {})
                 pay = biz.get("payment_trend", {})
@@ -664,7 +726,7 @@ def super_admin_dashboard():
 
                 # --- MONTHLY TRENDS & FORECAST ---
                 st.divider()
-                st.markdown("### 📈 Monthly Trends & Forecast")
+                st.markdown("### ðŸ“ˆ Monthly Trends & Forecast")
 
                 monthly = intel.get("monthly_trends", {})
                 monthly_rows = monthly.get("monthly_rows", [])
@@ -714,7 +776,7 @@ def super_admin_dashboard():
 
                 # --- WEAKEST BRANCH ACTION PLAN ---
                 st.divider()
-                st.markdown("### 🎯 Branch Action Plan")
+                st.markdown("### ðŸŽ¯ Branch Action Plan")
 
                 action_plan = intel.get("branch_action_plan", {})
                 target_branch = action_plan.get("target_branch")
@@ -732,7 +794,7 @@ def super_admin_dashboard():
 
                 # --- DOWNLOADABLE EXECUTIVE REPORTS ---
                 st.divider()
-                st.markdown("### ⬇ Executive Downloads")
+                st.markdown("### â¬‡ Executive Downloads")
 
                 executive_report_text = build_executive_bi_report(intel)
                 report_json = json.dumps(intel, indent=2, default=str)
@@ -763,19 +825,138 @@ def super_admin_dashboard():
                 
                 # --- CRITICAL ALERTS ---
                 st.divider()
-                st.markdown("### 🚨 Critical Alerts")
+                st.markdown("### ðŸš¨ Critical Alerts")
                 
                 critical = intel.get("critical_alerts", [])
                 if critical:
                     for alert in critical:
-                        severity = "🔥" if "🔥" in alert or "⛔" in alert else "⚠"
+                        severity = "ðŸ”¥" if "ðŸ”¥" in alert or "â›”" in alert else "âš "
                         st.error(alert)
                 else:
                     st.success("No critical alerts.")
                 
+                # --- BIASNESS & FAVORITISM ---
+                st.divider()
+                st.markdown("### ðŸŽ­ Biasness & Favoritism Analysis")
+
+                favoritism_flags = intel.get("favoritism_analysis", [])
+                if favoritism_flags:
+                    admin_bias  = [f for f in favoritism_flags if "ADMIN BIAS" in f or "UNREALISTIC RATER" in f]
+                    suspicions  = [f for f in favoritism_flags if "SUSPICIOUS GROUP" in f]
+                    general_fav = [f for f in favoritism_flags if f not in admin_bias and f not in suspicions]
+                    favoritism_people = extract_user_mentions(favoritism_flags, org_usernames)
+
+                    fav_c1, fav_c2, fav_c3 = st.columns(3)
+                    fav_c1.metric("Findings", len(favoritism_flags))
+                    fav_c2.metric("Individuals", len(favoritism_people))
+                    fav_c3.metric("High Severity", len(admin_bias))
+
+                    if favoritism_people:
+                        people_df = pd.DataFrame({"Individuals Mentioned": favoritism_people})
+                        st.markdown("**Individuals Mentioned**")
+                        st.dataframe(people_df, use_container_width=True, hide_index=True)
+
+                    fav_table = []
+                    for flag in favoritism_flags:
+                        if "ADMIN BIAS" in flag or "UNREALISTIC RATER" in flag:
+                            sev = "ðŸ”´ High"
+                        elif "SUSPICIOUS GROUP" in flag:
+                            sev = "ðŸŸ  Medium"
+                        else:
+                            sev = "ðŸŸ¡ Low"
+                        fav_table.append({"Severity": sev, "Finding": flag})
+                    st.dataframe(pd.DataFrame(fav_table), use_container_width=True)
+
+                    if admin_bias:
+                        st.markdown("**ðŸ”´ Admin / Manager Bias**")
+                        for f in admin_bias:
+                            st.error(f)
+                    if suspicions:
+                        st.markdown("**ðŸŸ  Suspicious Mutual Rating Groups**")
+                        for f in suspicions:
+                            st.warning(f)
+                    if general_fav:
+                        st.markdown("**ðŸŸ¡ General Favoritism**")
+                        for f in general_fav:
+                            st.warning(f)
+                else:
+                    st.success("âœ… No biasness or favoritism patterns detected.")
+
+                # --- ISOLATION ANALYSIS ---
+                st.divider()
+                st.markdown("### ðŸšª Isolation Analysis")
+
+                isolation_flags = intel.get("isolation_analysis", [])
+                if isolation_flags:
+                    iso_critical = [f for f in isolation_flags if "ISOLATION DETECTED" in f or "CRITICAL PERFORMANCE" in f or "CRITICAL:" in f]
+                    iso_conflict = [f for f in isolation_flags if "CONFLICT (NOT PERFORMANCE)" in f]
+                    iso_other    = [f for f in isolation_flags if f not in iso_critical and f not in iso_conflict]
+                    isolation_people = extract_user_mentions(isolation_flags, org_usernames)
+
+                    iso_c1, iso_c2, iso_c3 = st.columns(3)
+                    iso_c1.metric("Findings", len(isolation_flags))
+                    iso_c2.metric("Individuals", len(isolation_people))
+                    iso_c3.metric("Critical Cases", len(iso_critical))
+
+                    if isolation_people:
+                        isolation_people_df = pd.DataFrame({"Individuals Mentioned": isolation_people})
+                        st.markdown("**Individuals Mentioned**")
+                        st.dataframe(isolation_people_df, use_container_width=True, hide_index=True)
+
+                    iso_table = []
+                    for flag in isolation_flags:
+                        if "ISOLATION DETECTED" in flag or "CRITICAL" in flag:
+                            sev = "ðŸ”´ Critical"
+                        elif "CONFLICT" in flag:
+                            sev = "ðŸŸ  Conflict"
+                        else:
+                            sev = "ðŸŸ¡ At-Risk"
+                        iso_table.append({"Severity": sev, "Finding": flag})
+                    st.dataframe(pd.DataFrame(iso_table), use_container_width=True)
+
+                    if iso_critical:
+                        st.markdown("**ðŸ”´ Isolation / Critical Performance**")
+                        for f in iso_critical:
+                            st.error(f)
+                    if iso_conflict:
+                        st.markdown("**ðŸŸ  Personal Conflict (Not a Performance Issue)**")
+                        for f in iso_conflict:
+                            st.warning(f)
+                    if iso_other:
+                        st.markdown("**ðŸŸ¡ At-Risk Employees**")
+                        for f in iso_other:
+                            st.warning(f)
+                else:
+                    st.success("âœ… No isolation or critical performance patterns detected.")
+
+                # --- CONFLICT PAIRS ---
+                st.divider()
+                st.markdown("### Conflict Pairs")
+
+                group_analysis = intel.get("group_analysis", {})
+                all_groups = group_analysis.get("group_details", [])
+                conflict_pairs = [g for g in all_groups if str(g.get("group_type", "")).lower() == "conflict_pair"]
+
+                if conflict_pairs:
+                    conflict_rows = []
+                    for pair in conflict_pairs:
+                        conflict_rows.append({
+                            "Pair": pair.get("pair_label", ""),
+                            "Member 1": pair.get("member_1", ""),
+                            "Gender 1": pair.get("gender_1", "unknown"),
+                            "Member 2": pair.get("member_2", ""),
+                            "Gender 2": pair.get("gender_2", "unknown"),
+                            "Low Ratings": int(pair.get("low_ratings", 0) or 0),
+                            "Evidence": pair.get("description", "Conflict pair detected"),
+                        })
+
+                    st.dataframe(pd.DataFrame(conflict_rows), use_container_width=True)
+                else:
+                    st.info("No conflict pairs detected in this scope.")
+
                 # --- RECOMMENDATIONS ---
                 st.divider()
-                st.markdown("### 📋 AI Recommendations")
+                st.markdown("### ðŸ“‹ AI Recommendations")
 
                 rec_ctx = intel.get("recommendation_context", {})
                 if rec_ctx:
@@ -800,11 +981,15 @@ def super_admin_dashboard():
 
                 # --- LIVE INTERNET AI RECOMMENDATIONS ---
                 st.divider()
-                st.markdown("### 🌐 Live Industry AI Recommendations")
-                st.caption("Pulled automatically from SHRM, HR Dive, MIT Sloan & HBR – refreshed every 6 hours.")
+                st.markdown("### ðŸŒ Live Industry AI Recommendations")
 
-                with st.spinner("Fetching latest HR & management insights from the web…"):
-                    live_data = get_cached_recommendations()
+                st.caption(
+                    f"Tailored for **{org_business_type}** organisations Â· Sources: SHRM, HR Dive, HBR, MIT Sloan "
+                    f"+ {org_business_type}-specific feeds Â· Refreshed every 6 hours."
+                )
+
+                with st.spinner("Fetching latest industry insights from the webâ€¦"):
+                    live_data = get_cached_recommendations(business_type=org_business_type)
 
                 if live_data.get("error"):
                     st.warning(f"Could not fetch live recommendations: {live_data['error']}")
@@ -822,7 +1007,7 @@ def super_admin_dashboard():
                             categories.setdefault(cat, []).append(art)
 
                         for cat, items in categories.items():
-                            with st.expander(f"📂 {cat} ({len(items)} articles)", expanded=False):
+                            with st.expander(f"ðŸ“‚ {cat} ({len(items)} articles)", expanded=False):
                                 for art in items:
                                     title = art.get("title", "Untitled")
                                     link = art.get("link", "")
@@ -831,12 +1016,12 @@ def super_admin_dashboard():
                                     pub = art.get("published", "")
 
                                     if link:
-                                        st.markdown(f"**[{title}]({link})**  _— {source}_")
+                                        st.markdown(f"**[{title}]({link})**  _â€” {source}_")
                                     else:
-                                        st.markdown(f"**{title}**  _— {source}_")
+                                        st.markdown(f"**{title}**  _â€” {source}_")
 
                                     if summary:
-                                        st.caption(summary + ("…" if len(summary) >= 200 else ""))
+                                        st.caption(summary + ("â€¦" if len(summary) >= 200 else ""))
                                     if pub:
                                         st.caption(f"Published: {pub}")
                                     st.markdown("---")
@@ -845,42 +1030,42 @@ def super_admin_dashboard():
 
                 # --- INDIVIDUALS OF FOCUS ---
                 st.divider()
-                st.markdown("### 👤 Individuals of Focus")
+                st.markdown("### ðŸ‘¤ Individuals of Focus")
                 
                 focus = intel.get("individual_focus", {})
                 
                 ia, ib, ic = st.columns(3)
                 
                 with ia:
-                    st.markdown("**🚨 Problematic**")
+                    st.markdown("**ðŸš¨ Problematic**")
                     problematic = focus.get("problematic", [])
                     if problematic:
                         for emp in problematic:
-                            st.error(f"• {emp}")
+                            st.error(f"â€¢ {emp}")
                     else:
                         st.info("No problematic users detected.")
                 
                 with ib:
-                    st.markdown("**⚠ At-Risk (Retention)**")
+                    st.markdown("**âš  At-Risk (Retention)**")
                     at_risk_retention = focus.get("at_risk_retention", [])
                     if at_risk_retention:
                         for emp in at_risk_retention:
-                            st.warning(f"• {emp}")
+                            st.warning(f"â€¢ {emp}")
                     else:
                         st.info("No at-risk users detected.")
                 
                 with ic:
-                    st.markdown("**⭐ High Performers**")
+                    st.markdown("**â­ High Performers**")
                     high_performers = focus.get("high_performers", [])
                     if high_performers:
                         for emp in high_performers:
-                            st.success(f"• {emp}")
+                            st.success(f"â€¢ {emp}")
                     else:
                         st.info("No high performers detected yet.")
                 
                 # --- POSITIVE HIGHLIGHTS ---
                 st.divider()
-                st.markdown("### 🌟 Positive Highlights")
+                st.markdown("### ðŸŒŸ Positive Highlights")
                 
                 positives = intel.get("positive_highlights", [])
                 if positives:
@@ -889,12 +1074,21 @@ def super_admin_dashboard():
                 
                 # --- GROUP ANALYSIS ---
                 st.divider()
-                st.markdown("### 👥 Groups Detected")
+                st.markdown("### ðŸ‘¥ Groups Detected")
                 
                 group_analysis = intel.get("group_analysis", {})
                 groups = group_analysis.get("group_details", [])
                 
                 if groups:
+                    dating_groups = [g for g in groups if str(g.get("group_type", "")).lower() == "dating"]
+                    conflict_groups = [g for g in groups if str(g.get("group_type", "")).lower() == "conflict_pair"]
+                    pair_groups = [g for g in groups if str(g.get("group_type", "")).lower() == "synchronized"]
+
+                    gc1, gc2, gc3 = st.columns(3)
+                    gc1.metric("Dating / Relationship", len(dating_groups))
+                    gc2.metric("Conflict Pairs", len(conflict_groups))
+                    gc3.metric("Synchronized Pairs", len(pair_groups))
+
                     group_rows = []
                     for idx, g in enumerate(groups, start=1):
                         members = g.get("members", [])
@@ -905,22 +1099,46 @@ def super_admin_dashboard():
                         else:
                             member_list = []
 
+                        logic_tags = g.get("logic_tags", [])
+                        if isinstance(logic_tags, list):
+                            logic_text = ", ".join(str(tag) for tag in logic_tags if str(tag).strip())
+                        else:
+                            logic_text = str(logic_tags or "")
+
                         group_rows.append({
-                            "Allied Group": f"Group {idx}",
+                            "Pair": g.get("pair_label", " & ".join(member_list) if member_list else f"Group {idx}"),
                             "Group Type": g.get("group_type", "unknown"),
-                            "Members": ", ".join(member_list) if member_list else "No member names available",
+                            "Member 1": g.get("member_1", member_list[0] if len(member_list) > 0 else ""),
+                            "Gender 1": g.get("gender_1", "unknown"),
+                            "Member 2": g.get("member_2", member_list[1] if len(member_list) > 1 else ""),
+                            "Gender 2": g.get("gender_2", "unknown"),
+                            "Logic": logic_text or "general",
                             "Risk": g.get("risk_level", "info"),
                             "Avg Rating": round(float(g.get("avg_rating", 0) or 0), 2),
+                            "Evidence": g.get("description", "Group detected"),
                         })
 
                     groups_df = pd.DataFrame(group_rows)
                     st.dataframe(groups_df, use_container_width=True)
 
-                    st.markdown("**Allied Groups and Member Names**")
-                    for row in group_rows:
-                        with st.expander(f"{row['Allied Group']} • {row['Group Type']} • {row['Risk']}"):
-                            st.write(f"Members: {row['Members']}")
+                    st.markdown("**Who With Who and Why**")
+                    for row, raw in zip(group_rows, groups):
+                        with st.expander(f"{row['Pair']} - {row['Group Type']} - {row['Risk']}"):
+                            st.write(f"Member 1: {row['Member 1']} ({row['Gender 1']})")
+                            st.write(f"Member 2: {row['Member 2']} ({row['Gender 2']})")
+                            st.write(f"Logic: {row['Logic']}")
+                            st.write(f"Evidence: {row['Evidence']}")
                             st.write(f"Average Rating: {row['Avg Rating']}")
+                            if raw.get("clock_in_count") or raw.get("clock_out_count"):
+                                st.write(
+                                    f"Clock sync: {int(raw.get('clock_in_count', 0))} in / {int(raw.get('clock_out_count', 0))} out"
+                                )
+                            if raw.get("leave_sync_count"):
+                                st.write(f"Leave sync count: {int(raw.get('leave_sync_count', 0))}")
+                            if raw.get("low_ratings"):
+                                st.write(f"Low-rating evidence: {int(raw.get('low_ratings', 0))} repeated low ratings")
+                            if raw.get("avg_mutual_rating"):
+                                st.write(f"Mutual rating average: {float(raw.get('avg_mutual_rating', 0)):.1f}%")
                 else:
                     st.info("No significant groups detected.")
             
@@ -928,10 +1146,10 @@ def super_admin_dashboard():
                 st.info("Click 'Run Intelligence Analysis' to start.")
     
     # =========================================================
-    # 🚨 ALERTS
+    # ðŸš¨ ALERTS
     # =========================================================
     elif menu == "Risk Center" and risk_view == "Alerts":
-        st.subheader("🚨 Alerts & Notifications")
+        st.subheader("ðŸš¨ Alerts & Notifications")
         
         if not ANALYTICS_OK:
             st.warning("Analytics module unavailable.")
@@ -941,10 +1159,10 @@ def super_admin_dashboard():
                 alert_stats = get_alert_statistics(org)
                 
                 c1, c2, c3, c4 = st.columns(4)
-                c1.metric("🔴 Critical", alert_stats.get("critical", 0))
-                c2.metric("🟡 Warnings", alert_stats.get("warning", 0))
-                c3.metric("ℹ Info", alert_stats.get("info", 0))
-                c4.metric("📩 Unread Messages", alert_stats.get("unread_messages", 0))
+                c1.metric("ðŸ”´ Critical", alert_stats.get("critical", 0))
+                c2.metric("ðŸŸ¡ Warnings", alert_stats.get("warning", 0))
+                c3.metric("â„¹ Info", alert_stats.get("info", 0))
+                c4.metric("ðŸ“© Unread Messages", alert_stats.get("unread_messages", 0))
                 
                 st.divider()
             except Exception:
@@ -969,9 +1187,9 @@ def super_admin_dashboard():
                         msg = alert.get("message", "")
                         alert_id = alert.get("id")
                         
-                        with st.expander(f"[{severity.upper()}] {alert.get('subject', msg[:60])} — {created}"):
+                        with st.expander(f"[{severity.upper()}] {alert.get('subject', msg[:60])} â€” {created}"):
                             st.write(msg)
-                            if st.button(f"✅ Mark Resolved", key=f"resolve_{alert_id}"):
+                            if st.button(f"âœ… Mark Resolved", key=f"resolve_{alert_id}"):
                                 resolve_alert(alert_id)
                                 st.success("Alert resolved.")
                                 st.rerun()
@@ -982,10 +1200,10 @@ def super_admin_dashboard():
                 st.error(f"Could not load alerts: {e}")
 
     # =========================================================
-    # ⚠ WARNINGS (RISK CENTER)
+    # âš  WARNINGS (RISK CENTER)
     # =========================================================
     elif menu == "Risk Center" and risk_view == "Warnings":
-        st.subheader("⚠ Warnings Center")
+        st.subheader("âš  Warnings Center")
 
         warns_df = safe_read(
             """
@@ -1133,7 +1351,7 @@ def super_admin_dashboard():
                 pin  = st.text_input("PIN (4 digits, default 1234)")
                 phone = st.text_input("Phone Number (required)")
                 role = st.selectbox("Role", ["employee", "admin"])
-                br   = st.selectbox("Branch", branches if branches else ["— create a branch first —"])
+                br   = st.selectbox("Branch", branches if branches else ["â€” create a branch first â€”"])
                 gender = st.selectbox("Gender", ["unknown", "male", "female"])
                 sub  = st.form_submit_button("Create User")
 
@@ -1398,7 +1616,7 @@ def super_admin_dashboard():
                     icon   = {"approved": "Approved", "rejected": "Rejected", "reapply": "Reapply"}.get(status, "Pending")
                     st.markdown(
                         f"**{lv['username']}** | {str(lv.get('start_date',''))[:10]} to "
-                        f"{str(lv.get('end_date',''))[:10]} | *{lv.get('reason','—')}* | Status: **{icon}**"
+                        f"{str(lv.get('end_date',''))[:10]} | *{lv.get('reason','â€”')}* | Status: **{icon}**"
                     )
                     if status == "pending":
                         c1, c2, c3 = st.columns(3)
@@ -1530,7 +1748,7 @@ def super_admin_dashboard():
                 avg_scores = ratings_all.groupby("rated")["score"].mean()
                 for uname, avg in avg_scores.items():
                     if avg < 40:
-                        smart_warns.append(("Low Performer", uname, f"Avg score {round(avg,1)} — below 40"))
+                        smart_warns.append(("Low Performer", uname, f"Avg score {round(avg,1)} â€” below 40"))
 
             if safe_df(attendance_all):
                 attendance_all = annotate_attendance_lateness(attendance_all, lateness_all)
@@ -1577,7 +1795,7 @@ def super_admin_dashboard():
                             second_avg = mgr_rated.iloc[half:]["score"].mean()
                             if second_avg < first_avg - 10:
                                 smart_warns.append(("Non-improving Manager", mgr,
-                                    f"Score dropped {round(first_avg,1)} → {round(second_avg,1)}"))
+                                    f"Score dropped {round(first_avg,1)} â†’ {round(second_avg,1)}"))
                         except Exception:
                             pass
 
@@ -1598,7 +1816,7 @@ def super_admin_dashboard():
             st.markdown("### Detected Concerns")
             if smart_warns:
                 for wtype, uname, detail in smart_warns:
-                    st.warning(f"**{wtype}** — {uname}: {detail}")
+                    st.warning(f"**{wtype}** â€” {uname}: {detail}")
             else:
                 st.success("No issues detected.")
 
@@ -1691,7 +1909,7 @@ def super_admin_dashboard():
                     lid = int(lv["id"])
                     st.markdown(
                         f"**{lv['username']}** | {str(lv.get('start_date',''))[:10]} to "
-                        f"{str(lv.get('end_date',''))[:10]} | *{lv.get('reason','—')}*"
+                        f"{str(lv.get('end_date',''))[:10]} | *{lv.get('reason','â€”')}*"
                     )
                     pa1, pa2, pa3 = st.columns(3)
                     if pa1.button("Approve",         key=f"pa_app_{lid}"):
@@ -1822,18 +2040,18 @@ def super_admin_dashboard():
             st.dataframe(payments_df.head(20), use_container_width=True)
 
     # =========================================================
-    # 👥 DEMOGRAPHICS
+    # ðŸ‘¥ DEMOGRAPHICS
     # =========================================================
     elif menu == "Analytics" and analytics_view == "Demographics":
-        st.subheader("👥 Group Demographics")
+        st.subheader("ðŸ‘¥ Group Demographics")
         
         if not ANALYTICS_OK:
             st.warning("Analytics module unavailable.")
         else:
-            demo_options = ["— All Branches —"] + branches
+            demo_options = ["â€” All Branches â€”"] + branches
             demo_default_idx = demo_options.index(branch_scope) if branch_scope in demo_options else 0
             sel_br_demo = nav_selectbox("Filter by Branch", demo_options, key="demo_branch_sel", index=demo_default_idx)
-            branch_filter_demo = None if sel_br_demo == "— All Branches —" else sel_br_demo
+            branch_filter_demo = None if sel_br_demo == "â€” All Branches â€”" else sel_br_demo
             
             if st.button("Analyze Demographics", type="primary"):
                 # Run and save fresh data
@@ -1861,7 +2079,7 @@ def super_admin_dashboard():
                 
                 if stats:
                     st.divider()
-                    st.markdown("### 🚻 Gender Distribution")
+                    st.markdown("### ðŸš» Gender Distribution")
                     
                     gd = stats.get("gender_distribution", {})
                     total_emp = gd.get("total_employees", 0)
@@ -1871,13 +2089,13 @@ def super_admin_dashboard():
                     
                     gc1, gc2, gc3, gc4 = st.columns(4)
                     gc1.metric("Total Employees", total_emp)
-                    gc2.metric("👨 Male", male_c)
-                    gc3.metric("👩 Female", female_c)
-                    gc4.metric("⚧ Other/Unknown", other_c)
+                    gc2.metric("ðŸ‘¨ Male", male_c)
+                    gc3.metric("ðŸ‘© Female", female_c)
+                    gc4.metric("âš§ Other/Unknown", other_c)
                     
                     # Group type breakdown
                     st.divider()
-                    st.markdown("### 🔍 Groups by Type")
+                    st.markdown("### ðŸ” Groups by Type")
                     
                     groups_by_type = stats.get("groups_by_type", {})
                     if groups_by_type:
@@ -1888,12 +2106,12 @@ def super_admin_dashboard():
                     
                     # High risk groups
                     st.divider()
-                    st.markdown("### ⚠ High Risk Groups")
+                    st.markdown("### âš  High Risk Groups")
                     
                     high_risk = stats.get("high_risk_groups", [])
                     if high_risk:
                         for grp in high_risk:
-                            st.error(f"**{grp.get('group_type', 'Group')}** — {grp.get('members', [])} — Risk: {grp.get('risk_level', 'High')}")
+                            st.error(f"**{grp.get('group_type', 'Group')}** â€” {grp.get('members', [])} â€” Risk: {grp.get('risk_level', 'High')}")
                     else:
                         st.success("No high-risk groups detected.")
                 else:
@@ -1904,7 +2122,7 @@ def super_admin_dashboard():
             
             # Detailed group table
             st.divider()
-            st.markdown("### 📋 Group Details")
+            st.markdown("### ðŸ“‹ Group Details")
             
             risk_filter = nav_selectbox("Filter by Risk Level", ["All", "high", "medium", "low"], key="demo_risk_sel")
             risk_val = None if risk_filter == "All" else risk_filter
@@ -2252,7 +2470,7 @@ def super_admin_dashboard():
                 lambda r: "Anonymous" if int(r.get("is_anonymous", 1)) == 1 else (str(r.get("client_name", "")).strip() or "Anonymous"),
                 axis=1,
             )
-            feedback_df["stars_display"] = feedback_df["stars"].apply(lambda s: "⭐" * int(s) if int(s) > 0 else "—")
+            feedback_df["stars_display"] = feedback_df["stars"].apply(lambda s: "â­" * int(s) if int(s) > 0 else "â€”")
 
             view_mode = nav_radio(
                 "View Mode",
@@ -2271,7 +2489,7 @@ def super_admin_dashboard():
             m1, m2, m3, m4 = st.columns(4)
             m1.metric("Total Feedback", len(view_df))
             avg_stars = view_df['stars'].mean()
-            m2.metric("Average Stars", f"{avg_stars:.1f} {'⭐' * round(avg_stars)}" if not view_df.empty else "—")
+            m2.metric("Average Stars", f"{avg_stars:.1f} {'â­' * round(avg_stars)}" if not view_df.empty else "â€”")
             m3.metric("General (whole team)", int((view_df["feedback_scope"].astype(str) == "general").sum()))
             m4.metric("Individual Staff", int((view_df["feedback_scope"].astype(str) == "individual").sum()))
 
@@ -2279,18 +2497,18 @@ def super_admin_dashboard():
             individual_df = view_df[view_df["feedback_scope"].astype(str) == "individual"].copy()
             if not individual_df.empty:
                 st.markdown("---")
-                st.markdown("#### 👤 Individual Staff Feedback")
+                st.markdown("#### ðŸ‘¤ Individual Staff Feedback")
                 for _, row in individual_df.iterrows():
-                    staff = str(row.get("target_username", "")).strip() or "—"
+                    staff = str(row.get("target_username", "")).strip() or "â€”"
                     msg = str(row.get("message", "")).strip()
                     guest = str(row.get("guest_name", "Anonymous"))
-                    stars_str = row.get("stars_display", "—")
+                    stars_str = row.get("stars_display", "â€”")
                     ts = str(row.get("created_at", ""))[:16]
                     branch_name = str(row.get("branch", ""))
-                    header = f"**{stars_str}  ·  For: {staff}**  —  _{branch_name}_ · {ts}"
+                    header = f"**{stars_str}  Â·  For: {staff}**  â€”  _{branch_name}_ Â· {ts}"
                     with st.expander(header, expanded=False):
                         if msg:
-                            st.write(f"💬 **Message:** {msg}")
+                            st.write(f"ðŸ’¬ **Message:** {msg}")
                         else:
                             st.caption("No written message.")
                         if guest != "Anonymous":
@@ -2300,7 +2518,7 @@ def super_admin_dashboard():
 
             # --- Branch Summary ---
             st.markdown("---")
-            st.markdown("#### 📊 Branch Summary")
+            st.markdown("#### ðŸ“Š Branch Summary")
             branch_summary = (
                 view_df.groupby("branch", dropna=False)
                 .agg(feedback_count=("id", "count"), avg_stars=("stars", "mean"))
@@ -2312,7 +2530,7 @@ def super_admin_dashboard():
 
             # --- Staff summary ---
             if not individual_df.empty:
-                st.markdown("#### 🏅 Staff Rating Summary")
+                st.markdown("#### ðŸ… Staff Rating Summary")
                 individual_summary = (
                     individual_df.groupby("target_username", dropna=False)
                     .agg(feedback_count=("id", "count"), avg_stars=("stars", "mean"))
@@ -2325,7 +2543,7 @@ def super_admin_dashboard():
 
             # --- All Entries Table + Export ---
             st.markdown("---")
-            st.markdown("#### 📋 All Feedback Entries")
+            st.markdown("#### ðŸ“‹ All Feedback Entries")
             export_df = view_df[["created_at", "branch", "scope_label", "target_label", "stars", "stars_display", "guest_name", "message"]].copy()
             export_df.columns = ["Date", "Branch", "Type", "For", "Stars", "Rating", "Guest", "Message"]
 
@@ -2333,7 +2551,7 @@ def super_admin_dashboard():
 
             csv_data = export_df.to_csv(index=False).encode("utf-8")
             st.download_button(
-                "⬇️ Download as CSV",
+                "â¬‡ï¸ Download as CSV",
                 data=csv_data,
                 file_name=f"guest_experience_{org}.csv",
                 mime="text/csv",
@@ -2581,7 +2799,7 @@ def super_admin_dashboard():
                             conn.commit()
                             log_action(conn, user, "CREATE KIOSK", dev_name, org)
                             st.success(f"Kiosk '{dev_name}' created for branch '{kf_br}'.")
-                            st.markdown("**Kiosk Access Link** — open on the kiosk device:")
+                            st.markdown("**Kiosk Access Link** â€” open on the kiosk device:")
                             st.code(kiosk_link(kf_br, org), language="text")
                             st.info("Bookmark this URL on the kiosk browser for daily use.")
             else:
@@ -2599,7 +2817,7 @@ def super_admin_dashboard():
                     kbr      = str(k.get("branch", ""))
                     kstatus  = str(k.get("status", "active"))
 
-                    with st.expander(f"{kname} — {kbr} [{kstatus}]"):
+                    with st.expander(f"{kname} â€” {kbr} [{kstatus}]"):
                         st.code(kiosk_link(kbr, org), language="text")
 
                         if kid is not None:

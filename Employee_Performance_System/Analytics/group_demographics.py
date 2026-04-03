@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 from datetime import datetime
 
@@ -52,7 +53,15 @@ def analyze_group_demographics(ratings_df, attendance_df=None, users_df=None, or
         for group_key, group_info in sync_groups.items():
             
             members = group_info.get("members", [])
-            group_type = group_info.get("type", "unknown")
+            logic_tags = list(group_info.get("logic_tags", []))
+            if group_info.get("relationship_type") == "dating" or "dating" in logic_tags:
+                group_type = "dating"
+            elif "conflict_pair" in logic_tags:
+                group_type = "conflict_pair"
+            elif "synchronized" in logic_tags:
+                group_type = "synchronized"
+            else:
+                group_type = group_info.get("type", "unknown")
             
             # Count genders
             male = sum(1 for m in members if gender_map.get(m, "").lower() == "male")
@@ -65,18 +74,35 @@ def analyze_group_demographics(ratings_df, attendance_df=None, users_df=None, or
             
             # Determine risk level
             risk_level = "critical" if group_type in ["dating", "relationship"] else "warning" if group_type == "conflict_pair" else "info"
+
+            member_1 = str(members[0]) if len(members) >= 1 else ""
+            member_2 = str(members[1]) if len(members) >= 2 else ""
+            gender_1 = str(gender_map.get(member_1, "unknown")) if member_1 else "unknown"
+            gender_2 = str(gender_map.get(member_2, "unknown")) if member_2 else "unknown"
             
             # Store in list
             group_detail = {
                 "group_id": group_key,
                 "group_type": group_type,
+                "logic_tags": logic_tags,
                 "members": members,
+                "pair_label": group_info.get("pair_label", " & ".join(members)),
+                "member_1": member_1,
+                "member_2": member_2,
+                "gender_1": gender_1,
+                "gender_2": gender_2,
                 "total_members": len(members),
                 "male_count": male,
                 "female_count": female,
                 "other_count": other,
                 "avg_rating": avg_rating,
                 "risk_level": risk_level,
+                "description": group_info.get("description", "Group detected"),
+                "clock_in_count": int(group_info.get("clock_in_count", 0) or 0),
+                "clock_out_count": int(group_info.get("clock_out_count", 0) or 0),
+                "leave_sync_count": int(group_info.get("leave_sync_count", 0) or 0),
+                "low_ratings": int(group_info.get("low_ratings", 0) or 0),
+                "avg_mutual_rating": float(group_info.get("avg_mutual_rating", 0) or 0),
             }
             
             analysis["group_details"].append(group_detail)
@@ -102,7 +128,7 @@ def analyze_group_demographics(ratings_df, attendance_df=None, users_df=None, or
         )
     
     # Save to database
-    if organization and branch:
+    if organization:
         save_group_demographics_to_db(organization, branch, analysis)
     
     return analysis
@@ -118,13 +144,30 @@ def save_group_demographics_to_db(organization, branch, demographics_data):
     cursor = conn.cursor()
     
     for group in demographics_data.get("group_details", []):
+        notes = json.dumps(
+            {
+                "pair_label": group.get("pair_label", ""),
+                "member_1": group.get("member_1", ""),
+                "member_2": group.get("member_2", ""),
+                "gender_1": group.get("gender_1", "unknown"),
+                "gender_2": group.get("gender_2", "unknown"),
+                "logic_tags": group.get("logic_tags", []),
+                "description": group.get("description", "Group detected"),
+                "clock_in_count": int(group.get("clock_in_count", 0) or 0),
+                "clock_out_count": int(group.get("clock_out_count", 0) or 0),
+                "leave_sync_count": int(group.get("leave_sync_count", 0) or 0),
+                "low_ratings": int(group.get("low_ratings", 0) or 0),
+                "avg_mutual_rating": float(group.get("avg_mutual_rating", 0) or 0),
+            },
+            default=str,
+        )
         
         cursor.execute("""
         INSERT INTO group_demographics(
             organization, branch, group_id, group_type, members, total_members,
-            male_count, female_count, other_count, avg_rating, risk_level, detected_at
+            male_count, female_count, other_count, avg_rating, risk_level, detected_at, notes
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             organization,
             branch,
@@ -137,7 +180,8 @@ def save_group_demographics_to_db(organization, branch, demographics_data):
             group["other_count"],
             group["avg_rating"],
             group["risk_level"],
-            datetime.now().isoformat()
+            datetime.now().isoformat(),
+            notes,
         ))
     
     conn.commit()

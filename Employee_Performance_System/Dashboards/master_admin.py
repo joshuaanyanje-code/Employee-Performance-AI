@@ -792,7 +792,7 @@ def master_admin_dashboard():
 
         with tab_list:
             df = safe_read(
-                "SELECT id, name, status, phone, email, location, created_at, expires_at FROM organizations",
+                "SELECT id, name, business_type, status, phone, email, location, created_at, expires_at FROM organizations",
                 conn
             )
             if df.empty:
@@ -809,13 +809,19 @@ def master_admin_dashboard():
         with tab_create:
             with st.form("create_org", clear_on_submit=False):
                 st.markdown("#### New Organization")
-                name       = st.text_input("Organization Name")
-                superadmin = st.text_input("Super Admin Username")
-                phone      = st.text_input("Phone Number (254...)")
-                password   = st.text_input("Password", type="password")
-                confirm_pw = st.text_input("Confirm Password", type="password")
-                email      = st.text_input("Email (optional)")
-                location   = st.text_input("Location")
+                name          = st.text_input("Organization Name")
+                superadmin    = st.text_input("Super Admin Username")
+                phone         = st.text_input("Phone Number (254...)")
+                password      = st.text_input("Password", type="password")
+                confirm_pw    = st.text_input("Confirm Password", type="password")
+                email         = st.text_input("Email (optional)")
+                location      = st.text_input("Location")
+                _BIZ_TYPES    = ["Office", "Service", "Merchandiser", "Manufacturer"]
+                business_type = st.selectbox(
+                    "Business Type",
+                    _BIZ_TYPES,
+                    help="Office – desk-based; Service – hospitality/retail service; Merchandiser – retail/distribution; Manufacturer – production/factory"
+                )
                 submitted  = st.form_submit_button("✅ Create Organization")
 
                 if submitted:
@@ -827,10 +833,10 @@ def master_admin_dashboard():
                         try:
                             expiry = datetime.now() + timedelta(days=30)
                             execute_write(conn, """
-                                INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at)
-                                VALUES (?,?,?,?,?,?,?)
+                                INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
+                                VALUES (?,?,?,?,?,?,?,?)
                             """, (name, "active", phone, email, location,
-                                  str(datetime.now()), str(expiry)))
+                                  str(datetime.now()), str(expiry), business_type))
                             execute_write(conn, """
                                 INSERT INTO users(username, password, role, organization, status, phone)
                                 VALUES (?,?,?,?,?,?)
@@ -856,14 +862,18 @@ def master_admin_dashboard():
                     new_loc    = st.text_input("Location",          value=str(row.get("location", "") or ""))
                     status_idx = 0 if row.get("status") == "active" else 1
                     new_status = st.selectbox("Status", ["active", "inactive"], index=status_idx)
+                    _BIZ_TYPES_E   = ["Office", "Service", "Merchandiser", "Manufacturer"]
+                    cur_biz        = str(row.get("business_type", "Office") or "Office")
+                    biz_idx        = _BIZ_TYPES_E.index(cur_biz) if cur_biz in _BIZ_TYPES_E else 0
+                    new_biz_type   = st.selectbox("Business Type", _BIZ_TYPES_E, index=biz_idx)
                     save_edit  = st.form_submit_button("💾 Save Changes")
 
                     if save_edit:
                         try:
                             execute_write(conn, """
-                                UPDATE organizations SET name=?, phone=?, email=?, location=?, status=?
+                                UPDATE organizations SET name=?, phone=?, email=?, location=?, status=?, business_type=?
                                 WHERE id=?
-                            """, (new_name, new_phone, new_email, new_loc, new_status, int(row["id"])))
+                            """, (new_name, new_phone, new_email, new_loc, new_status, new_biz_type, int(row["id"])))
                             if new_name != org_sel:
                                 for tbl in ["users", "branches", "attendance", "ratings",
                                             "leaves", "warnings", "messages", "kiosks",

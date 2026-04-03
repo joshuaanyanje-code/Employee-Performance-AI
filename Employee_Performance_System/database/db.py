@@ -124,9 +124,17 @@ def create_tables():
         email TEXT,
         location TEXT,
         created_at TEXT,
-        expires_at TEXT
+        expires_at TEXT,
+        business_type TEXT DEFAULT 'Office'
     )
     """)
+
+    # Safe migration: add business_type to existing databases
+    try:
+        c.execute("ALTER TABLE organizations ADD COLUMN business_type TEXT DEFAULT 'Office'")
+        conn.commit()
+    except Exception:
+        pass
 
     # =========================
     # USERS

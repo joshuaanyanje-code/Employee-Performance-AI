@@ -257,7 +257,15 @@ def detect_synchronized_groups(attendance_df, ratings_df, users_df=None, leaves_
         if counts["clock_in"] >= 3 or counts["clock_out"] >= 3:
             p1, p2 = pair_key.split("-")
             insights.append(f"👥 GROUP DETECTED: {p1} & {p2} clock in/out together ({counts['clock_in']} in, {counts['clock_out']} out)")
-            groups[pair_key] = {"type": "synchronized", "members": [p1, p2]}
+            groups[pair_key] = {
+                "type": "pair",
+                "members": [p1, p2],
+                "pair_label": f"{p1} & {p2}",
+                "logic_tags": ["pair", "synchronized"],
+                "clock_in_count": counts["clock_in"],
+                "clock_out_count": counts["clock_out"],
+                "description": f"Synchronized attendance pair ({counts['clock_in']} clock-ins, {counts['clock_out']} clock-outs)",
+            }
     
     # =========================
     # SYNCHRONIZED LEAVE PATTERNS
@@ -274,6 +282,15 @@ def detect_synchronized_groups(attendance_df, ratings_df, users_df=None, leaves_
                     for u2 in users[i + 1:]:
                         pair_key = f"{min(u1, u2)}-{max(u1, u2)}"
                         insights.append(f"🌴 {u1} & {u2} take leave on same day → Possible group")
+                        if pair_key in groups:
+                            logic_tags = groups[pair_key].setdefault("logic_tags", [])
+                            if "leave_sync" not in logic_tags:
+                                logic_tags.append("leave_sync")
+                            leave_count = int(groups[pair_key].get("leave_sync_count", 0) or 0) + 1
+                            groups[pair_key]["leave_sync_count"] = leave_count
+                            groups[pair_key]["description"] = (
+                                groups[pair_key].get("description", "Pair detected") + f"; leave sync x{leave_count}"
+                            )
     
     # =========================
     # DATING DETECTION (CROSS-GENDER PAIRS)
@@ -286,7 +303,7 @@ def detect_synchronized_groups(attendance_df, ratings_df, users_df=None, leaves_
         
         # High mutual ratings between opposite genders
         for pair_key, group_info in groups.items():
-            if group_info["type"] == "synchronized":
+            if "synchronized" in group_info.get("logic_tags", []):
                 p1, p2 = group_info["members"]
                 
                 # Check if opposite gender
@@ -305,6 +322,15 @@ def detect_synchronized_groups(attendance_df, ratings_df, users_df=None, leaves_
                         if avg_r1_r2 > 78 and avg_r2_r1 > 78:
                             insights.append(f"💑 DATING/RELATIONSHIP DETECTED: {p1} ({g1}) & {p2} ({g2}) - Synchronized + High mutual ratings (>{avg_r1_r2:.0f}%)")
                             groups[pair_key]["relationship"] = True
+                            groups[pair_key]["relationship_type"] = "dating"
+                            groups[pair_key]["gender_pair"] = [g1, g2]
+                            groups[pair_key]["avg_mutual_rating"] = round((avg_r1_r2 + avg_r2_r1) / 2, 2)
+                            groups[pair_key]["description"] = (
+                                f"Cross-gender synchronized pair with strong mutual ratings ({avg_r1_r2:.0f}%/{avg_r2_r1:.0f}%)"
+                            )
+                            logic_tags = groups[pair_key].setdefault("logic_tags", [])
+                            if "dating" not in logic_tags:
+                                logic_tags.append("dating")
     
     # =========================
     # CONFLICTING PAIRS (LOW RATINGS)
@@ -316,8 +342,22 @@ def detect_synchronized_groups(attendance_df, ratings_df, users_df=None, leaves_
         if count >= 2:
             pair_key = f"{min(rater, rated)}-{max(rater, rated)}"
             if pair_key not in groups:
-                groups[pair_key] = {"type": "conflict_pair", "members": [rater, rated], "low_ratings": count}
-                insights.append(f"⚠ CONFLICT PAIR: {rater} & {rated} - {count} mutual low ratings (<45%)")
+                groups[pair_key] = {
+                    "type": "pair",
+                    "members": [rater, rated],
+                    "pair_label": f"{rater} & {rated}",
+                    "logic_tags": ["pair"],
+                }
+
+            groups[pair_key]["conflict"] = True
+            groups[pair_key]["low_ratings"] = count
+            groups[pair_key]["conflict_direction"] = f"{rater} -> {rated}"
+            groups[pair_key]["description"] = f"Conflict pair with {count} repeated low ratings under 45%"
+            logic_tags = groups[pair_key].setdefault("logic_tags", [])
+            if "conflict_pair" not in logic_tags:
+                logic_tags.append("conflict_pair")
+
+            insights.append(f"⚠ CONFLICT PAIR: {rater} & {rated} - {count} repeated low ratings (<45%)")
     
     return list(set(insights)), groups
 
