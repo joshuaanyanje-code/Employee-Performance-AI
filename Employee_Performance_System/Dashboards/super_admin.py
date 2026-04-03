@@ -392,7 +392,7 @@ def super_admin_dashboard():
         branches_all = safe_read("SELECT * FROM branches WHERE organization=?", conn, params=(org,))
         if branch_scope and not branches_all.empty and "name" in branches_all.columns:
             branches_all = branches_all[branches_all["name"].astype(str) == str(branch_scope)]
-        kiosks_df    = apply_branch_scope(safe_read("SELECT * FROM kiosks WHERE organization=?",   conn, params=(org,)))
+        kiosks_df    = safe_read("SELECT * FROM kiosks WHERE organization=?", conn, params=(org,))
 
         c1, c2, c3, c4 = st.columns(4)
         c1.metric("Users",    len(users_df))
@@ -1428,7 +1428,7 @@ def super_admin_dashboard():
         # ---- KIOSK (inside Management) ----
         with tab_kiosk:
             kiosks_df = safe_read("SELECT * FROM kiosks WHERE organization=?", conn, params=(org,))
-            kiosks_df = apply_branch_scope(kiosks_df)
+            st.caption("Showing all kiosks across all branches.")
             if safe_df(kiosks_df):
                 st.dataframe(kiosks_df, use_container_width=True)
             st.divider()

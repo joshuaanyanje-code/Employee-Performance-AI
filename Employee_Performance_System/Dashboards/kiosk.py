@@ -37,6 +37,7 @@ def clear_kiosk_photo_state():
 
 def clear_kiosk_staff_transient_state():
     st.session_state["kiosk_show_lateness_request"] = False
+    st.session_state["kiosk_show_early_request"] = False
     st.session_state.pop("kiosk_lateness_request_reason", None)
     st.session_state.pop("kiosk_early_request_reason", None)
     st.session_state.pop("kiosk_early_clockout_reason", None)
@@ -54,6 +55,12 @@ def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwarg
     _, center_col, _ = st.columns([0.11, 0.78, 0.11])
     with center_col:
         return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
+
+
+def home_kiosk_button(label, key):
+    _, center_col, _ = st.columns([0.05, 0.90, 0.05])
+    with center_col:
+        return st.button(label, key=key, use_container_width=True)
 
 
 def _safe_read(conn, query, params=None):
@@ -332,16 +339,39 @@ def kiosk_dashboard():
         <style>
         .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
         button {height:58px; font-size:18px; font-weight:bold;}
-        .stButton > button, .stDownloadButton > button {
+        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
             width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            background: linear-gradient(90deg, #2f7de1 0%, #46a0ff 100%) !important;
+            color: #ffffff !important;
+            border: 1px solid rgba(255, 255, 255, 0.18) !important;
             border-radius: 14px;
-            box-shadow: 0 3px 8px rgba(10, 20, 38, 0.25) !important;
+            box-shadow: 0 2px 6px rgba(10, 20, 38, 0.18) !important;
             overflow: visible;
             filter: drop-shadow(0 0 0);
+        }
+        .stButton > button:hover, .stDownloadButton > button:hover, .stFormSubmitButton > button:hover {
+            filter: brightness(1.03);
         }
         .stButton, .stDownloadButton {
             overflow: hidden;
             border-radius: 14px;
+        }
+        .home-kiosk-title {
+            text-align: center;
+            padding: 0.5rem 0 0.25rem;
+        }
+        .home-kiosk-title .branch-name {
+            font-size: 2.2rem;
+            font-weight: 800;
+            letter-spacing: -0.5px;
+            line-height: 1.1;
+        }
+        .home-kiosk-title .manager-name {
+            font-size: 1rem;
+            color: #a9b0c3;
+            margin-top: 0.35rem;
         }
         .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
         
@@ -352,34 +382,13 @@ def kiosk_dashboard():
             margin: 1rem 0;
         }
         
-        /* Clock In/Out Button Emphasis */
-        .clock-action-btn > button {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important;
-            color: white !important;
-            border: none !important;
-            height: 80px !important;
-            font-size: 24px !important;
-            font-weight: 900 !important;
-            letter-spacing: 1px !important;
-            box-shadow: 0 8px 16px rgba(102, 126, 234, 0.4) !important;
-            margin: 1.5rem 0 !important;
-        }
-        
-        .clock-action-btn > button:hover {
-            transform: scale(1.02);
-            box-shadow: 0 12px 24px rgba(102, 126, 234, 0.6) !important;
-        }
-        
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
             .stButton > button, .stDownloadButton > button {
-                box-shadow: 0 2px 6px rgba(10, 20, 38, 0.20) !important;
+                box-shadow: 0 2px 5px rgba(10, 20, 38, 0.16) !important;
             }
-            .clock-action-btn > button {
-                height: 72px !important;
-                font-size: 20px !important;
-            }
+            .home-kiosk-title .branch-name {font-size: 2rem;}
         }
         </style>
     """, unsafe_allow_html=True)
@@ -499,20 +508,20 @@ def kiosk_dashboard():
     if kiosk_view == "home":
         st.markdown(
             f"""
-            <div style='text-align:center;padding:0.5rem 0 0.25rem;'>
-                <div style='font-size:2.2rem;font-weight:800;letter-spacing:-0.5px;'>📍 {branch}</div>
-                <div style='font-size:1rem;color:#aaa;margin-top:0.2rem;'>Manager: <b>{manager_name}</b></div>
+            <div class='home-kiosk-title'>
+                <div class='branch-name'>📍 {branch}</div>
+                <div class='manager-name'>Manager: <b>{manager_name}</b></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
         st.divider()
 
-        if compact_kiosk_button("⭐  Guest Experience", key="home_btn_guest"):
+        if home_kiosk_button("⭐  Guest Experience", key="home_btn_guest"):
             st.session_state["kiosk_view"] = "guest"
             refresh()
 
-        if compact_kiosk_button("👤  Staff Check In", key="home_btn_staff"):
+        if home_kiosk_button("👤  Staff Check In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
             refresh()
 
@@ -587,13 +596,7 @@ def kiosk_dashboard():
                      str(message or "").strip(), is_anon, final_name),
                     commit=True,
                 )
-                st.markdown("""
-                <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
-                    <h1 style='font-size: 3rem; margin: 0;'>🙏</h1>
-                    <h2 style='margin: 0.5rem 0 0 0;'>Feedback Sent Successfully</h2>
-                    <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
-                </div>
-                """, unsafe_allow_html=True)
+                st.success("✅ Feedback sent successfully. Returning to main menu...")
                 time.sleep(1.5)
                 st.session_state["kiosk_view"] = "home"
                 refresh()
@@ -920,15 +923,11 @@ def kiosk_dashboard():
             # CLOCK IN
             # ==============================
             if record.empty:
-                st.divider()
-                st.markdown("<div style='text-align: center; margin: 1.5rem 0 1rem 0;'><h3>✅ Ready to Clock In</h3></div>", unsafe_allow_html=True)
-                
                 if now < earliest_clockin_dt:
                     st.error(f"⏰ Clock-in opens at {earliest_clockin_dt.strftime('%H:%M')}. Maximum early clock-in is 30 minutes before shift.")
                 elif now_time < work_start:
                     st.warning("⚠️ Early clock-in allowed within 30 minutes before shift start.")
 
-                st.markdown("<div class='clock-action-btn'>", unsafe_allow_html=True)
                 if st.button("🟢 CLOCK IN", use_container_width=True):
                     if now < earliest_clockin_dt:
                         st.error(f"Too early. You can only clock in from {earliest_clockin_dt.strftime('%H:%M')}.")
@@ -987,13 +986,7 @@ def kiosk_dashboard():
                             )
                         conn.commit()
 
-                    st.markdown("""
-                    <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
-                        <h1 style='font-size: 3rem; margin: 0;'>✅</h1>
-                        <h2 style='margin: 0.5rem 0 0 0;'>Clock In Successful</h2>
-                        <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.success("✅ Clock In Successful. Returning to main menu...")
                     time.sleep(1.5)
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
@@ -1001,7 +994,6 @@ def kiosk_dashboard():
                     clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
-                st.markdown("</div>", unsafe_allow_html=True)
 
             # ==============================
             # CLOCK OUT
@@ -1025,6 +1017,13 @@ def kiosk_dashboard():
                     st.warning("⚠️ Early clock-out")
                     if approved_early_request.empty:
                         st.error("❌ Early clock-out is blocked until admin approves it for today.")
+                        if "kiosk_show_early_request" not in st.session_state:
+                            st.session_state["kiosk_show_early_request"] = False
+
+                        if compact_kiosk_button("📩 Request Early Clock Out", key="kiosk_toggle_early_request"):
+                            st.session_state["kiosk_show_early_request"] = not st.session_state["kiosk_show_early_request"]
+                            refresh()
+
                         if not today_requests.empty:
                             req_row = today_requests.iloc[0]
                             req_status = str(req_row.get("status", "pending")).lower()
@@ -1035,55 +1034,54 @@ def kiosk_dashboard():
                                 st.error(f"Early clock-out request rejected: {req_note}" if req_note else "Your last early clock-out request was rejected.")
                             elif req_status == "used":
                                 st.info("An approved early clock-out was already used today.")
-                        request_reason = st.text_area(
-                            "Request early clock-out with reason",
-                            key="kiosk_early_request_reason",
-                            placeholder="Explain why you need to leave before end of shift.",
-                        )
-                        if compact_kiosk_button("📩 Request Early Clock Out", key="kiosk_request_early_out"):
-                            if not request_reason.strip():
-                                st.error("Reason is required to request early clock-out.")
-                                return
-                            if today_requests.empty:
-                                execute_write(
-                                    conn,
-                                    """
-                                    INSERT INTO early_clockout_approvals(
-                                        username, organization, branch, approved_for_date,
-                                        reason, approved_by, status, actual_reason, created_at
-                                    )
-                                    VALUES (?,?,?,?,?,?,?,?,datetime('now'))
-                                    """,
-                                    (user, org, branch, today, request_reason.strip(), "", "pending", ""),
-                                )
-                            else:
-                                existing_id = int(today_requests.iloc[0]["id"])
-                                existing_status = str(today_requests.iloc[0].get("status", "pending")).lower()
-                                if existing_status == "approved":
-                                    st.info("An approved early clock-out already exists for today.")
+                        if st.session_state.get("kiosk_show_early_request", False):
+                            request_reason = st.text_area(
+                                "Request early clock-out with reason",
+                                key="kiosk_early_request_reason",
+                                placeholder="Explain why you need to leave before end of shift.",
+                            )
+                            if compact_kiosk_button("✅ Submit Early Clock-Out Request", key="kiosk_request_early_out"):
+                                if not request_reason.strip():
+                                    st.error("Reason is required to request early clock-out.")
                                     return
-                                execute_write(
-                                    conn,
-                                    """
-                                    UPDATE early_clockout_approvals
-                                    SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
-                                    WHERE id=?
-                                    """,
-                                    (request_reason.strip(), existing_id),
-                                )
-                            _notify_branch_admins_for_early_request(conn, org, branch, user, request_reason.strip())
-                            conn.commit()
-                            st.success("✅ Early clock-out request sent to admin for review.")
-                            refresh()
+                                if today_requests.empty:
+                                    execute_write(
+                                        conn,
+                                        """
+                                        INSERT INTO early_clockout_approvals(
+                                            username, organization, branch, approved_for_date,
+                                            reason, approved_by, status, actual_reason, created_at
+                                        )
+                                        VALUES (?,?,?,?,?,?,?,?,datetime('now'))
+                                        """,
+                                        (user, org, branch, today, request_reason.strip(), "", "pending", ""),
+                                    )
+                                else:
+                                    existing_id = int(today_requests.iloc[0]["id"])
+                                    existing_status = str(today_requests.iloc[0].get("status", "pending")).lower()
+                                    if existing_status == "approved":
+                                        st.info("An approved early clock-out already exists for today.")
+                                        return
+                                    execute_write(
+                                        conn,
+                                        """
+                                        UPDATE early_clockout_approvals
+                                        SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
+                                        WHERE id=?
+                                        """,
+                                        (request_reason.strip(), existing_id),
+                                    )
+                                _notify_branch_admins_for_early_request(conn, org, branch, user, request_reason.strip())
+                                conn.commit()
+                                st.success("✅ Early clock-out request sent to admin for review.")
+                                st.session_state["kiosk_show_early_request"] = False
+                                refresh()
                     else:
                         approval_row = approved_early_request.iloc[0]
                         st.success(f"✅ Admin approval found for today by {approval_row['approved_by']}. Reason: {approval_row['reason']}")
+                        st.session_state["kiosk_show_early_request"] = False
                     reason = st.text_area("Enter reason for leaving early", key="kiosk_early_clockout_reason")
 
-                st.divider()
-                st.markdown("<div style='text-align: center; margin: 1.5rem 0 1rem 0;'><h3>🕐 Ready to Clock Out</h3></div>", unsafe_allow_html=True)
-                
-                st.markdown("<div class='clock-action-btn'>", unsafe_allow_html=True)
                 if st.button("🔴 CLOCK OUT", use_container_width=True):
                     if now_time < work_end and not reason.strip():
                         st.error("❌ Reason required")
@@ -1109,13 +1107,7 @@ def kiosk_dashboard():
 
                     conn.commit()
 
-                    st.markdown("""
-                    <div style='text-align: center; padding: 2rem; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); border-radius: 10px; color: white;'>
-                        <h1 style='font-size: 3rem; margin: 0;'>✅</h1>
-                        <h2 style='margin: 0.5rem 0 0 0;'>Clock Out Successful</h2>
-                        <p style='margin: 1rem 0 0 0; font-size: 1rem;'>Returning to main menu...</p>
-                    </div>
-                    """, unsafe_allow_html=True)
+                    st.success("✅ Clock Out Successful. Returning to main menu...")
                     time.sleep(1.5)
                     st.session_state.pop("kiosk_user", None)
                     clear_kiosk_photo_state()
@@ -1123,4 +1115,3 @@ def kiosk_dashboard():
                     clear_kiosk_staff_transient_state()
                     st.session_state["kiosk_view"] = "home"
                     refresh()
-                st.markdown("</div>", unsafe_allow_html=True)
