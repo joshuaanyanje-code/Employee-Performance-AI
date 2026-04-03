@@ -203,6 +203,7 @@ def generate_super_admin_intelligence(
     # Problematic individuals
     problematic = []
     at_risk = []
+    at_risk_reasons = {}
     high_performers = []
     
     for insight in isolation_flags + bad_seed_flags + withdrawal_flags:
@@ -218,6 +219,9 @@ def generate_super_admin_intelligence(
             if len(parts) > 1:
                 person = parts[1].strip().split()[0]
                 at_risk.append(person)
+                if person not in at_risk_reasons:
+                    at_risk_reasons[person] = []
+                at_risk_reasons[person].append(insight)
     
     for insight in top_performer_insights:
         parts = insight.split(":")
@@ -225,9 +229,11 @@ def generate_super_admin_intelligence(
             person = parts[1].strip().split()[0]
             high_performers.append(person)
     
+    at_risk_unique = list(set(at_risk))[:5]
     report["individuals_of_focus"] = {
         "problematic": list(set(problematic))[:5],
-        "at_risk_retention": list(set(at_risk))[:5],
+        "at_risk_retention": at_risk_unique,
+        "at_risk_reasons": {k: at_risk_reasons.get(k, [])[:3] for k in at_risk_unique},
         "high_performers": list(set(high_performers))[:5],
     }
     

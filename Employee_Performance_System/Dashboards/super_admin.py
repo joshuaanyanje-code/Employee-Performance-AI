@@ -665,10 +665,11 @@ def super_admin_dashboard():
                 st.markdown("**Badge Summary (organization-wide)**")
                 try:
                     badge_summary = compute_badge_summary_for_super_admin(org)
-                    bs1, bs2, bs3 = st.columns(3)
+                    bs1, bs2, bs3, bs4 = st.columns(4)
                     bs1.metric("Total Badges", badge_summary.get("total_badges", 0))
                     bs2.metric("Unique Holders", badge_summary.get("unique_holders", 0))
                     bs3.metric("Best Employee Score", f"{badge_summary.get('best_employee_score', 0):.1f}")
+                    bs4.metric("Best Admin Score", f"{badge_summary.get('best_admin_score', 0):.1f}")
 
                     category_map = badge_summary.get("categories", {})
                     if category_map:
@@ -679,7 +680,42 @@ def super_admin_dashboard():
 
                     badge_holders_df = get_badge_holders_table(org)
                     if not badge_holders_df.empty:
-                        st.markdown("**Badge Holders (Names + Badge Type)**")
+                        # Organization-level winners (general level)
+                        org_podium = badge_holders_df[
+                            (badge_holders_df["scope"].astype(str).str.lower() == "organization")
+                            & (badge_holders_df["badge"].astype(str).isin(["Gold No. 1", "Silver No. 2", "Bronze No. 3"]))
+                        ].copy()
+                        if not org_podium.empty:
+                            st.markdown("**Top Performers - General Level (Org Podium)**")
+                            org_cols = [c for c in ["holder_display", "badge", "score", "branch"] if c in org_podium.columns]
+                            st.dataframe(org_podium[org_cols], use_container_width=True)
+
+                        best_overall = badge_holders_df[
+                            badge_holders_df["badge"].astype(str) == "Best Employee Entire Org"
+                        ].copy()
+                        if not best_overall.empty:
+                            st.markdown("**Best Overall Performer (Best Employee Entire Org Logic)**")
+                            bo_cols = [c for c in ["holder_display", "badge", "score", "branch"] if c in best_overall.columns]
+                            st.dataframe(best_overall[bo_cols], use_container_width=True)
+
+                        best_admin_overall = badge_holders_df[
+                            badge_holders_df["badge"].astype(str) == "Best Admin Overall Org"
+                        ].copy()
+                        if not best_admin_overall.empty:
+                            st.markdown("**Best Overall Admin (Best Admin Overall Org Logic)**")
+                            bao_cols = [c for c in ["holder_display", "badge", "score", "branch"] if c in best_admin_overall.columns]
+                            st.dataframe(best_admin_overall[bao_cols], use_container_width=True)
+
+                        # Branch-level winners
+                        branch_top = badge_holders_df[
+                            badge_holders_df["badge"].astype(str).str.contains("Gold No. 1 \(Branch\)", na=False)
+                        ].copy()
+                        if not branch_top.empty:
+                            st.markdown("**Top Performers - Branch Level (Gold per Branch)**")
+                            branch_cols = [c for c in ["branch", "holder_display", "badge", "score"] if c in branch_top.columns]
+                            st.dataframe(branch_top[branch_cols].sort_values(["branch", "score"], ascending=[True, False]), use_container_width=True)
+
+                        st.markdown("**All Badge Holders (Names + Badge Type)**")
                         cols = [c for c in ["holder_display", "badge", "scope", "branch", "score"] if c in badge_holders_df.columns]
                         st.dataframe(badge_holders_df[cols], use_container_width=True)
                 except Exception:
@@ -1048,9 +1084,13 @@ def super_admin_dashboard():
                 with ib:
                     st.markdown("**âš  At-Risk (Retention)**")
                     at_risk_retention = focus.get("at_risk_retention", [])
+                    at_risk_reasons = focus.get("at_risk_reasons", {})
                     if at_risk_retention:
                         for emp in at_risk_retention:
                             st.warning(f"â€¢ {emp}")
+                            reasons = at_risk_reasons.get(emp, []) if isinstance(at_risk_reasons, dict) else []
+                            for reason in reasons[:2]:
+                                st.caption(f"Reason: {reason}")
                     else:
                         st.info("No at-risk users detected.")
                 
@@ -2277,6 +2317,7 @@ def super_admin_dashboard():
             leaves_all = apply_branch_scope(safe_read("SELECT * FROM leaves WHERE organization=?", conn, params=(org,)))
             messages_all = apply_branch_scope(safe_read("SELECT * FROM messages WHERE organization=?", conn, params=(org,)))
             schedules_all = apply_branch_scope(safe_read("SELECT * FROM schedules WHERE organization=?", conn, params=(org,)))
+            warnings_all = apply_branch_scope(safe_read("SELECT * FROM warnings WHERE organization=?", conn, params=(org,)))
 
             if ratings_all.empty:
                 st.info("No ratings data yet.")
@@ -2407,6 +2448,112 @@ def super_admin_dashboard():
 
                 st.markdown("**Top Performers - All Roles**")
                 st.dataframe(ranked[["username", "role", "branch", "avg_score", "rating_count"]].head(15), use_container_width=True)
+
+                # Show low performers with the same scope + ranking rules (inverse order).
+                low_employee = employee_ranked.sort_values(["avg_score", "rating_count"], ascending=[True, True])
+                low_admin = admin_ranked.sort_values(["avg_score", "rating_count"], ascending=[True, True])
+                low_all = ranked.sort_values(["avg_score", "rating_count"], ascending=[True, True])
+
+                st.markdown("**Low Performers - Employees**")
+                if low_employee.empty:
+                    st.info("No employee performance rows in this scope.")
+                else:
+                    st.dataframe(low_employee[["username", "branch", "avg_score", "rating_count"]].head(10), use_container_width=True)
+
+                st.markdown("**Low Performers - Admins**")
+                if low_admin.empty:
+                    st.info("No admin performance rows in this scope.")
+                else:
+                    low_admin_view = low_admin[["username", "branch", "avg_score", "rating_count"]].head(10).copy()
+
+                    def _admin_gang_signal(admin_name):
+                        # Signal when many staff rate the admin very low, but admin's own conduct signals are not strongly bad.
+                        if ratings_all.empty or "rated" not in ratings_all.columns or "score" not in ratings_all.columns:
+                            return "No data"
+
+                        incoming = ratings_all[ratings_all["rated"].astype(str) == str(admin_name)]
+                        if incoming.empty:
+                            return "No data"
+
+                        incoming_low = incoming[pd.to_numeric(incoming["score"], errors="coerce") < 45]
+                        total_raters = int(incoming["rater"].astype(str).nunique()) if "rater" in incoming.columns else int(len(incoming))
+                        low_raters = int(incoming_low["rater"].astype(str).nunique()) if "rater" in incoming_low.columns else int(len(incoming_low))
+                        low_ratio = (low_raters / max(total_raters, 1))
+
+                        outgoing = ratings_all[ratings_all.get("rater", "").astype(str) == str(admin_name)] if "rater" in ratings_all.columns else pd.DataFrame()
+                        outgoing_avg = float(pd.to_numeric(outgoing.get("score"), errors="coerce").mean()) if not outgoing.empty else 0.0
+
+                        warn_count = 0
+                        if not warnings_all.empty and "username" in warnings_all.columns:
+                            warn_count = int((warnings_all["username"].astype(str) == str(admin_name)).sum())
+
+                        late_rate = 0.0
+                        if not attendance_all.empty and "username" in attendance_all.columns and "status" in attendance_all.columns:
+                            admin_att = attendance_all[attendance_all["username"].astype(str) == str(admin_name)]
+                            if not admin_att.empty:
+                                late_rate = float((admin_att["status"].astype(str).str.upper() == "LATE").mean() * 100)
+
+                        # Potential gang signal: many low raters, while admin is not showing strong negative outgoing/discipline indicators.
+                        if total_raters >= 4 and low_raters >= 3 and low_ratio >= 0.60 and outgoing_avg >= 55 and warn_count == 0 and late_rate < 25:
+                            return f"Possible staff gang ({low_raters}/{total_raters} low raters)"
+                        if total_raters >= 4 and low_raters >= 3 and low_ratio >= 0.60:
+                            return f"Heavy negative cluster ({low_raters}/{total_raters})"
+                        return "No clear gang signal"
+
+                    def _admin_low_reason(admin_name):
+                        reasons = []
+
+                        # Ratings reason
+                        row = low_admin[low_admin["username"].astype(str) == str(admin_name)]
+                        if not row.empty:
+                            avg_score = float(row.iloc[0].get("avg_score", 0) or 0)
+                            rating_count = int(row.iloc[0].get("rating_count", 0) or 0)
+                            if avg_score < 52:
+                                reasons.append(f"Very low peer rating ({avg_score:.1f})")
+                            elif avg_score < 55:
+                                reasons.append(f"Below-target peer rating ({avg_score:.1f})")
+                            if rating_count < 5:
+                                reasons.append("Few ratings captured (low confidence)")
+
+                        # Attendance discipline reason
+                        if not attendance_all.empty and "username" in attendance_all.columns and "status" in attendance_all.columns:
+                            admin_att = attendance_all[attendance_all["username"].astype(str) == str(admin_name)]
+                            if not admin_att.empty:
+                                late_rate = float((admin_att["status"].astype(str).str.upper() == "LATE").mean() * 100)
+                                absent_rate = float((admin_att["status"].astype(str).str.upper() == "ABSENT").mean() * 100)
+                                if late_rate >= 25:
+                                    reasons.append(f"Frequent lateness ({late_rate:.0f}% records)")
+                                if absent_rate >= 10:
+                                    reasons.append(f"Absenteeism risk ({absent_rate:.0f}% records)")
+
+                        # Conduct reason from warning records
+                        if not warnings_all.empty and "username" in warnings_all.columns:
+                            warn_count = int((warnings_all["username"].astype(str) == str(admin_name)).sum())
+                            if warn_count >= 1:
+                                reasons.append(f"Warning history ({warn_count})")
+
+                        if not reasons:
+                            reasons.append("Low ranking from current performance mix")
+
+                        return "; ".join(reasons[:3])
+
+                    low_admin_view["Reason"] = low_admin_view["username"].apply(_admin_low_reason)
+                    low_admin_view["Staff Gang Signal"] = low_admin_view["username"].apply(_admin_gang_signal)
+                    st.dataframe(
+                        low_admin_view[["username", "branch", "avg_score", "rating_count", "Reason", "Staff Gang Signal"]],
+                        use_container_width=True,
+                    )
+
+                    suspected_gang = low_admin_view[
+                        low_admin_view["Staff Gang Signal"].astype(str).str.contains("Possible staff gang|Heavy negative cluster", case=False, na=False)
+                    ]
+                    if not suspected_gang.empty:
+                        st.warning("Potential staff-gang signals detected against the following admin(s):")
+                        for _, row in suspected_gang.iterrows():
+                            st.warning(f"- {row['username']}: {row['Staff Gang Signal']}")
+
+                st.markdown("**Low Performers - All Roles**")
+                st.dataframe(low_all[["username", "role", "branch", "avg_score", "rating_count"]].head(15), use_container_width=True)
 
                 render_favorite_relationship_section(ratings_all, compare_scope_label)
 
