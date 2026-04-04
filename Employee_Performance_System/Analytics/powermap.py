@@ -1,6 +1,13 @@
 import pandas as pd
 import streamlit as st
 
+
+def _pair_key(a, b):
+    left = str(a or "").strip()
+    right = str(b or "").strip()
+    return tuple(sorted((left, right)))
+
+
 # Safe imports
 try:
     import plotly.graph_objects as go
@@ -77,119 +84,139 @@ def analyze_relationships(df, users_df=None, attendance_df=None):
 
     insights = []
 
-    if df.empty:
+    if df is None or df.empty:
+        return insights
+
+    work_df = df.copy()
+    work_df["rater"] = work_df["rater"].astype(str).str.strip()
+    work_df["rated"] = work_df["rated"].astype(str).str.strip()
+    work_df = work_df[(work_df["rater"] != "") & (work_df["rated"] != "") & (work_df["rater"] != work_df["rated"])]
+
+    if work_df.empty:
         return insights
 
     # =========================
-    # CONFLICT DETECTION
+    # PAIR RELATIONSHIP SUMMARY
     # =========================
-    conflicts = df[df["score"] < 45]
+    pair_df = work_df[["rater", "rated", "score"]].copy()
+    pair_df["pair_key"] = pair_df.apply(lambda row: _pair_key(row["rater"], row["rated"]), axis=1)
 
-    conflict_counts = conflicts.groupby(["rater", "rated"]).size()
+    for pair_key, grp in pair_df.groupby("pair_key"):
+        person_a, person_b = pair_key
 
-    for (rater, rated), count in conflict_counts.items():
-        if count >= 2:
-            insights.append(f"⚠ Conflict: {rater} vs {rated} ({count} times)")
+        ab = grp[(grp["rater"] == person_a) & (grp["rated"] == person_b)]
+        ba = grp[(grp["rater"] == person_b) & (grp["rated"] == person_a)]
 
-    # =========================
-    # FAVORITISM (HIGH SCORES)
-    # =========================
-    fav = df[df["score"] > 85]
-    fav_counts = fav.groupby(["rater", "rated"]).size()
+        low_ab = int((ab["score"] < 45).sum())
+        low_ba = int((ba["score"] < 45).sum())
+        high_ab = int((ab["score"] > 85).sum())
+        high_ba = int((ba["score"] > 85).sum())
 
-    for (rater, rated), count in fav_counts.items():
-        if count >= 3:
-            insights.append(f"🤝 Favoritism: {rater} → {rated} ({count} times)")
+        if low_ab >= 2 and low_ba >= 2:
+            insights.append(
+                f"⚠ Mutual conflict: {person_a} and {person_b} ({low_ab + low_ba} repeated low ratings)."
+            )
+        elif low_ab >= 2:
+            insights.append(f"⚠ Tension: {person_a} repeatedly rates {person_b} very low ({low_ab} times).")
+        elif low_ba >= 2:
+            insights.append(f"⚠ Tension: {person_b} repeatedly rates {person_a} very low ({low_ba} times).")
 
-    # =========================
-    # BIAS / TARGETING
-    # =========================
-    for rater in df["rater"].unique():
-
-        sub = df[df["rater"] == rater]
-
-        low_targets = sub[sub["score"] < 40]["rated"].value_counts()
-
-        for target, count in low_targets.items():
-            if count >= 2:
-                insights.append(f"🎯 Bias: {rater} targeting {target} ({count} low ratings)")
-
-    # =========================
-    # TOXIC RATERS
-    # =========================
-    for rater in df["rater"].unique():
-
-        sub = df[df["rater"] == rater]
-
-        if sub["score"].mean() < 45:
-            insights.append(f"🚨 {rater} is overly negative → Toxic influence")
-
-        if sub["score"].mean() > 80:
-            insights.append(f"⚠ {rater} overly positive → Not genuine")
+        if high_ab >= 3 and high_ba >= 3 and low_ab == 0 and low_ba == 0:
+            insights.append(
+                f"🤝 Strong mutual alliance: {person_a} and {person_b} consistently rate each other highly."
+            )
+        elif ((high_ab >= 3 and low_ab == 0) or (high_ba >= 3 and low_ba == 0)) and not (low_ab >= 2 or low_ba >= 2):
+            source = person_a if high_ab >= 3 else person_b
+            target = person_b if source == person_a else person_a
+            count = high_ab if source == person_a else high_ba
+            insights.append(f"👍 Positive support: {source} consistently rates {target} highly ({count} times).")
 
     # =========================
-    # HR ACTION ENGINE 🔥
+    # FAVORITISM / TARGETING BY RATER
     # =========================
-    avg_scores = df.groupby("rated")["score"].mean()
+    for rater, sub in work_df.groupby("rater"):
+        target_summary = (
+            sub.groupby("rated")
+            .agg(
+                low_count=("score", lambda s: int((s < 40).sum())),
+                high_count=("score", lambda s: int((s > 85).sum())),
+            )
+            .reset_index()
+        )
+
+        for _, row in target_summary.iterrows():
+            target = str(row["rated"])
+            low_count = int(row["low_count"])
+            high_count = int(row["high_count"])
+
+            if low_count >= 2 and high_count == 0:
+                insights.append(f"🎯 Bias risk: {rater} targeting {target} ({low_count} low ratings).")
+            elif high_count >= 3 and low_count == 0:
+                insights.append(f"🤝 Favoritism risk: {rater} repeatedly favors {target} ({high_count} high ratings).")
+
+    # =========================
+    # TOXIC / EXTREME RATERS
+    # =========================
+    for rater, sub in work_df.groupby("rater"):
+        avg_given = float(sub["score"].mean())
+
+        if avg_given < 45:
+            insights.append(f"🚨 {rater} is overly negative overall - possible toxic influence.")
+        elif avg_given > 80 and len(sub) >= 3:
+            insights.append(f"⚠ {rater} is overly positive overall - ratings may not be fully genuine.")
+
+    # =========================
+    # PERFORMANCE WATCHLIST
+    # =========================
+    avg_scores = work_df.groupby("rated")["score"].mean()
 
     for user, score in avg_scores.items():
-
         if score < 40:
-            insights.append(f"❌ {user} → FIRE / REPLACE (very low performance)")
-
+            insights.append(f"❌ Performance risk: {user} is critically low ({score:.1f}%).")
         elif score < 50:
-            insights.append(f"🚫 {user} → SUSPEND or strict warning")
-
+            insights.append(f"🚫 Performance risk: {user} needs urgent corrective action ({score:.1f}%).")
         elif score < 60:
-            insights.append(f"⚠ {user} → Needs coaching / improvement")
+            insights.append(f"⚠ Coaching need: {user} is below expected performance ({score:.1f}%).")
 
     # =========================
     # ADMIN IMPACT
     # =========================
-    if users_df is not None:
-
-        admins = users_df[users_df["role"] == "admin"]["username"]
+    if users_df is not None and not users_df.empty and "role" in users_df.columns:
+        admins = users_df[users_df["role"].astype(str).str.lower() == "admin"]["username"].astype(str)
 
         for admin in admins:
-
-            score = avg_scores.get(admin, 0)
-
+            score = avg_scores.get(admin, None)
+            if score is None:
+                continue
             if score >= 75:
-                insights.append(f"👑 Admin {admin} improving branch performance")
-
+                insights.append(f"👑 Admin impact: {admin} is improving branch performance.")
             elif score < 55:
-                insights.append(f"🚨 Admin {admin} weakening branch performance")
+                insights.append(f"🚨 Admin impact: {admin} may be weakening branch performance.")
 
     # =========================
     # ATTENDANCE + BEHAVIOR
     # =========================
-    if attendance_df is not None and not attendance_df.empty:
-
-        attendance_df["clock_in"] = pd.to_datetime(attendance_df["clock_in"], errors="coerce")
-
-        late = attendance_df[attendance_df["clock_in"].dt.hour > 9]
-
+    if attendance_df is not None and not attendance_df.empty and "clock_in" in attendance_df.columns:
+        attendance_copy = attendance_df.copy()
+        attendance_copy["clock_in"] = pd.to_datetime(attendance_copy["clock_in"], errors="coerce")
+        late = attendance_copy[attendance_copy["clock_in"].dt.hour > 9]
         late_counts = late.groupby("username").size()
 
         for user, count in late_counts.items():
-
             if count >= 5:
-                insights.append(f"⚠ {user} frequent lateness → Discipline issue")
+                insights.append(f"⚠ Discipline issue: {user} has frequent lateness ({int(count)} times).")
 
     # =========================
     # ALLIANCE GROUPS (CLIQUE)
     # =========================
-    strong_links = df[df["score"] > 85]
-
+    strong_links = work_df[work_df["score"] > 85]
     if not strong_links.empty:
-
         group = strong_links.groupby("rater")["rated"].nunique()
-
         for user, count in group.items():
             if count >= 3:
-                insights.append(f"👥 {user} forming strong alliances (possible clique)")
+                insights.append(f"👥 Clique signal: {user} forms unusually strong positive links with several people.")
 
-    return list(set(insights))
+    return list(dict.fromkeys(insights))
 
 
 # =====================================================

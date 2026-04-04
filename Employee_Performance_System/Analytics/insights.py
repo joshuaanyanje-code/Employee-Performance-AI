@@ -2,6 +2,12 @@ import pandas as pd
 from datetime import datetime
 
 
+def _pair_key(a, b):
+    left = str(a or "").strip()
+    right = str(b or "").strip()
+    return tuple(sorted((left, right)))
+
+
 def generate_insights(ratings_df, attendance_df=None, leaves_df=None, users_df=None, messages_df=None):
 
     insights = []
@@ -19,17 +25,37 @@ def generate_insights(ratings_df, attendance_df=None, leaves_df=None, users_df=N
     for name in leaders.index:
         insights.append(f"⭐ Leadership emerging: {name} is receiving very high ratings.")
 
-    conflicts = ratings_df[ratings_df["score"] < 35]
+    pair_df = ratings_df[["rater", "rated", "score"]].copy()
+    pair_df["rater"] = pair_df["rater"].astype(str).str.strip()
+    pair_df["rated"] = pair_df["rated"].astype(str).str.strip()
+    pair_df = pair_df[(pair_df["rater"] != "") & (pair_df["rated"] != "") & (pair_df["rater"] != pair_df["rated"])]
 
-    if not conflicts.empty:
-        for _, row in conflicts.iterrows():
-            insights.append(f"⚠ Conflict detected between {row['rater']} and {row['rated']}.")
+    if not pair_df.empty:
+        pair_df["pair_key"] = pair_df.apply(lambda row: _pair_key(row["rater"], row["rated"]), axis=1)
 
-    alliances = ratings_df[ratings_df["score"] > 80]
-    grouped = alliances.groupby(["rater", "rated"]).size()
+        for pair_key, grp in pair_df.groupby("pair_key"):
+            person_a, person_b = pair_key
+            directional = grp.groupby(["rater", "rated"])["score"].mean().to_dict()
+            score_ab = directional.get((person_a, person_b))
+            score_ba = directional.get((person_b, person_a))
 
-    for pair in grouped.index:
-        insights.append(f"🤝 Strong alliance: {pair[0]} and {pair[1]}.")
+            if score_ab is not None and score_ba is not None:
+                if score_ab >= 75 and score_ba >= 75:
+                    insights.append(f"🤝 Strong alliance: {person_a} and {person_b}.")
+                elif score_ab < 45 and score_ba < 45:
+                    insights.append(f"⚠ Conflict detected between {person_a} and {person_b}.")
+                elif (score_ab >= 75 and score_ba < 45) or (score_ba >= 75 and score_ab < 45):
+                    insights.append(f"↔ Mixed relationship signals between {person_a} and {person_b}; review before concluding alliance or conflict.")
+            else:
+                avg_score = float(grp["score"].mean())
+                if avg_score >= 85:
+                    source = str(grp.iloc[0]["rater"])
+                    target = str(grp.iloc[0]["rated"])
+                    insights.append(f"👍 Positive collaboration signal: {source} consistently rates {target} highly.")
+                elif avg_score < 35:
+                    source = str(grp.iloc[0]["rater"])
+                    target = str(grp.iloc[0]["rated"])
+                    insights.append(f"⚠ Tension signal: {source} repeatedly rates {target} very low.")
 
     risks = avg_scores[avg_scores < 45]
 

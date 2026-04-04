@@ -310,6 +310,25 @@ def management_recommendations(ratings_df, attendance_df, schedules_df=None):
 
     recommendations = []
 
+    def _summarize_targets(df):
+        if df is None or df.empty:
+            return [], [], []
+
+        target_summary = (
+            df.groupby("rated")
+            .agg(
+                avg_score=("score", "mean"),
+                high_count=("score", lambda s: int((s > 86).sum())),
+                low_count=("score", lambda s: int((s < 45).sum())),
+            )
+            .reset_index()
+        )
+
+        favored = target_summary[(target_summary["high_count"] > 0) & (target_summary["low_count"] == 0)]["rated"].astype(str).tolist()
+        conflicted = target_summary[(target_summary["low_count"] > 0) & (target_summary["high_count"] == 0)]["rated"].astype(str).tolist()
+        mixed = target_summary[(target_summary["low_count"] > 0) & (target_summary["high_count"] > 0)]["rated"].astype(str).tolist()
+        return favored, conflicted, mixed
+
     # =========================
     # PREP DATA
     # =========================
@@ -463,14 +482,18 @@ def management_recommendations(ratings_df, attendance_df, schedules_df=None):
             if df["score"].mean() > 76:
                 recommendations.append(f"⚠ {rater} gives unrealistic high ratings.")
 
-            high = df[df["score"] > 86]["rated"].tolist()
-            low = df[df["score"] < 45]["rated"].tolist()
+            favored, conflicted, mixed = _summarize_targets(df)
 
-            if len(high) <= 2 and len(high) > 0:
-                recommendations.append(f"⚠ {rater} favoritism → {high}")
+            if len(favored) <= 2 and favored:
+                recommendations.append(f"⚠ {rater} favoritism → {sorted(set(favored))}")
 
-            if len(low) <= 2 and len(low) > 0:
-                recommendations.append(f"⚠ {rater} conflict → {low}")
+            if len(conflicted) <= 2 and conflicted:
+                recommendations.append(f"⚠ {rater} conflict → {sorted(set(conflicted))}")
+
+            for target in sorted(set(mixed))[:2]:
+                recommendations.append(
+                    f"ℹ {rater} shows mixed rating signals toward {target} - review context before calling it favoritism or conflict."
+                )
 
     # =====================================================
     # 🔥 ADMIN INTELLIGENCE (UPGRADED)
@@ -579,17 +602,21 @@ def management_recommendations(ratings_df, attendance_df, schedules_df=None):
 
             if not admin_given.empty:
 
-                high_given = admin_given[admin_given["score"] > 86]["rated"].tolist()
-                low_given = admin_given[admin_given["score"] < 45]["rated"].tolist()
+                high_given, low_given, mixed_given = _summarize_targets(admin_given)
 
-                if len(high_given) <= 2 and len(high_given) > 0:
+                if len(high_given) <= 2 and high_given:
                     recommendations.append(
-                        f"⚠ Admin {admin} favoritism → {high_given}"
+                        f"⚠ Admin {admin} favoritism → {sorted(set(high_given))}"
                     )
 
-                if len(low_given) <= 2 and len(low_given) > 0:
+                if len(low_given) <= 2 and low_given:
                     recommendations.append(
-                        f"⚠ Admin {admin} conflict → {low_given}"
+                        f"⚠ Admin {admin} conflict → {sorted(set(low_given))}"
+                    )
+
+                for target in sorted(set(mixed_given))[:2]:
+                    recommendations.append(
+                        f"ℹ Admin {admin} has mixed rating history with {target} - verify context before escalation."
                     )
 
     recommendations = list(dict.fromkeys(str(item).strip() for item in recommendations if str(item).strip()))

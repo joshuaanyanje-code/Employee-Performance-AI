@@ -2,6 +2,41 @@ import pandas as pd
 from datetime import datetime, timedelta
 
 
+def _build_consistency_summary(ratings_df, recent_days=None):
+    if ratings_df is None or ratings_df.empty:
+        return pd.DataFrame()
+
+    df = ratings_df.copy()
+    if recent_days is not None and "created_at" in df.columns:
+        df["created_at"] = pd.to_datetime(df["created_at"], errors="coerce")
+        df = df[df["created_at"] >= datetime.now() - timedelta(days=recent_days)]
+
+    if df.empty:
+        return pd.DataFrame()
+
+    summary = (
+        df.groupby("rated")
+        .agg(
+            avg_score=("score", "mean"),
+            score_std=("score", "std"),
+            rating_count=("score", "count"),
+            rater_count=("rater", "nunique"),
+            min_score=("score", "min"),
+            max_score=("score", "max"),
+        )
+        .reset_index()
+        .rename(columns={"rated": "employee"})
+    )
+
+    summary["score_std"] = summary["score_std"].fillna(0)
+    total_raters = max(df["rater"].astype(str).nunique(), 1)
+    summary["coverage_ratio"] = summary["rater_count"] / total_raters
+    return summary.sort_values(
+        ["coverage_ratio", "avg_score", "score_std", "rating_count"],
+        ascending=[False, False, True, False],
+    ).reset_index(drop=True)
+
+
 def detect_leaders(ratings_df, attendance_df=None, leaves_df=None, users_df=None, messages_df=None):
 
     if ratings_df.empty:
@@ -10,11 +45,13 @@ def detect_leaders(ratings_df, attendance_df=None, leaves_df=None, users_df=None
     insights = []
 
     # =========================
-    # BASE LEADERBOARD (ORIGINAL ✅)
+    # BASE LEADERBOARD (CONSISTENCY-AWARE)
     # =========================
-    leaders = ratings_df.groupby("rated")["score"].mean().reset_index()
-    leaders = leaders.sort_values(by="score", ascending=False)
-    leaders.columns = ["employee", "leadership_score"]
+    summary = _build_consistency_summary(ratings_df)
+    if summary.empty:
+        return pd.DataFrame(), []
+
+    leaders = summary[["employee", "avg_score"]].rename(columns={"avg_score": "leadership_score"})
 
     # =====================================================
     # 🏆 TOP PERFORMER PER BRANCH (>=91)
@@ -35,51 +72,47 @@ def detect_leaders(ratings_df, attendance_df=None, leaves_df=None, users_df=None
                 )
 
     # =====================================================
-    # 📈 CONSISTENCY (WEEKLY / MONTHLY)
+    # 📈 CONSISTENCY / NEXT TOP PERFORMER
     # =====================================================
-    if "created_at" in ratings_df.columns:
-
-        ratings_df["created_at"] = pd.to_datetime(ratings_df["created_at"], errors="coerce")
-
-        for user in ratings_df["rated"].unique():
-
-            df = ratings_df[ratings_df["rated"] == user].sort_values("created_at")
-
-            # WEEKLY
-            weekly = df[df["created_at"] >= datetime.now() - timedelta(days=7)]
-            monthly = df[df["created_at"] >= datetime.now() - timedelta(days=30)]
-
-            if not weekly.empty:
-                w_score = weekly["score"].mean()
-                if w_score >= 85:
-                    insights.append(f"📅 {user} performing strongly this week")
-
-            if not monthly.empty:
-                m_score = monthly["score"].mean()
-                if m_score >= 85:
-                    insights.append(f"📆 {user} consistent performer this month")
+    recent_summary = _build_consistency_summary(ratings_df, recent_days=30)
+    if not recent_summary.empty:
+        recent_candidate = recent_summary[
+            (recent_summary["avg_score"] >= 75) & (recent_summary["rating_count"] >= 3)
+        ].head(1)
+        if not recent_candidate.empty:
+            row = recent_candidate.iloc[0]
+            insights.append(
+                f"🏆 Next top performer: {row['employee']} ({row['avg_score']:.1f}%) with consistent ratings from {int(row['rater_count'])} raters."
+            )
 
     # =====================================================
     # 🚀 PROMOTION LOGIC (5 CONSISTENT HIGH SCORES)
     # =====================================================
+    promotion_candidates = []
     for user in ratings_df["rated"].unique():
 
         df = ratings_df[ratings_df["rated"] == user].sort_values("created_at")
-
         last5 = df.tail(5)
 
         if len(last5) == 5:
-
             scores = last5["score"].values
-
             if all(s >= 85 for s in scores):
-
                 drop = max(scores) - min(scores)
-
                 if drop <= 10:
-                    insights.append(
-                        f"🚀 {user} eligible for promotion (5 consistent strong ratings)"
-                    )
+                    promotion_candidates.append({
+                        "employee": user,
+                        "avg_score": float(last5["score"].mean()),
+                        "spread": float(drop),
+                    })
+
+    if promotion_candidates:
+        promo_df = pd.DataFrame(promotion_candidates).sort_values(
+            ["avg_score", "spread", "employee"], ascending=[False, True, True]
+        )
+        best_promo = promo_df.iloc[0]
+        insights.append(
+            f"🚀 Promotion-ready performer: {best_promo['employee']} ({best_promo['avg_score']:.1f}%) with very consistent recent ratings."
+        )
 
     # =====================================================
     # 👑 ADMIN PERFORMANCE
@@ -205,35 +238,31 @@ def detect_popular_influencers(ratings_df, users_df=None, attendance_df=None):
 # 🏆 TOP PERFORMER CONSISTENCY (7% VARIANCE)
 # =====================================================
 def detect_elite_top_performers(ratings_df):
-    """Detects elite top performers with extremely consistent ratings (±7% variance)."""
-    
-    insights = []
+    """Detects the single strongest consistent top performer."""
     
     if ratings_df.empty:
-        return insights
-    
-    avg_scores = ratings_df.groupby("rated")["score"].mean()
-    
-    for employee in avg_scores.index:
-        emp_ratings = ratings_df[ratings_df["rated"] == employee]
-        
-        if len(emp_ratings) < 3:
-            continue
-        
-        variance = emp_ratings["score"].std()
-        avg = emp_ratings["score"].mean()
-        min_score = emp_ratings["score"].min()
-        max_score = emp_ratings["score"].max()
-        
-        # RULE: 85-95% average with ≤7% variance + all ratings 85%+ = elite
-        if 85 <= avg <= 95 and (max_score - min_score) <= 7:
-            insights.append(f"🏆 ELITE TOP PERFORMER: {employee} - Consistent excellence ({avg:.0f}%) with {max_score-min_score:.0f}% variance (±7%)")
-        
-        # Also track those within 50-75% variance
-        elif 85 <= avg <= 95 and (max_score - min_score) <= 15:
-            insights.append(f"⭐ TOP PERFORMER: {employee} - Strong consistency ({avg:.0f}%) with {max_score-min_score:.0f}% variance")
-    
-    return list(set(insights))
+        return []
+
+    summary = _build_consistency_summary(ratings_df)
+    if summary.empty:
+        return []
+
+    elite = summary[(summary["avg_score"] >= 85) & (summary["rating_count"] >= 3)].copy()
+    if elite.empty:
+        return []
+
+    elite["spread"] = elite["max_score"] - elite["min_score"]
+    elite = elite.sort_values(["coverage_ratio", "avg_score", "spread", "score_std"], ascending=[False, False, True, True])
+    best = elite.iloc[0]
+
+    if best["spread"] <= 7:
+        return [
+            f"🏆 ELITE TOP PERFORMER: {best['employee']} - Consistent excellence ({best['avg_score']:.0f}%) rated broadly across the team."
+        ]
+
+    return [
+        f"⭐ TOP PERFORMER: {best['employee']} - Strong consistency ({best['avg_score']:.0f}%) and broad team recognition."
+    ]
 
 
 # =====================================================

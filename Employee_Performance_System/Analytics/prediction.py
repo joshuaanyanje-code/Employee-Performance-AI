@@ -13,13 +13,35 @@ def predict_future(ratings_df, attendance_df=None, users_df=None):
     # PREP
     # =========================
     avg_scores = ratings_df.groupby("rated")["score"].mean()
+    summary = (
+        ratings_df.groupby("rated")
+        .agg(
+            avg_score=("score", "mean"),
+            score_std=("score", "std"),
+            rating_count=("score", "count"),
+            rater_count=("rater", "nunique"),
+        )
+        .reset_index()
+        .rename(columns={"rated": "employee"})
+    )
+    summary["score_std"] = summary["score_std"].fillna(0)
+    total_raters = max(ratings_df["rater"].astype(str).nunique(), 1)
+    summary["coverage_ratio"] = summary["rater_count"] / total_raters
 
     # =========================
     # ORIGINAL LOGIC (KEPT ✅)
     # =========================
-    leaders = avg_scores[avg_scores > 85]
-    for name in leaders.index:
-        insights.append(f"📈 Promotion candidate: {name} consistently high performer")
+    promotion_pick = summary[
+        (summary["avg_score"] >= 85) & (summary["rating_count"] >= 3) & (summary["score_std"] <= 12)
+    ].sort_values(["coverage_ratio", "avg_score", "score_std", "rating_count"], ascending=[False, False, True, False]).head(1)
+
+    selected_top_name = None
+    if not promotion_pick.empty:
+        row = promotion_pick.iloc[0]
+        selected_top_name = str(row["employee"])
+        insights.append(
+            f"📈 Promotion candidate: {selected_top_name} consistently scores well across team raters ({row['avg_score']:.1f}%)."
+        )
 
     risk = avg_scores[avg_scores < 45]
     for name in risk.index:
@@ -87,13 +109,31 @@ def predict_future(ratings_df, attendance_df=None, users_df=None):
         recent = ratings_df[ratings_df["created_at"] >= datetime.now() - timedelta(days=14)]
 
         if not recent.empty:
+            recent_summary = (
+                recent.groupby("rated")
+                .agg(
+                    avg_score=("score", "mean"),
+                    score_std=("score", "std"),
+                    rating_count=("score", "count"),
+                    rater_count=("rater", "nunique"),
+                )
+                .reset_index()
+                .rename(columns={"rated": "employee"})
+            )
+            recent_summary["score_std"] = recent_summary["score_std"].fillna(0)
+            total_recent_raters = max(recent["rater"].astype(str).nunique(), 1)
+            recent_summary["coverage_ratio"] = recent_summary["rater_count"] / total_recent_raters
 
-            trend = recent.groupby("rated")["score"].mean()
+            rising = recent_summary[
+                (recent_summary["rating_count"] >= 3) & (recent_summary["avg_score"] >= 70)
+            ].sort_values(["coverage_ratio", "avg_score", "score_std", "rating_count"], ascending=[False, False, True, False]).head(1)
 
-            rising = trend.sort_values(ascending=False).head(2)
-
-            for name in rising.index:
-                insights.append(f"📈 {name} is likely next top performer")
+            if not rising.empty:
+                next_name = str(rising.iloc[0]["employee"])
+                if next_name != selected_top_name:
+                    insights.append(
+                        f"📈 {next_name} is the strongest next top performer based on recent consistent ratings from the team."
+                    )
 
     # =====================================================
     # 👑 ADMIN RELIABILITY
