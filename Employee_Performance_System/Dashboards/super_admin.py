@@ -2533,6 +2533,77 @@ def super_admin_dashboard():
                         st.success("Demographics updated.")
                     except Exception as e:
                         st.error(f"Error: {e}")
+
+            # Live gender summary (overall + per branch)
+            users_gender_df = safe_read(
+                """
+                SELECT username, branch, gender, role, status
+                FROM users
+                WHERE organization=?
+                """,
+                conn,
+                params=(org,),
+            )
+            if not users_gender_df.empty:
+                role_norm = users_gender_df["role"].fillna("").astype(str).str.lower().str.strip()
+                excluded_roles = ["master", "master_admin", "super_admin", "superadmin", "owner"]
+                users_gender_df = users_gender_df[~role_norm.isin(excluded_roles)].copy()
+
+                users_gender_df["branch"] = (
+                    users_gender_df["branch"].fillna("Unassigned").astype(str).str.strip().replace("", "Unassigned")
+                )
+                users_gender_df["gender"] = (
+                    users_gender_df["gender"].fillna("unknown").astype(str).str.lower().str.strip().replace("", "unknown")
+                )
+
+                overall_total = len(users_gender_df)
+                overall_male = int((users_gender_df["gender"] == "male").sum())
+                overall_female = int((users_gender_df["gender"] == "female").sum())
+                overall_other = int(overall_total - overall_male - overall_female)
+
+                st.divider()
+                st.markdown("### Overall Gender Overview")
+                og1, og2, og3, og4 = st.columns(4)
+                og1.metric("Overall Staff", overall_total)
+                og2.metric("Overall Male", overall_male)
+                og3.metric("Overall Female", overall_female)
+                og4.metric("Other/Unknown", overall_other)
+
+                branch_gender_df = (
+                    users_gender_df.assign(
+                        Male=(users_gender_df["gender"] == "male").astype(int),
+                        Female=(users_gender_df["gender"] == "female").astype(int),
+                        Other_Unknown=(~users_gender_df["gender"].isin(["male", "female"])).astype(int),
+                    )
+                    .groupby("branch", dropna=False)
+                    .agg(
+                        Total_Staff=("username", "nunique"),
+                        Male=("Male", "sum"),
+                        Female=("Female", "sum"),
+                        Other_Unknown=("Other_Unknown", "sum"),
+                    )
+                    .reset_index()
+                    .rename(columns={"branch": "Branch"})
+                    .sort_values("Branch")
+                )
+
+                st.markdown("### Gender by Branch")
+                st.dataframe(branch_gender_df, use_container_width=True, hide_index=True)
+
+                if branch_filter_demo:
+                    selected_branch_row = branch_gender_df[
+                        branch_gender_df["Branch"].astype(str) == str(branch_filter_demo)
+                    ]
+                    if not selected_branch_row.empty:
+                        sb = selected_branch_row.iloc[0]
+                        st.markdown(f"**Selected Branch: {branch_filter_demo}**")
+                        sb1, sb2, sb3, sb4 = st.columns(4)
+                        sb1.metric("Branch Staff", int(sb["Total_Staff"]))
+                        sb2.metric("Male", int(sb["Male"]))
+                        sb3.metric("Female", int(sb["Female"]))
+                        sb4.metric("Other/Unknown", int(sb["Other_Unknown"]))
+            else:
+                st.info("No staff demographic data available yet.")
             
             # Display statistics
             try:
@@ -2540,7 +2611,7 @@ def super_admin_dashboard():
                 
                 if stats:
                     st.divider()
-                    st.markdown("### Gender Distribution")
+                    st.markdown("### Selected Scope Gender Distribution")
                     
                     gd = stats.get("gender_distribution", {})
                     total_emp = gd.get("total_employees", 0)
