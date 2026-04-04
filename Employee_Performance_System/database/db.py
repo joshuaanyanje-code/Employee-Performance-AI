@@ -3,6 +3,7 @@ import hashlib
 import time
 import random
 import os
+import re
 from datetime import datetime, timedelta
 
 try:
@@ -21,11 +22,91 @@ if load_dotenv is not None:
 DB_PATH = "team_ai.db"
 
 
-# =========================
-# CONNECTION (SAFE 🔥)
-# =========================
+class SyncedCursor(sqlite3.Cursor):
+    def execute(self, sql, parameters=()):
+        return super().execute(_normalize_sqlite_now(sql), parameters)
+
+    def executemany(self, sql, seq_of_parameters):
+        return super().executemany(_normalize_sqlite_now(sql), seq_of_parameters)
+
+
+class SyncedConnection(sqlite3.Connection):
+    def cursor(self, factory=SyncedCursor):
+        return super().cursor(factory)
+
+    def execute(self, sql, parameters=(), /):
+        return super().execute(_normalize_sqlite_now(sql), parameters)
+
+    def executemany(self, sql, seq_of_parameters, /):
+        return super().executemany(_normalize_sqlite_now(sql), seq_of_parameters)
+
+
+def get_local_now():
+    return datetime.now().replace(microsecond=0)
+
+
+def get_local_now_text():
+    return get_local_now().strftime("%Y-%m-%d %H:%M:%S")
+
+
+def _normalize_sqlite_now(query):
+    if not isinstance(query, str):
+        return query
+
+    normalized = query
+    normalized = re.sub(
+        r"datetime\(\s*'now'\s*\)",
+        "datetime('now','localtime')",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r'datetime\(\s*"now"\s*\)',
+        'datetime("now","localtime")',
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"datetime\(\s*'now'\s*,(?!\s*'localtime')",
+        "datetime('now','localtime',",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r'datetime\(\s*"now"\s*,(?!\s*"localtime")',
+        'datetime("now","localtime",',
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"date\(\s*'now'\s*\)",
+        "date('now','localtime')",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r'date\(\s*"now"\s*\)',
+        'date("now","localtime")',
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r"date\(\s*'now'\s*,(?!\s*'localtime')",
+        "date('now','localtime',",
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    normalized = re.sub(
+        r'date\(\s*"now"\s*,(?!\s*"localtime")',
+        'date("now","localtime",',
+        normalized,
+        flags=re.IGNORECASE,
+    )
+    return normalized
+
+
 def get_connection():
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=SyncedConnection)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -37,6 +118,7 @@ def get_connection():
 
 def execute_write(conn, query, params=(), commit=False, retries=4, base_delay=0.04):
     """Execute a single write query with lightweight retry on SQLite lock contention."""
+    query = _normalize_sqlite_now(query)
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -59,6 +141,7 @@ def execute_write(conn, query, params=(), commit=False, retries=4, base_delay=0.
 
 def execute_many_write(conn, query, seq_of_params, commit=False, retries=4, base_delay=0.04):
     """Execute many write queries with retry for lock contention."""
+    query = _normalize_sqlite_now(query)
     last_error = None
     for attempt in range(retries + 1):
         try:
@@ -123,7 +206,7 @@ def is_recent_duplicate_message(conn, sender, receiver, organization, branch, me
     if parsed is None:
         return False
 
-    now = datetime.now()
+    now = get_local_now()
     if parsed > now:
         return False
 
@@ -149,7 +232,7 @@ def log_action(conn, username, action, role, organization):
         conn.execute("""
         INSERT INTO audit_logs(username, action, role, organization, created_at)
         VALUES (?,?,?,?,?)
-        """, (username, action, role, organization, str(datetime.now())))
+        """, (username, action, role, organization, get_local_now_text()))
         conn.commit()
     except:
         pass
