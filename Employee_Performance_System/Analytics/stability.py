@@ -237,6 +237,186 @@ def detect_favoritism(ratings_df, users_df=None):
 
 
 # =====================================================
+# 🔥 POWER ABUSE / RETALIATION RISK DETECTION
+# =====================================================
+def detect_power_abuse_and_retaliation(ratings_df, users_df=None, leaves_df=None, warnings_df=None, messages_df=None):
+    """Detects evidence-based manager abuse, retaliation, and favoritism-risk patterns."""
+
+    insights = []
+
+    if users_df is None or users_df.empty or "username" not in users_df.columns or "role" not in users_df.columns:
+        return insights
+
+    users_work = users_df.copy()
+    users_work["username"] = users_work["username"].astype(str).str.strip()
+    role_norm = users_work["role"].astype(str).str.lower()
+    admins = users_work[role_norm.isin(["admin", "manager"])]["username"].dropna().astype(str).str.strip().unique().tolist()
+
+    if not admins:
+        return insights
+
+    ratings_work = pd.DataFrame() if ratings_df is None else ratings_df.copy()
+    if not ratings_work.empty and {"rater", "rated", "score"}.issubset(ratings_work.columns):
+        ratings_work["rater"] = ratings_work["rater"].astype(str).str.strip()
+        ratings_work["rated"] = ratings_work["rated"].astype(str).str.strip()
+        ratings_work["score"] = pd.to_numeric(ratings_work["score"], errors="coerce")
+        ratings_work = ratings_work.dropna(subset=["score"])
+
+        for admin in admins:
+            admin_given = ratings_work[ratings_work["rater"] == admin]
+            if admin_given.empty:
+                continue
+
+            if admin_given["rated"].nunique() >= 2 and len(admin_given) >= 4:
+                summary = (
+                    admin_given.groupby("rated")["score"]
+                    .agg(["mean", "count"])
+                    .reset_index()
+                    .sort_values("mean")
+                )
+                if len(summary) >= 2:
+                    low_row = summary.iloc[0]
+                    high_row = summary.iloc[-1]
+                    spread = float(high_row["mean"] - low_row["mean"])
+                    if spread >= 25 and int(low_row["count"]) >= 2 and int(high_row["count"]) >= 2:
+                        insights.append(
+                            f"⚠ POWER ABUSE RISK: Admin {admin} rates {str(high_row['rated'])} much higher ({float(high_row['mean']):.0f}%) than {str(low_row['rated'])} ({float(low_row['mean']):.0f}%) - review for favoritism or targeting"
+                        )
+
+            for employee in admin_given["rated"].dropna().astype(str).unique():
+                target_scores = admin_given[admin_given["rated"] == employee]["score"]
+                peer_scores = ratings_work[(ratings_work["rated"] == employee) & (ratings_work["rater"] != admin)]["score"]
+
+                if len(target_scores) >= 2 and len(peer_scores) >= 2:
+                    admin_avg = float(target_scores.mean())
+                    peer_avg = float(peer_scores.mean())
+
+                    if admin_avg <= 50 and (peer_avg - admin_avg) >= 18 and peer_avg >= 60:
+                        insights.append(
+                            f"🚨 RETALIATION RISK: Admin {admin} rates {employee} much lower ({admin_avg:.0f}%) than peers ({peer_avg:.0f}%)"
+                        )
+                    elif admin_avg >= 78 and (admin_avg - peer_avg) >= 18 and peer_avg <= 60:
+                        insights.append(
+                            f"⚠ FAVOR PROTECTION RISK: Admin {admin} consistently shields {employee} with high ratings ({admin_avg:.0f}%) while peers average {peer_avg:.0f}%"
+                        )
+
+                emp_to_admin = ratings_work[(ratings_work["rater"] == employee) & (ratings_work["rated"] == admin)]["score"]
+                if len(target_scores) >= 2 and len(emp_to_admin) >= 2:
+                    admin_to_emp_avg = float(target_scores.mean())
+                    emp_to_admin_avg = float(emp_to_admin.mean())
+                    if admin_to_emp_avg >= 82 and emp_to_admin_avg >= 82:
+                        insights.append(
+                            f"⚠ BOUNDARY RISK: Admin {admin} and {employee} exchange unusually high mutual ratings ({admin_to_emp_avg:.0f}% / {emp_to_admin_avg:.0f}%)"
+                        )
+
+    if warnings_df is not None and not warnings_df.empty and {"username", "message"}.issubset(warnings_df.columns):
+        warn_work = warnings_df.copy()
+        warn_work["message"] = warn_work["message"].astype(str)
+        warn_work["username"] = warn_work["username"].astype(str).str.strip()
+        warn_work["sender_guess"] = warn_work["message"].str.extract(r"\[From\s+([^\]]+)\]", expand=False).fillna("").astype(str).str.strip()
+        warn_work = warn_work[warn_work["sender_guess"].isin(admins)]
+
+        for (sender_guess, target_user), group in warn_work.groupby(["sender_guess", "username"]):
+            if len(group) >= 3:
+                insights.append(
+                    f"🚨 DISCIPLINE TARGETING RISK: Admin {sender_guess} issued {len(group)} warnings to {target_user} - review for repeated pressure or retaliation"
+                )
+
+    if leaves_df is not None and not leaves_df.empty and {"username", "status", "approved_by"}.issubset(leaves_df.columns):
+        leave_work = leaves_df.copy()
+        leave_work["username"] = leave_work["username"].astype(str).str.strip()
+        leave_work["status"] = leave_work["status"].astype(str).str.lower().str.strip()
+        leave_work["approved_by"] = leave_work["approved_by"].fillna("").astype(str).str.strip()
+        leave_work = leave_work[leave_work["approved_by"].isin(admins)]
+        adverse = leave_work[leave_work["status"].isin(["rejected", "reapply"])]
+
+        for (approver, target_user), group in adverse.groupby(["approved_by", "username"]):
+            if len(group) >= 2:
+                total_reviews = len(leave_work[leave_work["approved_by"] == approver])
+                if total_reviews and (len(group) / total_reviews) >= 0.4:
+                    insights.append(
+                        f"⚠ LEAVE PRESSURE RISK: Admin {approver} made {len(group)} adverse leave decisions for {target_user} - review for fairness or retaliation"
+                    )
+
+    return list(set(insights))
+
+
+# =====================================================
+# 🔥 EMPLOYEE-TO-EMPLOYEE GANG-UP / TARGETING DETECTION
+# =====================================================
+def detect_peer_gangup_and_targeting(ratings_df, users_df=None):
+    """Detects peer targeting, clique favoritism, and gang-up behavior among non-admin staff."""
+
+    insights = []
+
+    if ratings_df is None or ratings_df.empty:
+        return insights
+
+    ratings_work = ratings_df.copy()
+    ratings_work["rater"] = ratings_work["rater"].astype(str).str.strip()
+    ratings_work["rated"] = ratings_work["rated"].astype(str).str.strip()
+    ratings_work["score"] = pd.to_numeric(ratings_work["score"], errors="coerce")
+    ratings_work = ratings_work.dropna(subset=["score"])
+
+    non_admin_users = None
+    if users_df is not None and not users_df.empty and {"username", "role"}.issubset(users_df.columns):
+        role_norm = users_df["role"].astype(str).str.lower()
+        non_admin_users = set(
+            users_df[~role_norm.isin(["admin", "manager", "superadmin", "super_admin", "master"])]["username"]
+            .dropna()
+            .astype(str)
+            .str.strip()
+            .tolist()
+        )
+        ratings_work = ratings_work[
+            ratings_work["rater"].isin(non_admin_users) & ratings_work["rated"].isin(non_admin_users)
+        ]
+
+    if ratings_work.empty:
+        return insights
+
+    for target in ratings_work["rated"].unique():
+        target_rows = ratings_work[ratings_work["rated"] == target]
+        low_rows = target_rows[target_rows["score"] < 45]
+        low_raters = sorted(set(low_rows["rater"].astype(str)))
+        total_raters = int(target_rows["rater"].nunique())
+
+        if len(low_raters) >= 3:
+            joined = ", ".join(low_raters[:5])
+            insights.append(
+                f"🚨 PEER GANG-UP RISK: {target} is being rated very low by {len(low_raters)} peers ({joined})"
+            )
+        elif total_raters >= 4 and len(low_raters) >= max(2, int(total_raters * 0.6)):
+            joined = ", ".join(low_raters[:5])
+            insights.append(
+                f"⚠ PEER TARGETING CLUSTER: {target} receives concentrated low ratings from {len(low_raters)}/{total_raters} peers ({joined})"
+            )
+
+    for rater in ratings_work["rater"].unique():
+        rater_rows = ratings_work[ratings_work["rater"] == rater]
+        if rater_rows.empty:
+            continue
+
+        low_targets = rater_rows[rater_rows["score"] < 40]["rated"].value_counts()
+        for target, count in low_targets.items():
+            if int(count) >= 2:
+                insights.append(
+                    f"⚠ REPEATED PEER TARGETING: {rater} repeatedly rates {target} very low ({int(count)} times)"
+                )
+
+        high_targets = rater_rows[rater_rows["score"] > 85]["rated"].value_counts()
+        for target, count in high_targets.items():
+            if int(count) >= 3:
+                mutual_scores = ratings_work[(ratings_work["rater"] == target) & (ratings_work["rated"] == rater)]["score"]
+                if not mutual_scores.empty and float(mutual_scores.mean()) > 80:
+                    insights.append(
+                        f"⚠ PEER CLIQUE / MUTUAL FAVORITISM: {rater} and {target} exchange unusually high scores"
+                    )
+
+    return list(set(insights))
+
+
+# =====================================================
 # 🔥 ISOLATION & LOW PERFORMER DETECTION
 # =====================================================
 def detect_isolation_and_low_performers(ratings_df, users_df=None):

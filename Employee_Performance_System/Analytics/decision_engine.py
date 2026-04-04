@@ -5,6 +5,8 @@ from datetime import datetime
 try:
     from .stability import (
         detect_favoritism,
+        detect_power_abuse_and_retaliation,
+        detect_peer_gangup_and_targeting,
         detect_isolation_and_low_performers,
         detect_bad_seed_toxic_influence,
         calculate_team_health_score
@@ -27,6 +29,8 @@ try:
 except ImportError:
     from Analytics.stability import (
         detect_favoritism,
+        detect_power_abuse_and_retaliation,
+        detect_peer_gangup_and_targeting,
         detect_isolation_and_low_performers,
         detect_bad_seed_toxic_influence,
         calculate_team_health_score
@@ -54,6 +58,7 @@ def generate_super_admin_intelligence(
     leaves_df=None,
     users_df=None,
     messages_df=None,
+    warnings_df=None,
     schedules_df=None
 ):
     """
@@ -100,6 +105,8 @@ def generate_super_admin_intelligence(
     # DEEP ANALYSIS ACROSS ALL DIMENSIONS
     # =========================
     favoritism_flags = detect_favoritism(ratings_df, users_df)
+    power_abuse_flags = detect_power_abuse_and_retaliation(ratings_df, users_df, leaves_df, warnings_df, messages_df)
+    peer_gangup_flags = detect_peer_gangup_and_targeting(ratings_df, users_df)
     isolation_flags = detect_isolation_and_low_performers(ratings_df, users_df)
     bad_seed_flags = detect_bad_seed_toxic_influence(ratings_df, messages_df)
     
@@ -123,8 +130,9 @@ def generate_super_admin_intelligence(
         f"📊 {health_status} | Overall Score: {overall_health_score:.1f}%",
         f"👥 Employees: {ratings_df['rated'].nunique()} | Raters: {ratings_df['rater'].nunique()}",
         f"⚠ Favoritism Flags: {len(favoritism_flags)}",
+        f"� Power Abuse Flags: {len(power_abuse_flags)}",
         f"👥 Groups Detected: {len(group_dict)}",
-        f"🚨 Critical Issues: {len(isolation_flags) + len(bad_seed_flags)}",
+        f"🚨 Critical Issues: {len(isolation_flags) + len(bad_seed_flags) + len([f for f in power_abuse_flags if '🚨' in f])}",
     ]
     
     # =========================
@@ -146,7 +154,17 @@ def generate_super_admin_intelligence(
     for flag in bad_manager_insights:
         if "BAD MANAGER" in flag:
             report["critical_alerts"].append(flag)
-    
+
+    # Critical: Power abuse / retaliation
+    for flag in power_abuse_flags:
+        if any(marker in flag for marker in ["RETALIATION RISK", "DISCIPLINE TARGETING RISK", "POWER ABUSE RISK"]):
+            report["critical_alerts"].append(flag)
+
+    # Critical: Peer gang-up / clique targeting
+    for flag in peer_gangup_flags:
+        if any(marker in flag for marker in ["PEER GANG-UP RISK", "PEER TARGETING CLUSTER"]):
+            report["critical_alerts"].append(flag)
+
     # Critical: Groups with possible relationships/dating
     for insight in group_insights:
         if "DATING" in insight or "RELATIONSHIP" in insight:
@@ -166,6 +184,16 @@ def generate_super_admin_intelligence(
     for flag in favoritism_flags:
         if "FAVORITISM" in flag:
             report["recommendations"].append(f"ACTION: Investigate & address - {flag}")
+
+    # Add power abuse / retaliation recommendations
+    for flag in power_abuse_flags:
+        if any(marker in flag for marker in ["RETALIATION RISK", "DISCIPLINE TARGETING RISK", "LEAVE PRESSURE RISK", "POWER ABUSE RISK", "BOUNDARY RISK"]):
+            report["recommendations"].append(f"SAFEGUARD: Escalate to super admin review - {flag}")
+
+    # Add peer gang-up recommendations
+    for flag in peer_gangup_flags:
+        if any(marker in flag for marker in ["PEER GANG-UP RISK", "PEER TARGETING CLUSTER", "REPEATED PEER TARGETING", "PEER CLIQUE / MUTUAL FAVORITISM"]):
+            report["recommendations"].append(f"PEER REVIEW: Investigate team dynamics - {flag}")
     
     # Add retention tactics for withdrawal employees
     for flag in withdrawal_flags:
@@ -205,9 +233,10 @@ def generate_super_admin_intelligence(
     at_risk = []
     at_risk_reasons = {}
     high_performers = []
+    admins_of_concern = []
     
-    for insight in isolation_flags + bad_seed_flags + withdrawal_flags:
-        if any(x in insight for x in ["ISOLATION", "CRITICAL", "BAD SEED", "WITHDRAWAL"]):
+    for insight in isolation_flags + bad_seed_flags + withdrawal_flags + peer_gangup_flags:
+        if any(x in insight for x in ["ISOLATION", "CRITICAL", "BAD SEED", "WITHDRAWAL", "PEER GANG-UP", "PEER TARGETING"]):
             parts = insight.split(":")
             if len(parts) > 1:
                 person = parts[1].strip().split()[0]
@@ -228,13 +257,20 @@ def generate_super_admin_intelligence(
         if len(parts) > 1:
             person = parts[1].strip().split()[0]
             high_performers.append(person)
-    
+
+    if users_df is not None and not users_df.empty and "username" in users_df.columns and "role" in users_df.columns:
+        admin_names = users_df[users_df["role"].astype(str).str.lower().isin(["admin", "manager"])]["username"].astype(str).tolist()
+        for admin_name in admin_names:
+            if any(admin_name in str(flag) for flag in power_abuse_flags):
+                admins_of_concern.append(admin_name)
+
     at_risk_unique = list(set(at_risk))[:5]
     report["individuals_of_focus"] = {
         "problematic": list(set(problematic))[:5],
         "at_risk_retention": at_risk_unique,
         "at_risk_reasons": {k: at_risk_reasons.get(k, [])[:3] for k in at_risk_unique},
         "high_performers": list(set(high_performers))[:5],
+        "admins_of_concern": list(set(admins_of_concern))[:5],
     }
     
     # =========================
@@ -260,6 +296,12 @@ def generate_super_admin_intelligence(
     # ISOLATION ANALYSIS (full detail for dedicated UI section)
     # =========================
     report["isolation_analysis"] = isolation_flags
+
+    # =========================
+    # POWER ABUSE / RETALIATION ANALYSIS
+    # =========================
+    report["power_abuse_analysis"] = power_abuse_flags
+    report["peer_gangup_analysis"] = peer_gangup_flags
 
     return report
 

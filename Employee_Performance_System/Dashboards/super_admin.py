@@ -991,6 +991,100 @@ def super_admin_dashboard():
                 else:
                     st.success("âœ… No biasness or favoritism patterns detected.")
 
+                # --- POWER ABUSE / RETALIATION ---
+                st.divider()
+                st.markdown("### Power Abuse / Retaliation Risk")
+
+                power_abuse_flags = intel.get("power_abuse_analysis", [])
+                if power_abuse_flags:
+                    abuse_critical = [f for f in power_abuse_flags if "RETALIATION RISK" in f or "DISCIPLINE TARGETING RISK" in f or "POWER ABUSE RISK" in f]
+                    abuse_boundary = [f for f in power_abuse_flags if "BOUNDARY RISK" in f or "FAVOR PROTECTION RISK" in f]
+                    abuse_other = [f for f in power_abuse_flags if f not in abuse_critical and f not in abuse_boundary]
+                    abuse_people = extract_user_mentions(power_abuse_flags, org_usernames)
+
+                    ab1, ab2, ab3 = st.columns(3)
+                    ab1.metric("Findings", len(power_abuse_flags))
+                    ab2.metric("Individuals", len(abuse_people))
+                    ab3.metric("High Severity", len(abuse_critical))
+
+                    if abuse_people:
+                        abuse_people_df = pd.DataFrame({"Individuals Mentioned": abuse_people})
+                        st.markdown("**Individuals Mentioned**")
+                        st.dataframe(abuse_people_df, use_container_width=True, hide_index=True)
+
+                    abuse_rows = []
+                    for flag in power_abuse_flags:
+                        if "RETALIATION RISK" in flag or "DISCIPLINE TARGETING RISK" in flag or "POWER ABUSE RISK" in flag:
+                            sev = "High"
+                        elif "BOUNDARY RISK" in flag or "FAVOR PROTECTION RISK" in flag:
+                            sev = "Medium"
+                        else:
+                            sev = "Review"
+                        abuse_rows.append({"Severity": sev, "Finding": flag})
+                    st.dataframe(pd.DataFrame(abuse_rows), use_container_width=True)
+
+                    if abuse_critical:
+                        st.markdown("**Critical Super Admin Review**")
+                        for f in abuse_critical:
+                            st.error(f)
+                    if abuse_boundary:
+                        st.markdown("**Boundary / Favor Protection Risk**")
+                        for f in abuse_boundary:
+                            st.warning(f)
+                    if abuse_other:
+                        st.markdown("**Other Power-Imbalance Signals**")
+                        for f in abuse_other:
+                            st.warning(f)
+                else:
+                    st.success("No power abuse or retaliation patterns detected from current evidence.")
+
+                # --- PEER GANG-UP / TARGETING ---
+                st.divider()
+                st.markdown("### Peer Gang-Up / Targeting Risk")
+
+                peer_gangup_flags = intel.get("peer_gangup_analysis", [])
+                if peer_gangup_flags:
+                    peer_critical = [f for f in peer_gangup_flags if "PEER GANG-UP RISK" in f or "PEER TARGETING CLUSTER" in f]
+                    peer_repeat = [f for f in peer_gangup_flags if "REPEATED PEER TARGETING" in f]
+                    peer_clique = [f for f in peer_gangup_flags if "PEER CLIQUE / MUTUAL FAVORITISM" in f]
+                    peer_people = extract_user_mentions(peer_gangup_flags, org_usernames)
+
+                    pg1, pg2, pg3 = st.columns(3)
+                    pg1.metric("Findings", len(peer_gangup_flags))
+                    pg2.metric("Individuals", len(peer_people))
+                    pg3.metric("Critical Cases", len(peer_critical))
+
+                    if peer_people:
+                        peer_people_df = pd.DataFrame({"Individuals Mentioned": peer_people})
+                        st.markdown("**Individuals Mentioned**")
+                        st.dataframe(peer_people_df, use_container_width=True, hide_index=True)
+
+                    peer_rows = []
+                    for flag in peer_gangup_flags:
+                        if "PEER GANG-UP RISK" in flag or "PEER TARGETING CLUSTER" in flag:
+                            sev = "Critical"
+                        elif "REPEATED PEER TARGETING" in flag:
+                            sev = "High"
+                        else:
+                            sev = "Review"
+                        peer_rows.append({"Severity": sev, "Finding": flag})
+                    st.dataframe(pd.DataFrame(peer_rows), use_container_width=True)
+
+                    if peer_critical:
+                        st.markdown("**Critical Peer Pressure / Gang-Up Cases**")
+                        for f in peer_critical:
+                            st.error(f)
+                    if peer_repeat:
+                        st.markdown("**Repeated Targeting by Individuals**")
+                        for f in peer_repeat:
+                            st.warning(f)
+                    if peer_clique:
+                        st.markdown("**Clique / Mutual Favoritism Signals**")
+                        for f in peer_clique:
+                            st.warning(f)
+                else:
+                    st.success("No employee-to-employee gang-up or peer targeting patterns detected.")
+
                 # --- ISOLATION ANALYSIS ---
                 st.divider()
                 st.markdown("### ðŸšª Isolation Analysis")
@@ -1069,6 +1163,8 @@ def super_admin_dashboard():
 
                 who_rows = []
                 who_rows.extend(build_who_against_who_rows(favoritism_flags, org_usernames, "Bias/Favoritism"))
+                who_rows.extend(build_who_against_who_rows(power_abuse_flags, org_usernames, "Power Abuse"))
+                who_rows.extend(build_who_against_who_rows(peer_gangup_flags, org_usernames, "Peer Gang-Up"))
                 who_rows.extend(build_who_against_who_rows(isolation_flags, org_usernames, "Isolation"))
                 who_rows.extend(build_who_against_who_rows(critical, org_usernames, "Critical Alerts"))
                 who_rows.extend(build_who_against_who_rows(intel.get("recommendations", []), org_usernames, "Recommendations"))

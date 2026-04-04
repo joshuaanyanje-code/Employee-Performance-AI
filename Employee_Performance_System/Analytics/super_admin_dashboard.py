@@ -644,14 +644,40 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
     # =========================
     # GET LEAVES
     # =========================
-    cursor.execute("""
-    SELECT * FROM leaves
-    WHERE organization = ?
-    """, (organization,))
+    if branch:
+        cursor.execute("""
+        SELECT * FROM leaves
+        WHERE organization = ? AND branch = ?
+        """, (organization, branch))
+    else:
+        cursor.execute("""
+        SELECT * FROM leaves
+        WHERE organization = ?
+        """, (organization,))
     
     leaves_data = cursor.fetchall()
-    leaves_cols = ["id", "username", "organization", "branch", "start_date", "end_date", "reason", "status"]
+    leaves_cols = ["id", "username", "organization", "branch", "start_date", "end_date", "reason", "status", "approved_by", "admin_note", "reviewed_at"]
     leaves_df = pd.DataFrame(leaves_data, columns=leaves_cols) if leaves_data else pd.DataFrame()
+
+    # =========================
+    # GET WARNINGS
+    # =========================
+    if branch:
+        cursor.execute("""
+        SELECT * FROM warnings
+        WHERE organization = ? AND branch = ?
+        ORDER BY created_at DESC
+        """, (organization, branch))
+    else:
+        cursor.execute("""
+        SELECT * FROM warnings
+        WHERE organization = ?
+        ORDER BY created_at DESC
+        """, (organization,))
+
+    warnings_data = cursor.fetchall()
+    warnings_cols = ["id", "username", "organization", "branch", "type", "message", "created_at"]
+    warnings_df = pd.DataFrame(warnings_data, columns=warnings_cols) if warnings_data else pd.DataFrame()
 
     # =========================
     # GET BRANCHES
@@ -703,6 +729,7 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
         leaves_df if not leaves_df.empty else None,
         users_df if not users_df.empty else None,
         messages_df if not messages_df.empty else None,
+        warnings_df if not warnings_df.empty else None,
     )
     
     # =========================
@@ -801,6 +828,10 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
     )
     dashboard["recommendations"] = adaptive_recs
     dashboard["recommendation_context"] = rec_context
+    dashboard["favoritism_analysis"] = intelligence.get("favoritism_analysis", [])
+    dashboard["isolation_analysis"] = intelligence.get("isolation_analysis", [])
+    dashboard["power_abuse_analysis"] = intelligence.get("power_abuse_analysis", [])
+    dashboard["peer_gangup_analysis"] = intelligence.get("peer_gangup_analysis", [])
     
     return dashboard
 
