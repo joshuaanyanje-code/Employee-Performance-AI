@@ -476,9 +476,6 @@ def kiosk_dashboard():
         st.session_state["kiosk_view"] = "home"
     kiosk_view = st.session_state["kiosk_view"]
 
-    if kiosk_view != "home":
-        st.caption(f"Organization: {org} | Branch: {branch}")
-
     # ==============================
     # 🔒 DEVICE LOCK (FINAL)
     # ==============================
@@ -488,9 +485,6 @@ def kiosk_dashboard():
     if st.session_state["locked_branch"] != branch:
         st.error(f"🚫 This device is permanently locked to '{st.session_state['locked_branch']}'")
         st.stop()
-
-    if kiosk_view != "home":
-        st.success(f"🔒 Locked to branch: {branch}")
 
     # ==============================
     # VALIDATE BRANCH
