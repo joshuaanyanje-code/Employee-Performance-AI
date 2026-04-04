@@ -349,7 +349,7 @@ def kiosk_dashboard():
         .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
         button {height:58px; font-size:18px; font-weight:bold;}
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
-            width: min(100%, 360px);
+            width: min(100%, 320px);
             display: block;
             margin: 0 auto;
             box-sizing: border-box;
