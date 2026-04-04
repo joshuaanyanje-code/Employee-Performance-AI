@@ -63,6 +63,21 @@ def home_kiosk_button(label, key):
         return st.button(label, key=key, use_container_width=True, type="primary")
 
 
+def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
+    secondary_html = f"<div class='branch-name'>{secondary_title}</div>" if secondary_title else ""
+    tertiary_html = f"<div class='manager-name'>{tertiary_title}</div>" if tertiary_title else ""
+    st.markdown(
+        f"""
+        <div class='home-kiosk-title'>
+            <div class='org-name'>{primary_title}</div>
+            {secondary_html}
+            {tertiary_html}
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def _safe_read(conn, query, params=None):
     try:
         if params is None:
@@ -518,15 +533,10 @@ def kiosk_dashboard():
     # HOME
     # ==============================================================
     if kiosk_view == "home":
-        st.markdown(
-            f"""
-            <div class='home-kiosk-title'>
-                <div class='org-name'>{org}</div>
-                <div class='branch-name'>{branch}</div>
-                <div class='manager-name'>Branch Manager: <b>{manager_name}</b></div>
-            </div>
-            """,
-            unsafe_allow_html=True,
+        render_kiosk_hero(
+            org,
+            branch,
+            f"Branch Manager: <b>{manager_name}</b>",
         )
 
         st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
@@ -545,11 +555,15 @@ def kiosk_dashboard():
     # GUEST EXPERIENCE
     # ==============================================================
     elif kiosk_view == "guest":
+        render_kiosk_hero(
+            "Guest Experience",
+            f"{org} - {branch}",
+            f"Branch Manager: <b>{manager_name}</b>",
+        )
+
         if st.button("← Back", key="guest_back"):
             st.session_state["kiosk_view"] = "home"
             refresh()
-
-        st.subheader("⭐ Guest Experience")
 
         feedback_targets = _safe_read(
             conn,
@@ -621,7 +635,11 @@ def kiosk_dashboard():
     # STAFF CHECK IN
     # ==============================================================
     elif kiosk_view == "staff":
-        st.subheader("👤 Staff Check In")
+        render_kiosk_hero(
+            "Staff Check In",
+            f"{org} - {branch}",
+            f"Branch Manager: <b>{manager_name}</b>",
+        )
         st.divider()
 
         if "kiosk_user" not in st.session_state:
