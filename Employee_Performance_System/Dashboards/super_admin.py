@@ -2608,9 +2608,13 @@ def super_admin_dashboard():
                     st.info("No ratings data for this branch.")
                 else:
                     st.markdown("### Branch Performance Ladder")
-                    branch_per_user = ratings.groupby("rated")["score"].mean().sort_values(ascending=False)
-                    top_branch = branch_per_user.head(5).reset_index().rename(columns={"rated": "User", "score": "Avg Score"})
-                    low_branch = branch_per_user.tail(5).sort_values("Avg Score", ascending=True).reset_index(drop=True)
+                    branch_per_user = (
+                        ratings.groupby("rated", as_index=False)["score"]
+                        .mean()
+                        .rename(columns={"rated": "User", "score": "Avg Score"})
+                    )
+                    top_branch = branch_per_user.sort_values("Avg Score", ascending=False).head(5).reset_index(drop=True)
+                    low_branch = branch_per_user.sort_values("Avg Score", ascending=True).head(5).reset_index(drop=True)
 
                     lp1, lp2, lp3 = st.columns(3)
                     lp1.metric("Branch Average", round(float(ratings["score"].mean()), 1))
