@@ -13,7 +13,7 @@ except Exception:
     holiday_lib = None
     HOLIDAYS_OK = False
 
-from database.db import get_connection, hash_password, log_action
+from database.db import get_connection, hash_password, log_action, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -67,6 +67,30 @@ def safe_read(query, conn, params=None):
         return pd.read_sql(query, conn, params=params) if params else pd.read_sql(query, conn)
     except Exception:
         return pd.DataFrame()
+
+
+def set_flash_message(key, level, text):
+    st.session_state[key] = {"level": level, "text": text}
+
+
+def show_flash_message(key):
+    payload = st.session_state.pop(key, None)
+    if not payload:
+        return
+
+    level = str(payload.get("level", "info")).lower()
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return
+
+    if level == "success":
+        st.success(text)
+    elif level == "warning":
+        st.warning(text)
+    elif level == "error":
+        st.error(text)
+    else:
+        st.info(text)
 
 
 def extract_user_mentions(findings, usernames):
@@ -1389,6 +1413,7 @@ def super_admin_dashboard():
     # =========================================================
     elif menu == "Management" and management_view == "Users":
         st.subheader("Users")
+        show_flash_message("super_admin_user_flash")
 
         users_df = apply_branch_scope(safe_read(
             "SELECT id, username, role, phone, branch, organization, status FROM users WHERE organization=?",
@@ -1495,7 +1520,12 @@ def super_admin_dashboard():
                             )
                             conn.commit()
                             log_action(conn, user, "CREATE USER", u, org)
-                            st.success(f"User '{u}' created in branch '{br}'.")
+                            set_flash_message(
+                                "super_admin_user_flash",
+                                "success",
+                                f"User '{u.strip()}' created in branch '{br}'.",
+                            )
+                            st.rerun()
 
         with tab_manage:
             if safe_df(users_df):
@@ -1550,6 +1580,7 @@ def super_admin_dashboard():
     # =========================================================
     elif menu == "Management" and management_view == "Branches":
         st.subheader("Branches")
+        show_flash_message("super_admin_branch_flash")
 
         branches_df = safe_read("""
             SELECT b.id, b.name, b.organization, b.status,
@@ -1592,7 +1623,12 @@ def super_admin_dashboard():
                             )
                             conn.commit()
                             log_action(conn, user, "ADD BRANCH", new_branch, org)
-                            st.success(f"Branch '{new_branch}' created.")
+                            set_flash_message(
+                                "super_admin_branch_flash",
+                                "success",
+                                f"Branch '{new_branch.strip()}' created.",
+                            )
+                            st.rerun()
 
         with tab_edit:
             if branches:
@@ -1759,6 +1795,7 @@ def super_admin_dashboard():
 
         # ---- MESSAGES ----
         with tab_messages:
+            show_flash_message("super_admin_message_flash")
             msgs_df = safe_read(
                 "SELECT * FROM messages WHERE organization=? ORDER BY id DESC",
                 conn, params=(org,)
@@ -1780,24 +1817,45 @@ def super_admin_dashboard():
 
                         col_r, col_imp, col_del = st.columns(3)
                         with col_r:
-                            with st.form(f"reply_{mid}", clear_on_submit=False):
+                            with st.form(f"reply_{mid}", clear_on_submit=True):
                                 reply_txt = st.text_area("Reply", key=f"reply_txt_{mid}")
                                 if st.form_submit_button("Send Reply"):
-                                    if reply_txt.strip():
+                                    clean_reply = reply_txt.strip()
+                                    reply_branch = str(msg.get("branch", "") or "").strip()
+                                    if clean_reply:
+                                        if is_recent_duplicate_message(
+                                            conn,
+                                            user,
+                                            sender_txt,
+                                            org,
+                                            reply_branch,
+                                            clean_reply,
+                                        ):
+                                            set_flash_message(
+                                                "super_admin_message_flash",
+                                                "warning",
+                                                f"Duplicate reply blocked. '{sender_txt}' already received that message.",
+                                            )
+                                            st.rerun()
                                         try:
                                             conn.execute(
                                                 """INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
                                                    VALUES(?,?,?,?,?,datetime('now'))""",
-                                                (user, sender_txt, msg.get("branch",""), org, reply_txt.strip())
+                                                (user, sender_txt, reply_branch, org, clean_reply)
                                             )
                                         except Exception:
                                             conn.execute(
                                                 """INSERT INTO messages(sender,receiver,organization,message,created_at)
                                                    VALUES(?,?,?,?,datetime('now'))""",
-                                                (user, sender_txt, org, reply_txt.strip())
+                                                (user, sender_txt, org, clean_reply)
                                             )
                                         conn.commit()
-                                        st.success("Reply sent.")
+                                        set_flash_message(
+                                            "super_admin_message_flash",
+                                            "success",
+                                            f"Reply sent to {sender_txt}.",
+                                        )
+                                        st.rerun()
                                     else:
                                         st.error("Reply cannot be empty.")
 

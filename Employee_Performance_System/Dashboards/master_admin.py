@@ -48,6 +48,30 @@ def safe_read(query, conn, params=None):
         return pd.DataFrame()
 
 
+def set_flash_message(key, level, text):
+    st.session_state[key] = {"level": level, "text": text}
+
+
+def show_flash_message(key):
+    payload = st.session_state.pop(key, None)
+    if not payload:
+        return
+
+    level = str(payload.get("level", "info")).lower()
+    text = str(payload.get("text", "")).strip()
+    if not text:
+        return
+
+    if level == "success":
+        st.success(text)
+    elif level == "warning":
+        st.warning(text)
+    elif level == "error":
+        st.error(text)
+    else:
+        st.info(text)
+
+
 # ==============================
 # SCHEMA MIGRATION (safe, idempotent)
 # ==============================
@@ -785,6 +809,7 @@ def master_admin_dashboard():
     elif menu == "🏢 Organizations":
 
         st.subheader("🏢 Manage Organizations")
+        show_flash_message("master_org_flash")
 
         tab_list, tab_create, tab_edit, tab_delete, tab_passwd = st.tabs([
             "📋 List", "➕ Create", "✏️ Edit", "🗑️ Delete", "🔑 Reset Password"
@@ -831,19 +856,41 @@ def master_admin_dashboard():
                         st.error("Passwords do not match.")
                     else:
                         try:
-                            expiry = datetime.now() + timedelta(days=30)
-                            execute_write(conn, """
-                                INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
-                                VALUES (?,?,?,?,?,?,?,?)
-                            """, (name, "active", phone, email, location,
-                                  str(datetime.now()), str(expiry), business_type))
-                            execute_write(conn, """
-                                INSERT INTO users(username, password, role, organization, status, phone)
-                                VALUES (?,?,?,?,?,?)
-                            """, (superadmin, hash_password(password), "superadmin", name, "active", phone.strip()))
-                            conn.commit()
-                            st.success(f"✅ Organization '{name}' created! Active for 30 days.")
-                            st.rerun()
+                            org_name = name.strip()
+                            superadmin_name = superadmin.strip()
+                            existing_org = safe_read(
+                                "SELECT id FROM organizations WHERE lower(trim(name)) = lower(trim(?))",
+                                conn,
+                                params=(org_name,),
+                            )
+                            existing_user = safe_read(
+                                "SELECT id FROM users WHERE lower(trim(username)) = lower(trim(?))",
+                                conn,
+                                params=(superadmin_name,),
+                            )
+
+                            if not existing_org.empty:
+                                st.error(f"Organization '{org_name}' already exists.")
+                            elif not existing_user.empty:
+                                st.error(f"Username '{superadmin_name}' already exists.")
+                            else:
+                                expiry = datetime.now() + timedelta(days=30)
+                                execute_write(conn, """
+                                    INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
+                                    VALUES (?,?,?,?,?,?,?,?)
+                                """, (org_name, "active", phone.strip(), email.strip(), location.strip(),
+                                      str(datetime.now()), str(expiry), business_type))
+                                execute_write(conn, """
+                                    INSERT INTO users(username, password, role, organization, status, phone)
+                                    VALUES (?,?,?,?,?,?)
+                                """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", phone.strip()))
+                                conn.commit()
+                                set_flash_message(
+                                    "master_org_flash",
+                                    "success",
+                                    f"Organization '{org_name}' created. Active for 30 days.",
+                                )
+                                st.rerun()
                         except Exception as e:
                             st.error(str(e))
 

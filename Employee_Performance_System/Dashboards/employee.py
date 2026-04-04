@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from database.db import get_connection, verify_password, hash_password, execute_write, execute_many_write
+from database.db import get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 
@@ -16,6 +16,31 @@ except Exception:
 def refresh():
     st.session_state["_r"] = st.session_state.get("_r", 0) + 1
     st.rerun()
+
+
+def refresh_with_message(message, level="success"):
+    st.session_state["_employee_flash"] = {"level": level, "text": str(message or "").strip()}
+    refresh()
+
+
+def show_flash_message():
+    payload = st.session_state.pop("_employee_flash", None)
+    if not payload:
+        return
+
+    text = str(payload.get("text", "")).strip()
+    level = str(payload.get("level", "info")).lower()
+    if not text:
+        return
+
+    if level == "success":
+        st.success(text)
+    elif level == "warning":
+        st.warning(text)
+    elif level == "error":
+        st.error(text)
+    else:
+        st.info(text)
 
 
 def _safe_read(conn, query, params=None):
@@ -123,14 +148,15 @@ def employee_dashboard():
 
     st.title("👨‍💼 Employee Dashboard")
     st.success(f"Welcome {username} | {branch}")
+    show_flash_message()
 
     # ==============================
     # NOTIFICATION COUNT
     # ==============================
     notif_count = pd.read_sql(
-        "SELECT COUNT(*) as c FROM messages WHERE receiver=? AND branch=?",
+        "SELECT COUNT(*) as c FROM messages WHERE receiver=? AND branch=? AND organization=?",
         conn,
-        params=(username, branch)
+        params=(username, branch, org)
     )["c"].iloc[0]
 
     is_mobile = is_mobile_device()
@@ -418,8 +444,8 @@ def employee_dashboard():
     elif page == "Notifications":
 
         msgs = pd.read_sql(
-            "SELECT * FROM messages WHERE receiver=? AND branch=?",
-            conn, params=(username, branch)
+            "SELECT * FROM messages WHERE receiver=? AND branch=? AND organization=? ORDER BY id DESC",
+            conn, params=(username, branch, org)
         )
 
         warns = pd.read_sql(
@@ -443,7 +469,9 @@ def employee_dashboard():
             st.info("No notifications")
 
         for _, r in msgs.iterrows():
-            st.info(r["message"])
+            sender_name = str(r.get("sender", "Management") or "Management")
+            created_at = str(r.get("created_at", ""))[:16]
+            st.info(f"From {sender_name} | {created_at} | {r['message']}")
 
         for _, r in warns.iterrows():
             warn_type = r["type"] if "type" in r else "Warning"
@@ -650,19 +678,51 @@ def employee_dashboard():
     # MESSAGE MANAGEMENT
     # =====================================================
     elif page == "Message Management":
+        inbox_df = _safe_read(
+            conn,
+            """
+            SELECT sender, message, created_at
+            FROM messages
+            WHERE receiver=? AND branch=? AND organization=?
+            ORDER BY id DESC
+            """,
+            params=(username, branch, org),
+        )
+        if not inbox_df.empty:
+            st.markdown("### Replies from Management")
+            st.dataframe(inbox_df, use_container_width=True)
 
-        msg = st.text_area("Message to Management")
+        sent_df = _safe_read(
+            conn,
+            """
+            SELECT receiver, message, created_at
+            FROM messages
+            WHERE sender=? AND branch=? AND organization=?
+            ORDER BY id DESC
+            """,
+            params=(username, branch, org),
+        )
 
-        if st.button("Send"):
-            if not msg.strip():
-                st.error("Message cannot be empty")
-                return
-            execute_write(conn, """
-            INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
-            VALUES (?,?,?,?,?,datetime('now'))
-            """,(username,'management',branch,org,msg.strip()))
-            conn.commit()
-            st.success("Sent to Management")
+        with st.form("employee_message_form", clear_on_submit=True):
+            msg = st.text_area("Message to Management")
+            send = st.form_submit_button("Send")
+            if send:
+                clean_msg = msg.strip()
+                if not clean_msg:
+                    st.error("Message cannot be empty")
+                elif is_recent_duplicate_message(conn, username, "management", org, branch, clean_msg):
+                    refresh_with_message("Duplicate message blocked. The same message was already sent just now.", level="warning")
+                else:
+                    execute_write(conn, """
+                    INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                    VALUES (?,?,?,?,?,datetime('now'))
+                    """,(username,'management',branch,org,clean_msg))
+                    conn.commit()
+                    refresh_with_message("Sent to Management")
+
+        if not sent_df.empty:
+            st.markdown("### Sent Messages")
+            st.dataframe(sent_df, use_container_width=True)
 
     # =====================================================
     # SETTINGS

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
-from database.db import get_connection, hash_password, verify_password, log_action
+from database.db import get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -18,6 +18,31 @@ from Analytics.badges import compute_badges_for_organization, get_badge_icon
 def refresh():
     st.session_state["_admin_refresh"] = st.session_state.get("_admin_refresh", 0) + 1
     st.rerun()
+
+
+def refresh_with_message(message, level="success"):
+    st.session_state["_admin_flash"] = {"level": level, "text": str(message or "").strip()}
+    refresh()
+
+
+def show_flash_message():
+    payload = st.session_state.pop("_admin_flash", None)
+    if not payload:
+        return
+
+    text = str(payload.get("text", "")).strip()
+    level = str(payload.get("level", "info")).lower()
+    if not text:
+        return
+
+    if level == "success":
+        st.success(text)
+    elif level == "warning":
+        st.warning(text)
+    elif level == "error":
+        st.error(text)
+    else:
+        st.info(text)
 
 
 def safe_read(query, conn, params=None):
@@ -120,6 +145,7 @@ def admin_dashboard():
 
     st.title("Admin Dashboard")
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
+    show_flash_message()
 
     is_mobile = is_mobile_device()
 
@@ -308,8 +334,7 @@ def admin_dashboard():
                             )
                             conn.commit()
                             log_action(conn, username, "CREATE EMPLOYEE", new_user.strip(), org)
-                            st.success(f"Employee '{new_user}' created.")
-                            refresh()
+                            refresh_with_message(f"Employee '{new_user.strip()}' created.")
 
         with tab_edit:
             editable = users_df[users_df["username"] != username] if not users_df.empty else pd.DataFrame()
@@ -343,8 +368,7 @@ def admin_dashboard():
                             )
                         conn.commit()
                         log_action(conn, username, "EDIT USER", selected_user, org)
-                        st.success("User updated.")
-                        refresh()
+                        refresh_with_message("User updated.")
 
         with tab_suspend:
             manageable = users_df[users_df["username"] != username] if not users_df.empty else pd.DataFrame()
@@ -363,8 +387,7 @@ def admin_dashboard():
                     )
                     conn.commit()
                     log_action(conn, username, "SUSPEND USER", selected, org)
-                    st.warning(f"{selected} suspended.")
-                    refresh()
+                    refresh_with_message(f"{selected} suspended.", level="warning")
                 if c2.button("Activate User", key="admin_activate_user_btn"):
                     conn.execute(
                         "UPDATE users SET status='active' WHERE username=? AND organization=? AND branch=?",
@@ -372,8 +395,7 @@ def admin_dashboard():
                     )
                     conn.commit()
                     log_action(conn, username, "ACTIVATE USER", selected, org)
-                    st.success(f"{selected} activated.")
-                    refresh()
+                    refresh_with_message(f"{selected} activated.")
 
         st.info("Delete user is disabled for admins. Only super admin can delete users.")
 
@@ -473,8 +495,7 @@ def admin_dashboard():
 
                 conn.commit()
                 log_action(conn, username, action, s_user, org)
-                st.success("Schedule saved.")
-                refresh()
+                refresh_with_message("Schedule saved.")
 
         if not schedules_df.empty:
             del_id = st.selectbox("Delete Schedule Row", schedules_df["id"].tolist(), key="delete_schedule_id")
@@ -485,8 +506,7 @@ def admin_dashboard():
                 )
                 conn.commit()
                 log_action(conn, username, "DELETE SCHEDULE", str(del_id), org)
-                st.warning("Schedule deleted.")
-                refresh()
+                refresh_with_message("Schedule deleted.", level="warning")
 
     # =====================================================
     # ATTENDANCE
@@ -731,8 +751,7 @@ def admin_dashboard():
                                 )
                             conn.commit()
                             log_action(conn, username, "PRE-APPROVE EARLY CLOCK OUT", target_user, org)
-                            st.success("Early clock-out approval saved.")
-                            refresh()
+                            refresh_with_message("Early clock-out approval saved.")
 
             st.markdown("### Lateness Approvals")
             with st.form("preapprove_lateness_form", clear_on_submit=False):
@@ -780,8 +799,7 @@ def admin_dashboard():
                                 )
                             conn.commit()
                             log_action(conn, username, "PRE-APPROVE LATENESS", target_late_user, org)
-                            st.success("Lateness approval saved.")
-                            refresh()
+                            refresh_with_message("Lateness approval saved.")
 
             st.markdown("### Pending Early Clock-Out Requests")
             pending_requests_df = safe_read(
@@ -957,8 +975,7 @@ def admin_dashboard():
                         )
                         conn.commit()
                         log_action(conn, username, "REQUEST LEAVE", username, org)
-                        st.success("Leave request submitted.")
-                        refresh()
+                        refresh_with_message("Leave request submitted.")
 
         with tab_branch:
             status_filter = nav_selectbox(
@@ -1063,8 +1080,7 @@ def admin_dashboard():
                         )
                         conn.commit()
                         log_action(conn, username, "SEND WARNING", target, org)
-                        st.success(f"Warning sent to {target}.")
-                        refresh()
+                        refresh_with_message(f"Warning sent to {target}.")
 
         history = safe_read(
             """
@@ -1141,8 +1157,7 @@ def admin_dashboard():
                     )
                 conn.commit()
                 log_action(conn, username, "RATE USER", target, org)
-                st.success("Rating submitted.")
-                refresh()
+                refresh_with_message("Rating submitted.")
 
     # =====================================================
     # MY SCORE
@@ -1309,8 +1324,7 @@ def admin_dashboard():
                             conn.execute("INSERT INTO topics(topic) VALUES(?)", (topic_new.strip(),))
                             conn.commit()
                             log_action(conn, username, "ADD TOPIC", topic_new.strip(), org)
-                            st.success("Topic added.")
-                            refresh()
+                            refresh_with_message("Topic added.")
 
         with t2:
             if topics.empty:
@@ -1327,8 +1341,7 @@ def admin_dashboard():
                             conn.execute("UPDATE topics SET topic=? WHERE topic=?", (new_topic.strip(), old_topic))
                             conn.commit()
                             log_action(conn, username, "EDIT TOPIC", f"{old_topic} -> {new_topic.strip()}", org)
-                            st.success("Topic updated.")
-                            refresh()
+                            refresh_with_message("Topic updated.")
 
         with t3:
             if topics.empty:
@@ -1341,33 +1354,50 @@ def admin_dashboard():
                         conn.execute("DELETE FROM topics WHERE topic=?", (del_topic,))
                         conn.commit()
                         log_action(conn, username, "DELETE TOPIC", del_topic, org)
-                        st.warning("Topic deleted.")
-                        refresh()
+                        refresh_with_message("Topic deleted.", level="warning")
 
     # =====================================================
     # MESSAGES
     # =====================================================
     elif menu == "Messages":
         st.subheader("Message Super Admin")
-        st.caption("Admins can send messages to management but cannot open/read inbox messages here.")
+        st.caption("Send one message at a time to management. Replies from super admin appear below.")
 
-        with st.form("admin_message_form", clear_on_submit=False):
+        incoming_df = safe_read(
+            """
+            SELECT sender, message, created_at
+            FROM messages
+            WHERE receiver=? AND organization=? AND branch=?
+            ORDER BY id DESC
+            """,
+            conn,
+            params=(username, org, admin_branch),
+        )
+
+        if not incoming_df.empty:
+            st.markdown("### Replies from Management")
+            st.dataframe(incoming_df, use_container_width=True)
+
+        with st.form("admin_message_form", clear_on_submit=True):
             msg = st.text_area("Message")
             send = st.form_submit_button("Send to Management")
             if send:
-                if not msg.strip():
+                clean_msg = msg.strip()
+                if not clean_msg:
                     st.error("Message cannot be empty.")
+                elif is_recent_duplicate_message(conn, username, "management", org, admin_branch, clean_msg):
+                    refresh_with_message("Duplicate message blocked. The same message was already sent just now.", level="warning")
                 else:
                     conn.execute(
                         """
                         INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
                         VALUES (?,?,?,?,?,datetime('now'))
                         """,
-                        (username, "management", admin_branch, org, msg.strip()),
+                        (username, "management", admin_branch, org, clean_msg),
                     )
                     conn.commit()
                     log_action(conn, username, "SEND MESSAGE", "management", org)
-                    st.success("Message sent.")
+                    refresh_with_message("Message sent.")
 
         sent_df = safe_read(
             """
@@ -1423,8 +1453,7 @@ def admin_dashboard():
                 conn.execute("UPDATE settings SET rating_open=? WHERE id=1", (int(rating_open),))
                 conn.commit()
                 log_action(conn, username, "UPDATE RATING LOCK", f"rating_open={int(rating_open)}", org)
-                st.success("Rating setting updated.")
-                refresh()
+                refresh_with_message("Rating setting updated.")
 
         st.divider()
         st.markdown("### Change Password")
@@ -1449,4 +1478,4 @@ def admin_dashboard():
                     )
                     conn.commit()
                     log_action(conn, username, "CHANGE PASSWORD", username, org)
-                    st.success("Password updated.")
+                    refresh_with_message("Password updated.")

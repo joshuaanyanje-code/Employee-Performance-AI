@@ -3,7 +3,7 @@ import hashlib
 import time
 import random
 import os
-from datetime import datetime
+from datetime import datetime, timedelta
 
 try:
     from dotenv import load_dotenv
@@ -77,6 +77,57 @@ def execute_many_write(conn, query, seq_of_params, commit=False, retries=4, base
             time.sleep(sleep_s)
     if last_error:
         raise last_error
+
+
+def is_recent_duplicate_message(conn, sender, receiver, organization, branch, message, within_seconds=120):
+    sender_v = str(sender or "").strip()
+    receiver_v = str(receiver or "").strip()
+    organization_v = str(organization or "").strip()
+    branch_v = str(branch or "").strip()
+    message_v = str(message or "").strip()
+
+    if not sender_v or not receiver_v or not organization_v or not message_v:
+        return False
+
+    row = conn.execute(
+        """
+        SELECT created_at
+        FROM messages
+        WHERE sender=?
+          AND receiver=?
+          AND organization=?
+          AND COALESCE(branch, '')=?
+          AND TRIM(message)=?
+        ORDER BY id DESC
+        LIMIT 1
+        """,
+        (sender_v, receiver_v, organization_v, branch_v, message_v),
+    ).fetchone()
+
+    if not row or not row[0]:
+        return False
+
+    created_raw = str(row[0]).strip()
+    parsed = None
+    for parser in (
+        lambda value: datetime.fromisoformat(value),
+        lambda value: datetime.strptime(value, "%Y-%m-%d %H:%M:%S"),
+        lambda value: datetime.strptime(value, "%Y-%m-%d %H:%M:%S.%f"),
+    ):
+        try:
+            parsed = parser(created_raw)
+            break
+        except Exception:
+            continue
+
+    if parsed is None:
+        return False
+
+    now = datetime.now()
+    if parsed > now:
+        return False
+
+    return (now - parsed) <= timedelta(seconds=int(within_seconds))
 
 
 # =========================
