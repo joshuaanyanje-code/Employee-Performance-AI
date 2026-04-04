@@ -1004,36 +1004,69 @@ def admin_dashboard():
         tab_request, tab_branch = st.tabs(["Request My Leave", "Branch Leave Requests"])
 
         with tab_request:
+            if st.session_state.pop("_reset_admin_leave_form", False):
+                st.session_state["admin_leave_start"] = date.today()
+                st.session_state["admin_leave_end"] = date.today()
+                st.session_state["admin_leave_reason"] = ""
+            st.session_state.setdefault("admin_leave_start", date.today())
+            st.session_state.setdefault("admin_leave_end", date.today())
+            st.session_state.setdefault("admin_leave_reason", "")
+
             with st.form("admin_leave_request", clear_on_submit=False):
-                lv_start = st.date_input("Start Date", value=date.today())
-                lv_end = st.date_input("End Date", value=date.today())
-                lv_reason = st.text_area("Reason")
+                lv_start = st.date_input("Start Date", key="admin_leave_start")
+                lv_end = st.date_input("End Date", key="admin_leave_end")
+                lv_reason = st.text_area("Reason", key="admin_leave_reason")
                 lv_sub = st.form_submit_button("Submit Leave Request")
 
                 if lv_sub:
+                    clean_reason = lv_reason.strip()
                     if lv_end < lv_start:
                         st.error("End date cannot be before start date.")
-                    elif not lv_reason.strip():
+                    elif not clean_reason:
                         st.error("Reason is required.")
                     else:
-                        conn.execute(
+                        duplicate_leave = safe_read(
                             """
-                            INSERT INTO leaves(username,organization,branch,start_date,end_date,reason,status)
-                            VALUES (?,?,?,?,?,?,?)
+                            SELECT id
+                            FROM leaves
+                            WHERE username=? AND organization=? AND branch=?
+                              AND start_date=? AND end_date=? AND reason=?
+                              AND lower(coalesce(status, 'pending')) IN ('pending', 'approved', 'reapply')
+                            ORDER BY id DESC
+                            LIMIT 1
                             """,
-                            (
+                            conn,
+                            params=(
                                 username,
                                 org,
                                 admin_branch,
                                 lv_start.strftime("%Y-%m-%d"),
                                 lv_end.strftime("%Y-%m-%d"),
-                                lv_reason.strip(),
-                                "pending",
+                                clean_reason,
                             ),
                         )
-                        conn.commit()
-                        log_action(conn, username, "REQUEST LEAVE", username, org)
-                        refresh_with_message("Leave request submitted.")
+                        if not duplicate_leave.empty:
+                            refresh_with_message("Duplicate leave request blocked. The same leave request already exists.", level="warning")
+                        else:
+                            conn.execute(
+                                """
+                                INSERT INTO leaves(username,organization,branch,start_date,end_date,reason,status)
+                                VALUES (?,?,?,?,?,?,?)
+                                """,
+                                (
+                                    username,
+                                    org,
+                                    admin_branch,
+                                    lv_start.strftime("%Y-%m-%d"),
+                                    lv_end.strftime("%Y-%m-%d"),
+                                    clean_reason,
+                                    "pending",
+                                ),
+                            )
+                            conn.commit()
+                            log_action(conn, username, "REQUEST LEAVE", username, org)
+                            st.session_state["_reset_admin_leave_form"] = True
+                            refresh_with_message("Leave request submitted.")
 
         with tab_branch:
             status_filter = nav_selectbox(
