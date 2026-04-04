@@ -360,18 +360,26 @@ def kiosk_dashboard():
         }
         .home-kiosk-title {
             text-align: center;
-            padding: 0.5rem 0 0.25rem;
+            padding: 0.5rem 0 0.4rem;
+        }
+        .home-kiosk-title .org-name {
+            font-size: 2.45rem;
+            font-weight: 900;
+            letter-spacing: -0.7px;
+            line-height: 1.05;
+            margin-bottom: 0.35rem;
         }
         .home-kiosk-title .branch-name {
-            font-size: 2.2rem;
+            font-size: 1.8rem;
             font-weight: 800;
-            letter-spacing: -0.5px;
+            letter-spacing: -0.3px;
             line-height: 1.1;
         }
         .home-kiosk-title .manager-name {
-            font-size: 1rem;
-            color: #a9b0c3;
-            margin-top: 0.35rem;
+            font-size: 1.15rem;
+            font-weight: 700;
+            color: #c7d2e5;
+            margin-top: 0.45rem;
         }
         .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
         
@@ -388,7 +396,9 @@ def kiosk_dashboard():
             .stButton > button, .stDownloadButton > button {
                 box-shadow: 0 2px 5px rgba(10, 20, 38, 0.16) !important;
             }
-            .home-kiosk-title .branch-name {font-size: 2rem;}
+            .home-kiosk-title .org-name {font-size: 2.1rem;}
+            .home-kiosk-title .branch-name {font-size: 1.6rem;}
+            .home-kiosk-title .manager-name {font-size: 1.05rem;}
         }
         </style>
     """, unsafe_allow_html=True)
@@ -511,8 +521,9 @@ def kiosk_dashboard():
         st.markdown(
             f"""
             <div class='home-kiosk-title'>
+                <div class='org-name'>{org}</div>
                 <div class='branch-name'>{branch}</div>
-                <div class='manager-name'>Manager: <b>{manager_name}</b></div>
+                <div class='manager-name'>Branch Manager: <b>{manager_name}</b></div>
             </div>
             """,
             unsafe_allow_html=True,
