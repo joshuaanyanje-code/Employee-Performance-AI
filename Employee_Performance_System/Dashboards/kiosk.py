@@ -556,9 +556,9 @@ def kiosk_dashboard():
     # ==============================================================
     elif kiosk_view == "guest":
         render_kiosk_hero(
+            org,
             "Guest Experience",
-            f"{org} - {branch}",
-            f"Branch Manager: <b>{manager_name}</b>",
+            "",
         )
 
         if st.button("← Back", key="guest_back"):
@@ -636,9 +636,9 @@ def kiosk_dashboard():
     # ==============================================================
     elif kiosk_view == "staff":
         render_kiosk_hero(
+            org,
             "Staff Check In",
-            f"{org} - {branch}",
-            f"Branch Manager: <b>{manager_name}</b>",
+            "",
         )
         st.divider()
 
