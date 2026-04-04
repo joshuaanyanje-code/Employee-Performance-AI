@@ -46,21 +46,15 @@ def clear_kiosk_staff_transient_state():
 
 
 def compact_kiosk_button(label, key, *, use_container_width=True, **kwargs):
-    _, center_col, _ = st.columns([0.11, 0.78, 0.11])
-    with center_col:
-        return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
+    return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
 
 
 def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwargs):
-    _, center_col, _ = st.columns([0.11, 0.78, 0.11])
-    with center_col:
-        return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
+    return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
 
 
 def home_kiosk_button(label, key):
-    _, center_col, _ = st.columns([0.18, 0.64, 0.18])
-    with center_col:
-        return st.button(label, key=key, use_container_width=True, type="primary")
+    return st.button(label, key=key, use_container_width=True, type="primary")
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
@@ -355,23 +349,18 @@ def kiosk_dashboard():
         .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
         button {height:58px; font-size:18px; font-weight:bold;}
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
-            width: 100%;
-            max-width: 100%;
+            width: min(100%, 360px);
+            display: block;
+            margin: 0 auto;
             box-sizing: border-box;
             background: linear-gradient(90deg, #2f7de1 0%, #46a0ff 100%) !important;
             color: #ffffff !important;
             border: 1px solid rgba(255, 255, 255, 0.18) !important;
             border-radius: 14px;
-            box-shadow: 0 2px 6px rgba(10, 20, 38, 0.18) !important;
-            overflow: visible;
-            filter: drop-shadow(0 0 0);
+            box-shadow: none !important;
         }
         .stButton > button:hover, .stDownloadButton > button:hover, .stFormSubmitButton > button:hover {
             filter: brightness(1.03);
-        }
-        .stButton, .stDownloadButton {
-            overflow: hidden;
-            border-radius: 14px;
         }
         .home-kiosk-title {
             text-align: center;
@@ -408,9 +397,6 @@ def kiosk_dashboard():
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
-            .stButton > button, .stDownloadButton > button {
-                box-shadow: 0 2px 5px rgba(10, 20, 38, 0.16) !important;
-            }
             .home-kiosk-title .org-name {font-size: 2.1rem;}
             .home-kiosk-title .branch-name {font-size: 1.6rem;}
             .home-kiosk-title .manager-name {font-size: 1.05rem;}
