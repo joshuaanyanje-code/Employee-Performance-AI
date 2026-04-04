@@ -97,6 +97,82 @@ def reports_panel():
         st.bar_chart(avg)
 
     # =====================================================
+    # ATTENDANCE
+    # =====================================================
+    elif report == "Attendance":
+
+        st.subheader("Attendance Summary")
+
+        if attendance.empty:
+            st.info("No attendance records available yet.")
+        else:
+            attendance_view = attendance.copy()
+
+            if "date" in attendance_view.columns:
+                attendance_view["date"] = pd.to_datetime(attendance_view["date"], errors="coerce")
+            if "clock_in" in attendance_view.columns:
+                attendance_view["clock_in"] = pd.to_datetime(attendance_view["clock_in"], errors="coerce")
+            if "clock_out" in attendance_view.columns:
+                attendance_view["clock_out"] = pd.to_datetime(attendance_view["clock_out"], errors="coerce")
+
+            attendance_view["late_flag"] = (
+                attendance_view["clock_in"].dt.hour.gt(9) if "clock_in" in attendance_view.columns else False
+            )
+
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Records", len(attendance_view))
+            c2.metric("Staff Seen", attendance_view["username"].nunique() if "username" in attendance_view.columns else 0)
+            c3.metric("Late Clock-ins", int(attendance_view["late_flag"].sum()) if "late_flag" in attendance_view.columns else 0)
+
+            if {"username", "date"}.issubset(attendance_view.columns):
+                attendance_summary = (
+                    attendance_view.groupby("username", dropna=False)
+                    .agg(days_present=("date", "nunique"), late_count=("late_flag", "sum"))
+                    .reset_index()
+                    .rename(columns={"username": "Employee"})
+                    .sort_values(["late_count", "days_present"], ascending=[False, False])
+                )
+                st.dataframe(attendance_summary, use_container_width=True)
+            else:
+                st.dataframe(attendance_view, use_container_width=True)
+
+    # =====================================================
+    # CONSISTENCY
+    # =====================================================
+    elif report == "Consistency":
+
+        st.subheader("Rating Consistency")
+
+        consistency_df = (
+            ratings.groupby("rated", dropna=False)
+            .agg(Avg_Score=("score", "mean"), Rating_Count=("score", "count"), Std_Dev=("score", "std"))
+            .reset_index()
+            .rename(columns={"rated": "Employee"})
+        )
+
+        consistency_df["Avg_Score"] = consistency_df["Avg_Score"].round(1)
+        consistency_df["Std_Dev"] = consistency_df["Std_Dev"].fillna(0).round(1)
+
+        def consistency_label(std_dev):
+            if std_dev <= 5:
+                return "Highly Consistent"
+            if std_dev <= 12:
+                return "Moderately Consistent"
+            return "Volatile"
+
+        consistency_df["Consistency"] = consistency_df["Std_Dev"].apply(consistency_label)
+        consistency_df = consistency_df.sort_values(["Std_Dev", "Avg_Score"], ascending=[True, False])
+        st.dataframe(consistency_df, use_container_width=True)
+
+        highly_consistent = consistency_df[consistency_df["Consistency"] == "Highly Consistent"]["Employee"].tolist()
+        volatile_staff = consistency_df[consistency_df["Consistency"] == "Volatile"]["Employee"].tolist()
+
+        if highly_consistent:
+            st.success("Most consistent: " + ", ".join(highly_consistent[:5]))
+        if volatile_staff:
+            st.warning("Needs closer monitoring: " + ", ".join(volatile_staff[:5]))
+
+    # =====================================================
     # NON VOTERS
     # =====================================================
     elif report == "Non Voters":
@@ -223,7 +299,22 @@ def reports_panel():
     # =====================================================
     elif report == "Leadership":
 
-        st.dataframe(detect_leaders(ratings))
+        leaders_result = detect_leaders(ratings, attendance, None, users, None)
+
+        if isinstance(leaders_result, tuple):
+            leaders_df, leader_insights = leaders_result
+        else:
+            leaders_df, leader_insights = leaders_result, []
+
+        if isinstance(leaders_df, pd.DataFrame) and not leaders_df.empty:
+            st.dataframe(leaders_df, use_container_width=True)
+        else:
+            st.info("No leadership scores available yet.")
+
+        if leader_insights:
+            st.markdown("### Leadership Insights")
+            for item in leader_insights:
+                st.info(item)
 
     # =====================================================
     # CONFLICTS
@@ -232,15 +323,33 @@ def reports_panel():
 
         conflicts = ratings[ratings["score"] < 40]
 
-        for _, row in conflicts.iterrows():
-            st.warning(f"{row['rater']} → {row['rated']} low rating")
+        if conflicts.empty:
+            st.success("No major conflict behavior detected in the current report scope.")
+        else:
+            for _, row in conflicts.iterrows():
+                st.warning(f"{row['rater']} → {row['rated']} low rating")
 
     # =====================================================
     # STABILITY
     # =====================================================
     elif report == "Stability":
 
-        st.dataframe(stability_analysis(ratings))
+        stability_result = stability_analysis(ratings, attendance, users)
+
+        if isinstance(stability_result, tuple):
+            stability_df, stability_insights = stability_result
+        else:
+            stability_df, stability_insights = stability_result, []
+
+        if isinstance(stability_df, pd.DataFrame) and not stability_df.empty:
+            st.dataframe(stability_df, use_container_width=True)
+        else:
+            st.info("No stability data available yet.")
+
+        if stability_insights:
+            st.markdown("### Stability Insights")
+            for item in stability_insights:
+                st.info(item)
 
     # =====================================================
     # RELATIONSHIP MAP
@@ -251,26 +360,34 @@ def reports_panel():
 
         if fig:
             st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No relationship map data is available for the current scope.")
 
     # =====================================================
     # AI INSIGHTS
     # =====================================================
     elif report == "AI Insights":
 
-        insights = generate_insights(ratings)
+        insights = generate_insights(ratings, attendance, None, users, None)
 
-        for i in insights:
-            st.info(i)
+        if insights:
+            for i in insights:
+                st.info(i)
+        else:
+            st.info("No AI insights generated yet for the current scope.")
 
     # =====================================================
     # PREDICTIONS
     # =====================================================
     elif report == "Predictions":
 
-        preds = predict_future(ratings)
+        preds = predict_future(ratings, attendance, users)
 
-        for p in preds:
-            st.warning(p)
+        if preds:
+            for p in preds:
+                st.warning(p)
+        else:
+            st.info("No prediction signals are available yet.")
 
     # =====================================================
     # MANAGEMENT ACTIONS
@@ -279,8 +396,11 @@ def reports_panel():
 
         recs = management_recommendations(ratings, attendance)
 
-        for r in recs:
-            st.success(r)
+        if recs:
+            for r in recs:
+                st.success(r)
+        else:
+            st.info("No urgent management actions are recommended right now.")
 
 
 # =====================================================
