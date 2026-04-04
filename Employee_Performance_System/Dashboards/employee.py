@@ -411,6 +411,14 @@ def employee_dashboard():
 
         st.subheader("Request Leave")
 
+        if st.session_state.pop("_reset_leave_form", False):
+            st.session_state["leave_start"] = date.today()
+            st.session_state["leave_end"] = date.today()
+            st.session_state["leave_reason"] = ""
+        st.session_state.setdefault("leave_start", date.today())
+        st.session_state.setdefault("leave_end", date.today())
+        st.session_state.setdefault("leave_reason", "")
+
         with st.form("leave_form", clear_on_submit=False):
             start = st.date_input("Start", key="leave_start")
             end = st.date_input("End", key="leave_end")
@@ -418,21 +426,35 @@ def employee_dashboard():
             leave_submit = st.form_submit_button("Submit")
 
             if leave_submit:
+                clean_reason = reason.strip()
                 if end < start:
                     st.error("End date cannot be earlier than start date")
-                elif not reason.strip():
+                elif not clean_reason:
                     st.error("Reason is required")
                 else:
-                    execute_write(conn, """
-                    INSERT INTO leaves(username,branch,organization,start_date,end_date,reason,status)
-                    VALUES (?,?,?,?,?,?,'pending')
-                    """,(username,branch,org,str(start),str(end),reason.strip()))
-                    conn.commit()
-                    st.success("Submitted. Form is reset and ready for a new application.")
-                    st.session_state["leave_start"] = date.today()
-                    st.session_state["leave_end"] = date.today()
-                    st.session_state["leave_reason"] = ""
-                    st.rerun()
+                    duplicate_leave = _safe_read(
+                        conn,
+                        """
+                        SELECT id
+                        FROM leaves
+                        WHERE username=? AND branch=? AND organization=?
+                          AND start_date=? AND end_date=? AND reason=?
+                          AND lower(coalesce(status, 'pending')) IN ('pending', 'approved', 'reapply')
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        params=(username, branch, org, str(start), str(end), clean_reason),
+                    )
+                    if not duplicate_leave.empty:
+                        refresh_with_message("Duplicate leave request blocked. The same leave request already exists.", level="warning")
+                    else:
+                        execute_write(conn, """
+                        INSERT INTO leaves(username,branch,organization,start_date,end_date,reason,status)
+                        VALUES (?,?,?,?,?,?,'pending')
+                        """,(username,branch,org,str(start),str(end),clean_reason))
+                        conn.commit()
+                        st.session_state["_reset_leave_form"] = True
+                        refresh_with_message("Leave request submitted. Form is reset and ready for a new application.")
 
         df = pd.read_sql(
             "SELECT * FROM leaves WHERE username=? AND branch=? AND organization=? ORDER BY id DESC",

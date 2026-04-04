@@ -297,10 +297,10 @@ def admin_dashboard():
         with tab_create:
             st.info("Admins can create employees only. Only super admin can delete users.")
             with st.form("admin_create_user", clear_on_submit=False):
-                new_user = st.text_input("Username")
-                new_pass = st.text_input("Password", type="password")
-                new_pin = st.text_input("PIN", value="1234")
-                new_phone = st.text_input("Phone Number (required)")
+                new_user = st.text_input("Username", key="admin_create_username")
+                new_pass = st.text_input("Password", type="password", key="admin_create_password")
+                new_pin = st.text_input("PIN", value="1234", key="admin_create_pin")
+                new_phone = st.text_input("Phone Number (required)", key="admin_create_phone")
                 create_sub = st.form_submit_button("Create Employee")
 
                 if create_sub:
@@ -337,6 +337,10 @@ def admin_dashboard():
                             )
                             conn.commit()
                             log_action(conn, username, "CREATE EMPLOYEE", new_user.strip(), org)
+                            st.session_state["admin_create_username"] = ""
+                            st.session_state["admin_create_password"] = ""
+                            st.session_state["admin_create_pin"] = "1234"
+                            st.session_state["admin_create_phone"] = ""
                             refresh_with_message(f"Employee '{new_user.strip()}' created.")
 
         with tab_edit:
@@ -1174,28 +1178,50 @@ def admin_dashboard():
             st.info("No employees available for warning.")
         else:
             with st.form("admin_warn_form", clear_on_submit=False):
-                target = st.selectbox("Employee", employees_df["username"].tolist())
+                target = st.selectbox("Employee", employees_df["username"].tolist(), key="admin_warn_target")
                 warn_type = st.selectbox(
                     "Warning Type",
                     ["lateness", "absenteeism", "low_performance", "misconduct", "policy_violation", "other"],
+                    key="admin_warn_type",
                 )
-                warn_msg = st.text_area("Warning Message")
+                warn_msg = st.text_area("Warning Message", key="admin_warn_message")
                 warn_sub = st.form_submit_button("Send Warning")
 
                 if warn_sub:
-                    if not warn_msg.strip():
+                    clean_warn_msg = warn_msg.strip()
+                    if not clean_warn_msg:
                         st.error("Warning message is required.")
                     else:
-                        conn.execute(
+                        full_warn_msg = f"[From {username}] {clean_warn_msg}"
+                        recent_dup = safe_read(
                             """
-                            INSERT INTO warnings(username,organization,branch,type,message,created_at)
-                            VALUES (?,?,?,?,?,datetime('now'))
+                            SELECT id FROM warnings
+                            WHERE username=? AND organization=? AND branch=? AND type=? AND message=?
+                              AND created_at >= datetime('now', '-2 minutes')
+                            ORDER BY id DESC
+                            LIMIT 1
                             """,
-                            (target, org, admin_branch, warn_type, f"[From {username}] {warn_msg.strip()}"),
+                            conn,
+                            params=(target, org, admin_branch, warn_type, full_warn_msg),
                         )
-                        conn.commit()
-                        log_action(conn, username, "SEND WARNING", target, org)
-                        refresh_with_message(f"Warning sent to {target}.")
+                        if not recent_dup.empty:
+                            refresh_with_message(
+                                f"Duplicate warning blocked for {target}. The same warning was already sent just now.",
+                                level="warning",
+                            )
+                        else:
+                            conn.execute(
+                                """
+                                INSERT INTO warnings(username,organization,branch,type,message,created_at)
+                                VALUES (?,?,?,?,?,datetime('now'))
+                                """,
+                                (target, org, admin_branch, warn_type, full_warn_msg),
+                            )
+                            conn.commit()
+                            log_action(conn, username, "SEND WARNING", target, org)
+                            st.session_state["admin_warn_type"] = "lateness"
+                            st.session_state["admin_warn_message"] = ""
+                            refresh_with_message(f"Warning sent to {target}.")
 
         history = safe_read(
             """
