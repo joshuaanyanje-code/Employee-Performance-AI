@@ -140,9 +140,12 @@ def employee_dashboard():
         st.error("User not found")
         return
 
-    if user_data.iloc[0]["status"] == "suspended":
+    current_status = str(user_data.iloc[0].get("status", "active") or "active").lower()
+    if current_status == "suspended":
         st.error("🚫 Account Suspended. Contact Admin.")
         return
+    if current_status == "probation":
+        st.warning("⚠ Your account is on probation and under management review.")
 
     branch = user_data.iloc[0]["branch"]
 
@@ -300,7 +303,7 @@ def employee_dashboard():
 
         leave_notice = pd.read_sql(
             """
-            SELECT start_date, end_date, status
+            SELECT start_date, end_date, status, approved_by, admin_note
             FROM leaves
             WHERE username=? AND branch=? AND organization=?
             ORDER BY id DESC
@@ -432,11 +435,19 @@ def employee_dashboard():
                     st.rerun()
 
         df = pd.read_sql(
-            "SELECT * FROM leaves WHERE username=? AND branch=?",
-            conn, params=(username, branch)
+            "SELECT * FROM leaves WHERE username=? AND branch=? AND organization=? ORDER BY id DESC",
+            conn, params=(username, branch, org)
         )
-
-        st.dataframe(df)
+        if not df.empty:
+            show_cols = [
+                c for c in [
+                    "start_date", "end_date", "reason", "status",
+                    "approved_by", "admin_note", "reviewed_at"
+                ] if c in df.columns
+            ]
+            st.dataframe(df[show_cols], use_container_width=True)
+        else:
+            st.info("No leave requests yet.")
 
     # =====================================================
     # NOTIFICATIONS
@@ -455,7 +466,7 @@ def employee_dashboard():
 
         leaves = pd.read_sql(
             """
-            SELECT start_date, end_date, reason, status
+            SELECT start_date, end_date, reason, status, approved_by, admin_note, reviewed_at
             FROM leaves
             WHERE username=? AND branch=? AND organization=?
             ORDER BY id DESC
@@ -488,6 +499,15 @@ def employee_dashboard():
                 message = f"{start_v} to {end_v}"
                 if reason_v:
                     message = f"{message} | Reason: {reason_v}"
+                approver_v = str(lv.get("approved_by", "") or "").strip()
+                admin_note_v = str(lv.get("admin_note", "") or "").strip()
+                reviewed_v = str(lv.get("reviewed_at", "") or "").strip()
+                if approver_v:
+                    message = f"{message} | Handled by: {approver_v}"
+                if reviewed_v:
+                    message = f"{message} | Reviewed: {reviewed_v[:16]}"
+                if admin_note_v:
+                    message = f"{message} | Note: {admin_note_v}"
 
                 if status == "approved":
                     st.success(f"Leave Approved: {message}")

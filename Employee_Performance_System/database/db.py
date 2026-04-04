@@ -398,9 +398,25 @@ def create_tables():
         start_date TEXT,
         end_date TEXT,
         reason TEXT,      
-        status TEXT
+        status TEXT,
+        approved_by TEXT,
+        admin_note TEXT,
+        reviewed_at TEXT
     )
     """)
+
+    try:
+        c.execute("ALTER TABLE leaves ADD COLUMN approved_by TEXT")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE leaves ADD COLUMN admin_note TEXT")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE leaves ADD COLUMN reviewed_at TEXT")
+    except Exception:
+        pass
 
     # =========================
     # WARNINGS
@@ -455,9 +471,14 @@ def create_tables():
         branch TEXT,
         organization TEXT,
         device_name TEXT,
-        last_active TEXT
+        last_active TEXT,
+        status TEXT DEFAULT 'active'
     )
     """)
+    try:
+        c.execute("ALTER TABLE kiosks ADD COLUMN status TEXT DEFAULT 'active'")
+    except Exception:
+        pass
 
     # =========================
     # CLIENT FEEDBACK SETTINGS
@@ -520,6 +541,27 @@ def create_tables():
         role TEXT,
         organization TEXT,
         created_at TEXT
+    )
+    """)
+
+    # =========================
+    # ADMIN ACTION REQUESTS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS admin_action_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT,
+        target_username TEXT,
+        target_role TEXT,
+        requested_by TEXT,
+        action_type TEXT,
+        reason TEXT,
+        status TEXT DEFAULT 'pending',
+        reviewed_by TEXT,
+        review_note TEXT,
+        created_at TEXT,
+        reviewed_at TEXT
     )
     """)
 

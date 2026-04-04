@@ -1444,8 +1444,8 @@ def super_admin_dashboard():
                             use_container_width=True,
                         )
 
-        tab_all, tab_branch, tab_create, tab_manage = st.tabs([
-            "All Users", "By Branch", "Create User", "Manage User"
+        tab_all, tab_branch, tab_create, tab_manage, tab_requests = st.tabs([
+            "All Users", "By Branch", "Create User", "Manage User", "Admin Requests"
         ])
 
         with tab_all:
@@ -1536,24 +1536,30 @@ def super_admin_dashboard():
                     f"**Branch:** {row['branch']} | **Status:** {row['status']}"
                 )
 
-                ca, cb, cc = st.columns(3)
+                ca, cb, cc, cd = st.columns(4)
                 if ca.button("Suspend", key="sus_user"):
                     conn.execute("UPDATE users SET status='suspended' WHERE username=? AND organization=?", (sel_user, org))
                     conn.commit()
                     log_action(conn, user, "SUSPEND USER", sel_user, org)
-                    st.success(f"{sel_user} suspended.")
+                    set_flash_message("super_admin_user_flash", "warning", f"{sel_user} suspended.")
                     st.rerun()
-                if cb.button("Activate", key="act_user"):
+                if cb.button("Probation", key="prob_user"):
+                    conn.execute("UPDATE users SET status='probation' WHERE username=? AND organization=?", (sel_user, org))
+                    conn.commit()
+                    log_action(conn, user, "PUT USER ON PROBATION", sel_user, org)
+                    set_flash_message("super_admin_user_flash", "info", f"{sel_user} moved to probation.")
+                    st.rerun()
+                if cc.button("Activate", key="act_user"):
                     conn.execute("UPDATE users SET status='active' WHERE username=? AND organization=?", (sel_user, org))
                     conn.commit()
                     log_action(conn, user, "ACTIVATE USER", sel_user, org)
-                    st.success(f"{sel_user} activated.")
+                    set_flash_message("super_admin_user_flash", "success", f"{sel_user} activated.")
                     st.rerun()
-                if cc.button("Delete User", key="del_user"):
+                if cd.button("Delete User", key="del_user"):
                     conn.execute("DELETE FROM users WHERE username=? AND organization=?", (sel_user, org))
                     conn.commit()
                     log_action(conn, user, "DELETE USER", sel_user, org)
-                    st.success(f"{sel_user} deleted.")
+                    set_flash_message("super_admin_user_flash", "success", f"{sel_user} deleted.")
                     st.rerun()
 
                 st.divider()
@@ -1573,7 +1579,131 @@ def super_admin_dashboard():
                             )
                             conn.commit()
                             log_action(conn, user, "RESET PASSWORD", sel_user, org)
-                            st.success(f"Password for '{sel_user}' reset.")
+                            set_flash_message("super_admin_user_flash", "success", f"Password for '{sel_user}' reset.")
+                            st.rerun()
+
+        with tab_requests:
+            req_df = apply_branch_scope(
+                safe_read(
+                    """
+                    SELECT id, branch, target_username, target_role, requested_by, action_type,
+                           reason, status, reviewed_by, review_note, created_at, reviewed_at
+                    FROM admin_action_requests
+                    WHERE organization=?
+                    ORDER BY CASE WHEN lower(status)='pending' THEN 0 ELSE 1 END, id DESC
+                    """,
+                    conn,
+                    params=(org,),
+                )
+            )
+
+            if req_df.empty:
+                st.info("No admin action requests yet.")
+            else:
+                pending_df = req_df[req_df["status"].astype(str).str.lower() == "pending"].copy()
+                reviewed_df = req_df[req_df["status"].astype(str).str.lower() != "pending"].copy()
+
+                rc1, rc2 = st.columns(2)
+                rc1.metric("Pending Requests", len(pending_df))
+                rc2.metric("Reviewed Requests", len(reviewed_df))
+
+                if not pending_df.empty:
+                    st.markdown("### Pending Approval Queue")
+                    status_map = {
+                        "suspend": "suspended",
+                        "activate": "active",
+                        "probation": "probation",
+                    }
+                    for _, req in pending_df.iterrows():
+                        req_id = int(req["id"])
+                        req_branch = str(req.get("branch", "") or "")
+                        target_user = str(req.get("target_username", "") or "")
+                        requester = str(req.get("requested_by", "") or "")
+                        action_type = str(req.get("action_type", "") or "").lower()
+                        created_at = str(req.get("created_at", "") or "")[:16]
+                        req_reason = str(req.get("reason", "") or "")
+
+                        with st.expander(f"{target_user} | {action_type.title()} | by {requester} | {created_at}"):
+                            st.write(f"Branch: {req_branch or 'N/A'}")
+                            st.write(f"Reason: {req_reason or 'No reason provided.'}")
+                            review_note = st.text_area("Review note", key=f"sa_req_note_{req_id}")
+                            qa, qb = st.columns(2)
+                            if qa.button("Approve Request", key=f"sa_req_approve_{req_id}"):
+                                final_status = status_map.get(action_type, "active")
+                                conn.execute(
+                                    "UPDATE users SET status=? WHERE username=? AND organization=?",
+                                    (final_status, target_user, org),
+                                )
+                                conn.execute(
+                                    """
+                                    UPDATE admin_action_requests
+                                    SET status='approved', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
+                                    WHERE id=? AND organization=?
+                                    """,
+                                    (user, review_note.strip(), req_id, org),
+                                )
+                                try:
+                                    conn.execute(
+                                        """
+                                        INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                                        VALUES(?,?,?,?,?,datetime('now'))
+                                        """,
+                                        (
+                                            user,
+                                            target_user,
+                                            req_branch,
+                                            org,
+                                            f"Management update: your status is now '{final_status}'. {review_note.strip() or req_reason}".strip(),
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                                conn.commit()
+                                log_action(conn, user, f"APPROVE {action_type.upper()} REQUEST", target_user, org)
+                                set_flash_message("super_admin_user_flash", "success", f"Request approved for {target_user}.")
+                                st.rerun()
+                            if qb.button("Reject Request", key=f"sa_req_reject_{req_id}"):
+                                conn.execute(
+                                    """
+                                    UPDATE admin_action_requests
+                                    SET status='rejected', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
+                                    WHERE id=? AND organization=?
+                                    """,
+                                    (user, review_note.strip(), req_id, org),
+                                )
+                                try:
+                                    conn.execute(
+                                        """
+                                        INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                                        VALUES(?,?,?,?,?,datetime('now'))
+                                        """,
+                                        (
+                                            user,
+                                            target_user,
+                                            req_branch,
+                                            org,
+                                            f"Management reviewed the requested '{action_type}' action and did not approve it. {review_note.strip() or req_reason}".strip(),
+                                        ),
+                                    )
+                                except Exception:
+                                    pass
+                                conn.commit()
+                                log_action(conn, user, f"REJECT {action_type.upper()} REQUEST", target_user, org)
+                                set_flash_message("super_admin_user_flash", "warning", f"Request rejected for {target_user}.")
+                                st.rerun()
+                else:
+                    st.success("No pending admin status requests.")
+
+                if not reviewed_df.empty:
+                    st.markdown("### Reviewed Request History")
+                    show_cols = [
+                        c for c in [
+                            "created_at", "branch", "target_username", "target_role",
+                            "requested_by", "action_type", "reason", "status",
+                            "reviewed_by", "review_note", "reviewed_at"
+                        ] if c in reviewed_df.columns
+                    ]
+                    st.dataframe(reviewed_df[show_cols], use_container_width=True)
 
     # =========================================================
     # BRANCHES
@@ -1774,23 +1904,49 @@ def super_admin_dashboard():
                         f"**{lv['username']}** | {str(lv.get('start_date',''))[:10]} to "
                         f"{str(lv.get('end_date',''))[:10]} | *{lv.get('reason','â€”')}* | Status: **{icon}**"
                     )
-                    if status == "pending":
-                        c1, c2, c3 = st.columns(3)
-                        if c1.button("Approve", key=f"lv_app_{lid}"):
-                            conn.execute("UPDATE leaves SET status='approved' WHERE id=?", (lid,))
-                            conn.commit()
-                            st.success("Leave approved.")
-                            st.rerun()
-                        if c2.button("Reject", key=f"lv_rej_{lid}"):
-                            conn.execute("UPDATE leaves SET status='rejected' WHERE id=?", (lid,))
-                            conn.commit()
-                            st.warning("Leave rejected.")
-                            st.rerun()
-                        if c3.button("Request Reapply", key=f"lv_rei_{lid}"):
-                            conn.execute("UPDATE leaves SET status='reapply' WHERE id=?", (lid,))
-                            conn.commit()
-                            st.info("Employee asked to reapply with more info.")
-                            st.rerun()
+                    approver = str(lv.get("approved_by", "") or "").strip()
+                    admin_note = str(lv.get("admin_note", "") or "").strip()
+                    reviewed_at = str(lv.get("reviewed_at", "") or "").strip()
+                    if approver or admin_note or reviewed_at:
+                        meta_parts = []
+                        if approver:
+                            meta_parts.append(f"Handled by: {approver}")
+                        if reviewed_at:
+                            meta_parts.append(f"Reviewed: {reviewed_at[:16]}")
+                        if meta_parts:
+                            st.caption(" | ".join(meta_parts))
+                        if admin_note:
+                            st.write(f"Decision note: {admin_note}")
+
+                    override_note = st.text_area("Decision / override note", key=f"sa_leave_note_{lid}")
+                    c1, c2, c3 = st.columns(3)
+                    if c1.button("Approve", key=f"lv_app_{lid}"):
+                        conn.execute(
+                            "UPDATE leaves SET status='approved', approved_by=?, admin_note=?, reviewed_at=datetime('now') WHERE id=?",
+                            (user, override_note.strip(), lid),
+                        )
+                        conn.commit()
+                        log_action(conn, user, "APPROVE LEAVE", str(lv.get("username", "")), org)
+                        st.success("Leave approved.")
+                        st.rerun()
+                    if c2.button("Reject", key=f"lv_rej_{lid}"):
+                        conn.execute(
+                            "UPDATE leaves SET status='rejected', approved_by=?, admin_note=?, reviewed_at=datetime('now') WHERE id=?",
+                            (user, override_note.strip(), lid),
+                        )
+                        conn.commit()
+                        log_action(conn, user, "REJECT LEAVE", str(lv.get("username", "")), org)
+                        st.warning("Leave rejected.")
+                        st.rerun()
+                    if c3.button("Request Reapply", key=f"lv_rei_{lid}"):
+                        conn.execute(
+                            "UPDATE leaves SET status='reapply', approved_by=?, admin_note=?, reviewed_at=datetime('now') WHERE id=?",
+                            (user, override_note.strip(), lid),
+                        )
+                        conn.commit()
+                        log_action(conn, user, "REQUEST LEAVE REAPPLY", str(lv.get("username", "")), org)
+                        st.info("Employee asked to reapply with more info.")
+                        st.rerun()
                     st.divider()
 
         # ---- MESSAGES ----

@@ -125,9 +125,12 @@ def admin_dashboard():
 
         
 
-    if str(user_row.iloc[0].get("status", "active")).lower() == "suspended":
+    current_status = str(user_row.iloc[0].get("status", "active")).lower()
+    if current_status == "suspended":
         st.error("Account suspended. Contact super admin.")
         return
+    if current_status == "probation":
+        st.warning("Your account is on probation and under management review.")
 
     admin_branch = str(user_row.iloc[0].get("branch", "")).strip()
     if not admin_branch:
@@ -289,7 +292,7 @@ def admin_dashboard():
 
         st.dataframe(users_df if not users_df.empty else pd.DataFrame({"Info": ["No branch users"]}), use_container_width=True)
 
-        tab_create, tab_edit, tab_suspend = st.tabs(["Create Employee", "Edit User", "Suspend / Activate"])
+        tab_create, tab_edit, tab_suspend = st.tabs(["Create Employee", "Edit User", "Status Requests"])
 
         with tab_create:
             st.info("Admins can create employees only. Only super admin can delete users.")
@@ -377,27 +380,78 @@ def admin_dashboard():
             else:
                 selected = st.selectbox("Select User", manageable["username"].tolist(), key="admin_suspend_user_select")
                 row = manageable[manageable["username"] == selected].iloc[0]
-                st.write(f"Current status: **{row['status']}**")
+                current_status = str(row.get("status", "active") or "active")
+                st.write(f"Current status: **{current_status}**")
+                st.caption("Branch admins now recommend sensitive status changes. Super admin remains the final approver.")
 
-                c1, c2 = st.columns(2)
-                if c1.button("Suspend User", key="admin_suspend_user_btn"):
-                    conn.execute(
-                        "UPDATE users SET status='suspended' WHERE username=? AND organization=? AND branch=?",
-                        (selected, org, admin_branch),
-                    )
-                    conn.commit()
-                    log_action(conn, username, "SUSPEND USER", selected, org)
-                    refresh_with_message(f"{selected} suspended.", level="warning")
-                if c2.button("Activate User", key="admin_activate_user_btn"):
-                    conn.execute(
-                        "UPDATE users SET status='active' WHERE username=? AND organization=? AND branch=?",
-                        (selected, org, admin_branch),
-                    )
-                    conn.commit()
-                    log_action(conn, username, "ACTIVATE USER", selected, org)
-                    refresh_with_message(f"{selected} activated.")
+                action_labels = {
+                    "probation": "Recommend Probation",
+                    "suspend": "Recommend Suspension",
+                    "activate": "Recommend Reactivation",
+                }
+                default_action = "activate" if current_status.lower() in ["suspended", "probation"] else "probation"
+                default_idx = list(action_labels.keys()).index(default_action)
 
-        st.info("Delete user is disabled for admins. Only super admin can delete users.")
+                with st.form("admin_status_request_form", clear_on_submit=False):
+                    action_type = st.selectbox(
+                        "Recommended Action",
+                        list(action_labels.keys()),
+                        index=default_idx,
+                        format_func=lambda value: action_labels.get(value, value.title()),
+                    )
+                    action_reason = st.text_area(
+                        "Reason for recommendation",
+                        help="This reason will be reviewed by super admin before any status change is applied.",
+                    )
+                    request_submit = st.form_submit_button("Send Recommendation")
+
+                    if request_submit:
+                        clean_reason = action_reason.strip()
+                        if not clean_reason:
+                            st.error("A reason is required before sending the recommendation.")
+                        else:
+                            pending = safe_read(
+                                """
+                                SELECT id FROM admin_action_requests
+                                WHERE organization=? AND branch=? AND target_username=? AND action_type=? AND status='pending'
+                                ORDER BY id DESC
+                                LIMIT 1
+                                """,
+                                conn,
+                                params=(org, admin_branch, selected, action_type),
+                            )
+                            if not pending.empty:
+                                st.error("A similar pending recommendation already exists for this user.")
+                            else:
+                                conn.execute(
+                                    """
+                                    INSERT INTO admin_action_requests(
+                                        organization, branch, target_username, target_role,
+                                        requested_by, action_type, reason, status, created_at
+                                    )
+                                    VALUES (?,?,?,?,?,?,?,'pending',datetime('now'))
+                                    """,
+                                    (org, admin_branch, selected, str(row.get("role", "employee")), username, action_type, clean_reason),
+                                )
+                                conn.commit()
+                                log_action(conn, username, "REQUEST USER STATUS ACTION", f"{selected}:{action_type}", org)
+                                refresh_with_message(f"{action_labels.get(action_type, action_type.title())} sent for {selected}.")
+
+                request_history = safe_read(
+                    """
+                    SELECT target_username, action_type, reason, status, reviewed_by, review_note, created_at, reviewed_at
+                    FROM admin_action_requests
+                    WHERE organization=? AND branch=? AND requested_by=?
+                    ORDER BY id DESC
+                    """,
+                    conn,
+                    params=(org, admin_branch, username),
+                )
+                if not request_history.empty:
+                    st.markdown("### My Recommendation History")
+                    st.dataframe(request_history, use_container_width=True)
+
+        st.info("Delete user is disabled for admins. Only super admin can delete users, and sensitive status changes now require super admin approval.")
 
     # =====================================================
     # SCHEDULES
@@ -986,7 +1040,7 @@ def admin_dashboard():
 
             leaves_df = safe_read(
                 """
-                SELECT id, username, start_date, end_date, reason, status
+                SELECT id, username, start_date, end_date, reason, status, approved_by, admin_note, reviewed_at
                 FROM leaves
                 WHERE organization=? AND branch=?
                 ORDER BY id DESC
@@ -1000,8 +1054,69 @@ def admin_dashboard():
             else:
                 if status_filter != "All":
                     leaves_df = leaves_df[leaves_df["status"].astype(str).str.lower() == status_filter]
-                st.dataframe(leaves_df, use_container_width=True)
-                st.info("Branch admins can view leave requests and statuses but cannot approve/reject.")
+                display_cols = [
+                    c for c in [
+                        "id", "username", "start_date", "end_date", "reason",
+                        "status", "approved_by", "admin_note", "reviewed_at"
+                    ] if c in leaves_df.columns
+                ]
+                st.dataframe(leaves_df[display_cols], use_container_width=True)
+
+                pending_df = leaves_df[leaves_df["status"].astype(str).str.lower() == "pending"].copy()
+                if pending_df.empty:
+                    st.info("No pending leave requests in this branch.")
+                else:
+                    st.markdown("### Review Pending Leave Requests")
+                    for _, leave_row in pending_df.iterrows():
+                        leave_id = int(leave_row["id"])
+                        leave_user = str(leave_row.get("username", ""))
+                        leave_dates = f"{str(leave_row.get('start_date', ''))[:10]} to {str(leave_row.get('end_date', ''))[:10]}"
+                        leave_reason = str(leave_row.get("reason", "") or "No reason provided.")
+
+                        with st.expander(f"{leave_user} | {leave_dates}"):
+                            st.write(leave_reason)
+                            admin_note = st.text_area(
+                                "Admin note",
+                                key=f"admin_leave_note_{leave_id}",
+                                help="This note is visible in leave records and helps super admin review the decision.",
+                            )
+                            ac1, ac2, ac3 = st.columns(3)
+                            if ac1.button("Approve Leave", key=f"admin_leave_approve_{leave_id}"):
+                                conn.execute(
+                                    """
+                                    UPDATE leaves
+                                    SET status='approved', approved_by=?, admin_note=?, reviewed_at=datetime('now')
+                                    WHERE id=? AND organization=? AND branch=?
+                                    """,
+                                    (username, admin_note.strip(), leave_id, org, admin_branch),
+                                )
+                                conn.commit()
+                                log_action(conn, username, "APPROVE LEAVE", leave_user, org)
+                                refresh_with_message(f"Leave approved for {leave_user}.")
+                            if ac2.button("Reject Leave", key=f"admin_leave_reject_{leave_id}"):
+                                conn.execute(
+                                    """
+                                    UPDATE leaves
+                                    SET status='rejected', approved_by=?, admin_note=?, reviewed_at=datetime('now')
+                                    WHERE id=? AND organization=? AND branch=?
+                                    """,
+                                    (username, admin_note.strip(), leave_id, org, admin_branch),
+                                )
+                                conn.commit()
+                                log_action(conn, username, "REJECT LEAVE", leave_user, org)
+                                refresh_with_message(f"Leave rejected for {leave_user}.", level="warning")
+                            if ac3.button("Request Reapply", key=f"admin_leave_reapply_{leave_id}"):
+                                conn.execute(
+                                    """
+                                    UPDATE leaves
+                                    SET status='reapply', approved_by=?, admin_note=?, reviewed_at=datetime('now')
+                                    WHERE id=? AND organization=? AND branch=?
+                                    """,
+                                    (username, admin_note.strip(), leave_id, org, admin_branch),
+                                )
+                                conn.commit()
+                                log_action(conn, username, "REQUEST LEAVE REAPPLY", leave_user, org)
+                                refresh_with_message(f"Reapply requested from {leave_user}.", level="info")
 
     # =====================================================
     # ALERTS
@@ -1419,11 +1534,11 @@ def admin_dashboard():
     # =====================================================
     elif menu == "Staff Check In":
         st.subheader("Staff Check In")
-        st.caption("Each kiosk is tied to your branch only.")
+        st.caption("Branch admins can manage kiosk devices for their own branch only. Super admin still has full visibility and override.")
 
         kiosks_df = safe_read(
             """
-            SELECT id, device_name, last_active
+            SELECT id, device_name, last_active, COALESCE(status, 'active') AS status
             FROM kiosks
             WHERE organization=? AND branch=?
             ORDER BY id DESC
@@ -1439,6 +1554,91 @@ def admin_dashboard():
 
         st.markdown("### Branch Kiosk Link")
         st.code(build_kiosk_link(admin_branch, org), language="text")
+
+        kc_tab, km_tab = st.tabs(["Create Kiosk", "Manage Kiosks"])
+
+        with kc_tab:
+            with st.form("admin_create_kiosk", clear_on_submit=True):
+                kiosk_name = st.text_input("Device / Kiosk Label")
+                kiosk_submit = st.form_submit_button("Create Kiosk")
+                if kiosk_submit:
+                    device_name = kiosk_name.strip() or f"{admin_branch}-Kiosk"
+                    dup = safe_read(
+                        "SELECT id FROM kiosks WHERE branch=? AND organization=? AND device_name=?",
+                        conn,
+                        params=(admin_branch, org, device_name),
+                    )
+                    if not dup.empty:
+                        st.error("Kiosk name already exists for this branch.")
+                    else:
+                        conn.execute(
+                            "INSERT INTO kiosks(branch,organization,device_name,last_active,status) VALUES(?,?,?,datetime('now'),'active')",
+                            (admin_branch, org, device_name),
+                        )
+                        conn.commit()
+                        log_action(conn, username, "CREATE KIOSK", device_name, org)
+                        refresh_with_message(f"Kiosk '{device_name}' created for branch '{admin_branch}'.")
+
+        with km_tab:
+            if kiosks_df.empty:
+                st.info("No kiosks to manage in this branch.")
+            else:
+                for _, kiosk_row in kiosks_df.iterrows():
+                    kiosk_id = int(kiosk_row["id"])
+                    kiosk_name = str(kiosk_row.get("device_name", "Unknown"))
+                    kiosk_status = str(kiosk_row.get("status", "active") or "active")
+                    kiosk_last_active = str(kiosk_row.get("last_active", "") or "")
+
+                    with st.expander(f"{kiosk_name} [{kiosk_status}]"):
+                        st.caption(f"Last active: {kiosk_last_active[:16] if kiosk_last_active else 'N/A'}")
+                        st.code(build_kiosk_link(admin_branch, org), language="text")
+
+                        mk1, mk2, mk3 = st.columns(3)
+                        if mk1.button("Lock", key=f"admin_kiosk_lock_{kiosk_id}"):
+                            conn.execute(
+                                "UPDATE kiosks SET status='locked' WHERE id=? AND organization=? AND branch=?",
+                                (kiosk_id, org, admin_branch),
+                            )
+                            conn.commit()
+                            log_action(conn, username, "LOCK KIOSK", kiosk_name, org)
+                            refresh_with_message(f"Kiosk '{kiosk_name}' locked.", level="warning")
+                        if mk2.button("Unlock", key=f"admin_kiosk_unlock_{kiosk_id}"):
+                            conn.execute(
+                                "UPDATE kiosks SET status='active' WHERE id=? AND organization=? AND branch=?",
+                                (kiosk_id, org, admin_branch),
+                            )
+                            conn.commit()
+                            log_action(conn, username, "UNLOCK KIOSK", kiosk_name, org)
+                            refresh_with_message(f"Kiosk '{kiosk_name}' unlocked.")
+                        if mk3.button("Delete", key=f"admin_kiosk_delete_{kiosk_id}"):
+                            conn.execute(
+                                "DELETE FROM kiosks WHERE id=? AND organization=? AND branch=?",
+                                (kiosk_id, org, admin_branch),
+                            )
+                            conn.commit()
+                            log_action(conn, username, "DELETE KIOSK", kiosk_name, org)
+                            refresh_with_message(f"Kiosk '{kiosk_name}' deleted.", level="warning")
+
+                        with st.form(f"admin_edit_kiosk_{kiosk_id}", clear_on_submit=False):
+                            new_kiosk_name = st.text_input("Rename Kiosk", value=kiosk_name, key=f"admin_kiosk_name_{kiosk_id}")
+                            save_kiosk = st.form_submit_button("Save Changes")
+                            if save_kiosk:
+                                final_name = new_kiosk_name.strip() or kiosk_name
+                                dup = safe_read(
+                                    "SELECT id FROM kiosks WHERE branch=? AND organization=? AND device_name=? AND id<>?",
+                                    conn,
+                                    params=(admin_branch, org, final_name, kiosk_id),
+                                )
+                                if not dup.empty:
+                                    st.error("Another kiosk in this branch already uses that name.")
+                                else:
+                                    conn.execute(
+                                        "UPDATE kiosks SET device_name=? WHERE id=? AND organization=? AND branch=?",
+                                        (final_name, kiosk_id, org, admin_branch),
+                                    )
+                                    conn.commit()
+                                    log_action(conn, username, "EDIT KIOSK", f"{kiosk_name} -> {final_name}", org)
+                                    refresh_with_message(f"Kiosk updated to '{final_name}'.")
 
     # =====================================================
     # SETTINGS
