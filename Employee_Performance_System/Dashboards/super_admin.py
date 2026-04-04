@@ -2728,8 +2728,11 @@ def super_admin_dashboard():
                         try:
                             recs = management_recommendations(ratings, attendance, schedules)
                             if isinstance(recs, list):
-                                for r in recs:
-                                    st.success(r)
+                                if recs:
+                                    for r in recs:
+                                        st.success(r)
+                                else:
+                                    st.info("No urgent decisions right now. Keep monitoring weekly ratings and attendance.")
                             else:
                                 st.success(str(recs))
                         except Exception as e:
@@ -3089,8 +3092,11 @@ def super_admin_dashboard():
                     try:
                         org_recs = management_recommendations(ratings_all, attendance_all, schedules_all)
                         if isinstance(org_recs, list):
-                            for rec in org_recs:
-                                st.success(rec)
+                            if org_recs:
+                                for rec in org_recs:
+                                    st.success(rec)
+                            else:
+                                st.info("No urgent organization-wide decisions right now. Continue monitoring trends across branches.")
                         else:
                             st.success(str(org_recs))
                     except Exception as e:

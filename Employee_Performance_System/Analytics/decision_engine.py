@@ -592,4 +592,30 @@ def management_recommendations(ratings_df, attendance_df, schedules_df=None):
                         f"⚠ Admin {admin} conflict → {low_given}"
                     )
 
-    return list(set(recommendations))
+    recommendations = list(dict.fromkeys(str(item).strip() for item in recommendations if str(item).strip()))
+
+    if not recommendations and not avg_scores.empty:
+        overall_avg = float(avg_scores.mean())
+        top_user = str(avg_scores.idxmax())
+        low_user = str(avg_scores.idxmin())
+        low_score = float(avg_scores.min())
+
+        if overall_avg >= 75:
+            recommendations.append(
+                f"✅ Team is broadly stable at {overall_avg:.1f}%. Maintain weekly reviews and recognize strong performers like {top_user}."
+            )
+        else:
+            recommendations.append(
+                f"📌 Team average is {overall_avg:.1f}%. Keep close coaching and follow-ups to raise consistency."
+            )
+
+        if low_score < overall_avg:
+            recommendations.append(
+                f"🎯 Coach {low_user} with a short improvement plan while keeping {top_user} as a positive example."
+            )
+        else:
+            recommendations.append(
+                "👍 No urgent disciplinary action is needed right now; continue fair monitoring across the team."
+            )
+
+    return recommendations
