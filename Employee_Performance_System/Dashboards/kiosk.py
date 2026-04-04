@@ -58,9 +58,9 @@ def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwarg
 
 
 def home_kiosk_button(label, key):
-    _, center_col, _ = st.columns([0.05, 0.90, 0.05])
+    _, center_col, _ = st.columns([0.18, 0.64, 0.18])
     with center_col:
-        return st.button(label, key=key, use_container_width=True)
+        return st.button(label, key=key, use_container_width=True, type="primary")
 
 
 def _safe_read(conn, query, params=None):
@@ -444,7 +444,15 @@ def kiosk_dashboard():
     st.session_state["kiosk_branch"] = branch
     st.session_state["organization"] = org
 
-    st.caption(f"Organization: {org} | Branch: {branch}")
+    # ==============================
+    # VIEW ROUTING
+    # ==============================
+    if "kiosk_view" not in st.session_state:
+        st.session_state["kiosk_view"] = "home"
+    kiosk_view = st.session_state["kiosk_view"]
+
+    if kiosk_view != "home":
+        st.caption(f"Organization: {org} | Branch: {branch}")
 
     # ==============================
     # 🔒 DEVICE LOCK (FINAL)
@@ -456,7 +464,8 @@ def kiosk_dashboard():
         st.error(f"🚫 This device is permanently locked to '{st.session_state['locked_branch']}'")
         st.stop()
 
-    st.success(f"🔒 Locked to branch: {branch}")
+    if kiosk_view != "home":
+        st.success(f"🔒 Locked to branch: {branch}")
 
     # ==============================
     # VALIDATE BRANCH
@@ -495,13 +504,6 @@ def kiosk_dashboard():
 
     today = datetime.now().strftime("%Y-%m-%d")
 
-    # ==============================
-    # VIEW ROUTING
-    # ==============================
-    if "kiosk_view" not in st.session_state:
-        st.session_state["kiosk_view"] = "home"
-    kiosk_view = st.session_state["kiosk_view"]
-
     # ==============================================================
     # HOME
     # ==============================================================
@@ -509,19 +511,22 @@ def kiosk_dashboard():
         st.markdown(
             f"""
             <div class='home-kiosk-title'>
-                <div class='branch-name'>📍 {branch}</div>
+                <div class='branch-name'>{branch}</div>
                 <div class='manager-name'>Manager: <b>{manager_name}</b></div>
             </div>
             """,
             unsafe_allow_html=True,
         )
-        st.divider()
 
-        if home_kiosk_button("⭐  Guest Experience", key="home_btn_guest"):
+        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+
+        if home_kiosk_button("Guest Experience", key="home_btn_guest"):
             st.session_state["kiosk_view"] = "guest"
             refresh()
 
-        if home_kiosk_button("👤  Staff Check In", key="home_btn_staff"):
+        st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+
+        if home_kiosk_button("Staff Clock In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
             refresh()
 
