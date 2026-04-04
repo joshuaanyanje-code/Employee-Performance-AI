@@ -18,13 +18,37 @@ except ImportError:
 # super_admin → sees admins + employees, NOT master/super_admin
 # admin   → sees employees only, NOT master/super_admin
 # employee → sees only fellow employees
-ROLE_EXCLUSIONS = {
-    "master":      [],                                  # BOSS — full visibility
-    "super_admin": ["super_admin", "master"],           # no peer/boss data
-    "admin":       ["super_admin", "master"],           # no super_admin/master data
-    "employee":    ["super_admin", "master", "admin"],  # employees only
-    "kiosk":       ["super_admin", "master", "admin"],
+ROLE_ALIASES = {
+    "master": {"master", "master_admin", "owner", "overall"},
+    "super_admin": {"super_admin", "superadmin"},
+    "admin": {"admin", "manager"},
+    "employee": {"employee"},
+    "kiosk": {"kiosk"},
 }
+
+ROLE_EXCLUSIONS = {
+    "master": [],                                  # BOSS — full visibility
+    "super_admin": ["super_admin", "master"],   # no peer/boss data
+    "admin": ["super_admin", "master"],         # no super_admin/master data
+    "employee": ["super_admin", "master", "admin"],
+    "kiosk": ["super_admin", "master", "admin"],
+}
+
+
+def normalize_role_name(value):
+    role = str(value or "").strip().lower()
+    for canonical, aliases in ROLE_ALIASES.items():
+        if role in aliases:
+            return canonical
+    return role
+
+
+def expand_exclusion_roles(roles):
+    expanded = set()
+    for role in roles or []:
+        canonical = normalize_role_name(role)
+        expanded.update(ROLE_ALIASES.get(canonical, {canonical}))
+    return expanded
 
 
 def get_exclusion_roles(viewer_role):
@@ -36,7 +60,8 @@ def get_exclusion_roles(viewer_role):
     admin       → excludes master and super_admin from data
     employee    → excludes master, super_admin, admin from data
     """
-    return ROLE_EXCLUSIONS.get(viewer_role, [])
+    canonical_role = normalize_role_name(viewer_role)
+    return ROLE_EXCLUSIONS.get(canonical_role, [])
 
 
 # =====================================================
@@ -63,34 +88,33 @@ def filter_ratings_by_role(ratings_df, viewer_role=None):
         return ratings_df
     
     # Master admin — no filtering, sees everything
-    if viewer_role == "master":
+    if normalize_role_name(viewer_role) == "master":
         return ratings_df
     
-    # Default: exclude super_admin and master
-    exclude_roles = get_exclusion_roles(viewer_role or "admin")
+    exclude_roles = list(expand_exclusion_roles(get_exclusion_roles(viewer_role or "admin")))
+    if not exclude_roles:
+        return ratings_df.copy()
     
-    # Create exclude set for faster lookup
     try:
         from ..database.db import get_connection
-    except:
+    except Exception:
         from database.db import get_connection
     
     conn = get_connection()
     cursor = conn.cursor()
     
-    # Get users with excluded roles
     placeholders = ",".join(["?" for _ in exclude_roles])
-    cursor.execute(f"""
-    SELECT username FROM users WHERE role IN ({placeholders})
-    """, exclude_roles)
+    cursor.execute(
+        f"SELECT username FROM users WHERE LOWER(TRIM(COALESCE(role, ''))) IN ({placeholders})",
+        tuple(exclude_roles),
+    )
     
-    excluded_users = set([u[0] for u in cursor.fetchall()])
+    excluded_users = {str(u[0]).strip() for u in cursor.fetchall() if u and u[0] is not None}
     conn.close()
     
-    # Filter out excluded users from both rater and rated
     filtered_df = ratings_df[
-        ~ratings_df["rater"].isin(excluded_users) & 
-        ~ratings_df["rated"].isin(excluded_users)
+        ~ratings_df["rater"].astype(str).str.strip().isin(excluded_users)
+        & ~ratings_df["rated"].astype(str).str.strip().isin(excluded_users)
     ].copy()
     
     return filtered_df
@@ -108,13 +132,15 @@ def filter_users_by_role(users_df, viewer_role=None):
     if users_df is None or users_df.empty:
         return users_df
     
-    # Master admin — no filtering
-    if viewer_role == "master":
+    if normalize_role_name(viewer_role) == "master":
         return users_df
     
-    exclude_roles = get_exclusion_roles(viewer_role or "admin")
+    exclude_roles = {normalize_role_name(r) for r in expand_exclusion_roles(get_exclusion_roles(viewer_role or "admin"))}
+    role_norm = users_df["role"].astype(str).map(normalize_role_name)
+    filtered_df = users_df[~role_norm.isin(exclude_roles)].copy()
     
-    filtered_df = users_df[~users_df["role"].isin(exclude_roles)].copy()
+    if "exclude_from_analytics" in filtered_df.columns:
+        filtered_df = filtered_df[filtered_df["exclude_from_analytics"].fillna(0).astype(int) != 1].copy()
     
     return filtered_df
 

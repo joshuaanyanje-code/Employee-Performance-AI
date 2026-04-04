@@ -8,6 +8,10 @@ from Analytics.powermap import build_relationship_graph
 from Analytics.insights import generate_insights
 from Analytics.prediction import predict_future
 from Analytics.decision_engine import management_recommendations
+try:
+    from Analytics.analytics_filter import filter_ratings_by_role, filter_users_by_role
+except Exception:
+    from .analytics_filter import filter_ratings_by_role, filter_users_by_role
 
 
 def reports_panel():
@@ -15,10 +19,37 @@ def reports_panel():
     st.header("📊 Team Intelligence Reports")
 
     conn = get_connection()
+    organization = str(st.session_state.get("organization", "") or "").strip()
+    viewer_role = str(st.session_state.get("role", "superadmin") or "superadmin").strip().lower()
+    current_user = str(st.session_state.get("username", "") or "").strip().lower()
 
-    ratings = pd.read_sql("SELECT * FROM ratings", conn)
-    users = pd.read_sql("SELECT * FROM users", conn)
-    attendance = pd.read_sql("SELECT * FROM attendance", conn)
+    if organization:
+        ratings = pd.read_sql("SELECT * FROM ratings WHERE organization=?", conn, params=(organization,))
+        users = pd.read_sql("SELECT * FROM users WHERE organization=?", conn, params=(organization,))
+        attendance = pd.read_sql("SELECT * FROM attendance WHERE organization=?", conn, params=(organization,))
+    else:
+        ratings = pd.read_sql("SELECT * FROM ratings", conn)
+        users = pd.read_sql("SELECT * FROM users", conn)
+        attendance = pd.read_sql("SELECT * FROM attendance", conn)
+
+    users = filter_users_by_role(users, viewer_role=viewer_role)
+    ratings = filter_ratings_by_role(ratings, viewer_role=viewer_role)
+
+    if not users.empty and "username" in users.columns and current_user:
+        users = users[users["username"].astype(str).str.strip().str.lower() != current_user].copy()
+
+    allowed_users = set(users["username"].dropna().astype(str).str.strip().tolist()) if not users.empty and "username" in users.columns else set()
+
+    if allowed_users and not ratings.empty:
+        ratings = ratings[
+            ratings["rater"].astype(str).str.strip().isin(allowed_users)
+            & ratings["rated"].astype(str).str.strip().isin(allowed_users)
+        ].copy()
+    elif not ratings.empty:
+        ratings = ratings.iloc[0:0].copy()
+
+    if allowed_users and not attendance.empty and "username" in attendance.columns:
+        attendance = attendance[attendance["username"].astype(str).str.strip().isin(allowed_users)].copy()
 
     if ratings.empty:
         st.warning("No data yet")
@@ -123,21 +154,17 @@ def reports_panel():
 
         st.subheader("⚔ Mutual Conflict Detection")
 
-        all_users = users["username"].tolist()
+        all_users = sorted(set(users["username"].dropna().astype(str).str.strip().tolist()))
 
         conflict_pairs = []
 
-        for u1 in all_users:
-            for u2 in all_users:
+        for idx, u1 in enumerate(all_users):
+            for u2 in all_users[idx + 1:]:
 
-                if u1 == u2:
-                    continue
-
-                rated_by_u1 = ratings[ratings["rater"] == u1]["rated"].tolist()
-                rated_by_u2 = ratings[ratings["rater"] == u2]["rated"].tolist()
+                rated_by_u1 = ratings[ratings["rater"].astype(str) == u1]["rated"].astype(str).tolist()
+                rated_by_u2 = ratings[ratings["rater"].astype(str) == u2]["rated"].astype(str).tolist()
 
                 if u2 not in rated_by_u1 and u1 not in rated_by_u2:
-
                     conflict_pairs.append((u1, u2))
 
         if conflict_pairs:
