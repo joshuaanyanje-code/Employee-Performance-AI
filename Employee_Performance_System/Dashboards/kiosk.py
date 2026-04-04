@@ -547,7 +547,7 @@ def kiosk_dashboard():
 
         st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
 
-        if home_kiosk_button("Staff Clock In", key="home_btn_staff"):
+        if home_kiosk_button("Staff Check In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
             refresh()
 
