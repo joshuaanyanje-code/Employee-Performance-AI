@@ -86,6 +86,55 @@ def extract_user_mentions(findings, usernames):
     return sorted(set(mentioned), key=str.lower)
 
 
+def infer_relationship_label(text):
+    t = str(text or "").upper()
+    if "CONFLICT" in t or "ESCALATION" in t:
+        return "Conflict"
+    if "FAVORIT" in t or "BIAS" in t:
+        return "Favoritism/Bias"
+    if "DATING" in t or "RELATIONSHIP" in t:
+        return "Dating/Relationship"
+    if "ISOLATION" in t:
+        return "Isolation/Targeting"
+    if "BAD SEED" in t or "TOXIC" in t:
+        return "Toxic Influence"
+    if "WITHDRAWAL" in t:
+        return "Withdrawal Risk"
+    return "General"
+
+
+def build_who_against_who_rows(findings, usernames, source_label):
+    rows = []
+    if not findings:
+        return rows
+
+    for finding in findings:
+        finding_text = str(finding)
+        mentions = extract_user_mentions([finding_text], usernames)
+        relationship = infer_relationship_label(finding_text)
+
+        if len(mentions) >= 2:
+            for i in range(len(mentions)):
+                for j in range(i + 1, len(mentions)):
+                    rows.append({
+                        "Source": source_label,
+                        "Person A": mentions[i],
+                        "Person B": mentions[j],
+                        "Relationship": relationship,
+                        "Evidence": finding_text,
+                    })
+        elif len(mentions) == 1:
+            rows.append({
+                "Source": source_label,
+                "Person A": mentions[0],
+                "Person B": "",
+                "Relationship": relationship,
+                "Evidence": finding_text,
+            })
+
+    return rows
+
+
 def build_favorite_relationship_tables(ratings_df):
     if ratings_df is None or ratings_df.empty:
         return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
@@ -989,6 +1038,37 @@ def super_admin_dashboard():
                     st.dataframe(pd.DataFrame(conflict_rows), use_container_width=True)
                 else:
                     st.info("No conflict pairs detected in this scope.")
+
+                # --- WHO VS WHO (ALL INTELLIGENCE FINDINGS) ---
+                st.divider()
+                st.markdown("### Who Vs Who (All Findings)")
+
+                who_rows = []
+                who_rows.extend(build_who_against_who_rows(favoritism_flags, org_usernames, "Bias/Favoritism"))
+                who_rows.extend(build_who_against_who_rows(isolation_flags, org_usernames, "Isolation"))
+                who_rows.extend(build_who_against_who_rows(critical, org_usernames, "Critical Alerts"))
+                who_rows.extend(build_who_against_who_rows(intel.get("recommendations", []), org_usernames, "Recommendations"))
+
+                # Add explicit pair rows from group analysis so every detected pair is visible.
+                for g in all_groups:
+                    p1 = str(g.get("member_1", "") or "").strip()
+                    p2 = str(g.get("member_2", "") or "").strip()
+                    if p1 and p2:
+                        gtype = str(g.get("group_type", "") or "unknown")
+                        who_rows.append({
+                            "Source": "Group Analysis",
+                            "Person A": p1,
+                            "Person B": p2,
+                            "Relationship": gtype,
+                            "Evidence": str(g.get("description", "Pair detected")),
+                        })
+
+                if who_rows:
+                    who_df = pd.DataFrame(who_rows)
+                    who_df = who_df.drop_duplicates(subset=["Source", "Person A", "Person B", "Relationship", "Evidence"]).reset_index(drop=True)
+                    st.dataframe(who_df[["Source", "Person A", "Person B", "Relationship", "Evidence"]], use_container_width=True)
+                else:
+                    st.info("No person-vs-person links extracted from current findings.")
 
                 # --- RECOMMENDATIONS ---
                 st.divider()
@@ -2458,7 +2538,91 @@ def super_admin_dashboard():
                 if low_employee.empty:
                     st.info("No employee performance rows in this scope.")
                 else:
-                    st.dataframe(low_employee[["username", "branch", "avg_score", "rating_count"]].head(10), use_container_width=True)
+                    low_employee_view = low_employee[["username", "branch", "avg_score", "rating_count"]].head(10).copy()
+
+                    def _employee_gang_signal(employee_name):
+                        if ratings_all.empty or "rated" not in ratings_all.columns or "score" not in ratings_all.columns:
+                            return "No data"
+
+                        incoming = ratings_all[ratings_all["rated"].astype(str) == str(employee_name)]
+                        if incoming.empty:
+                            return "No data"
+
+                        incoming_low = incoming[pd.to_numeric(incoming["score"], errors="coerce") < 45]
+                        total_raters = int(incoming["rater"].astype(str).nunique()) if "rater" in incoming.columns else int(len(incoming))
+                        low_raters = int(incoming_low["rater"].astype(str).nunique()) if "rater" in incoming_low.columns else int(len(incoming_low))
+                        low_ratio = low_raters / max(total_raters, 1)
+
+                        outgoing = ratings_all[ratings_all.get("rater", "").astype(str) == str(employee_name)] if "rater" in ratings_all.columns else pd.DataFrame()
+                        outgoing_avg = float(pd.to_numeric(outgoing.get("score"), errors="coerce").mean()) if not outgoing.empty else 0.0
+
+                        warn_count = 0
+                        if not warnings_all.empty and "username" in warnings_all.columns:
+                            warn_count = int((warnings_all["username"].astype(str) == str(employee_name)).sum())
+
+                        late_rate = 0.0
+                        absent_rate = 0.0
+                        if not attendance_all.empty and "username" in attendance_all.columns and "status" in attendance_all.columns:
+                            emp_att = attendance_all[attendance_all["username"].astype(str) == str(employee_name)]
+                            if not emp_att.empty:
+                                late_rate = float((emp_att["status"].astype(str).str.upper() == "LATE").mean() * 100)
+                                absent_rate = float((emp_att["status"].astype(str).str.upper() == "ABSENT").mean() * 100)
+
+                        # Differentiation: likely gang pressure vs likely true low performance/behavior issue.
+                        if total_raters >= 4 and low_raters >= 3 and low_ratio >= 0.60 and outgoing_avg >= 55 and warn_count == 0 and late_rate < 25 and absent_rate < 10:
+                            return f"Possible gang against employee ({low_raters}/{total_raters} low raters)"
+                        if total_raters >= 4 and low_raters >= 3 and low_ratio >= 0.60:
+                            return f"Heavy negative cluster ({low_raters}/{total_raters})"
+                        return "No clear gang signal"
+
+                    def _employee_low_reason(employee_name):
+                        reasons = []
+
+                        row = low_employee[low_employee["username"].astype(str) == str(employee_name)]
+                        if not row.empty:
+                            avg_score = float(row.iloc[0].get("avg_score", 0) or 0)
+                            rating_count = int(row.iloc[0].get("rating_count", 0) or 0)
+                            if avg_score < 52:
+                                reasons.append(f"Very low peer rating ({avg_score:.1f})")
+                            elif avg_score < 55:
+                                reasons.append(f"Below-target peer rating ({avg_score:.1f})")
+                            if rating_count < 5:
+                                reasons.append("Few ratings captured (low confidence)")
+
+                        if not attendance_all.empty and "username" in attendance_all.columns and "status" in attendance_all.columns:
+                            emp_att = attendance_all[attendance_all["username"].astype(str) == str(employee_name)]
+                            if not emp_att.empty:
+                                late_rate = float((emp_att["status"].astype(str).str.upper() == "LATE").mean() * 100)
+                                absent_rate = float((emp_att["status"].astype(str).str.upper() == "ABSENT").mean() * 100)
+                                if late_rate >= 25:
+                                    reasons.append(f"Frequent lateness ({late_rate:.0f}% records)")
+                                if absent_rate >= 10:
+                                    reasons.append(f"Absenteeism risk ({absent_rate:.0f}% records)")
+
+                        if not warnings_all.empty and "username" in warnings_all.columns:
+                            warn_count = int((warnings_all["username"].astype(str) == str(employee_name)).sum())
+                            if warn_count >= 1:
+                                reasons.append(f"Warning history ({warn_count})")
+
+                        if not reasons:
+                            reasons.append("Low ranking from current performance mix")
+
+                        return "; ".join(reasons[:3])
+
+                    low_employee_view["Reason"] = low_employee_view["username"].apply(_employee_low_reason)
+                    low_employee_view["Staff Gang Signal"] = low_employee_view["username"].apply(_employee_gang_signal)
+                    st.dataframe(
+                        low_employee_view[["username", "branch", "avg_score", "rating_count", "Reason", "Staff Gang Signal"]],
+                        use_container_width=True,
+                    )
+
+                    suspected_emp_gang = low_employee_view[
+                        low_employee_view["Staff Gang Signal"].astype(str).str.contains("Possible gang against employee|Heavy negative cluster", case=False, na=False)
+                    ]
+                    if not suspected_emp_gang.empty:
+                        st.warning("Potential staff-gang signals detected against the following employee(s):")
+                        for _, row in suspected_emp_gang.iterrows():
+                            st.warning(f"- {row['username']}: {row['Staff Gang Signal']}")
 
                 st.markdown("**Low Performers - Admins**")
                 if low_admin.empty:
