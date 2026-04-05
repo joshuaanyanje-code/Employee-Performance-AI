@@ -1842,6 +1842,11 @@ def master_admin_dashboard():
                     if c4.button("🔴 Deactivate", key=f"{key_prefix}_deact_{entry['name']}"):
                         execute_write(conn, "UPDATE organizations SET status='disabled' WHERE name=?", (entry["name"],))
                         execute_write(conn, "UPDATE branches SET status='inactive' WHERE organization=?", (entry["name"],))
+                        execute_write(
+                            conn,
+                            "UPDATE user_sessions SET active=0 WHERE username IN (SELECT username FROM users WHERE organization=?)",
+                            (entry["name"],),
+                        )
                         conn.commit()
                         st.rerun()
 
@@ -1957,6 +1962,12 @@ def master_admin_dashboard():
                             st.warning(f"{manual_org} is currently {org_state}. Activate the organization first before enabling its branches.")
                         else:
                             execute_write(conn, "UPDATE branches SET status=? WHERE id=?", (new_status, b_id))
+                            if new_status != "active":
+                                execute_write(
+                                    conn,
+                                    "UPDATE user_sessions SET active=0 WHERE username IN (SELECT username FROM users WHERE organization=? AND branch=?)",
+                                    (manual_org, manual_branch),
+                                )
                             sync_org_status_from_branches(manual_org)
                             conn.commit()
                             st.success(f"{manual_branch} set to {new_status}.")
@@ -1983,6 +1994,11 @@ def master_admin_dashboard():
                 else:
                     execute_write(conn, "UPDATE organizations SET status='disabled' WHERE name=?", (control_org,))
                     execute_write(conn, "UPDATE branches SET status='inactive' WHERE organization=?", (control_org,))
+                    execute_write(
+                        conn,
+                        "UPDATE user_sessions SET active=0 WHERE username IN (SELECT username FROM users WHERE organization=?)",
+                        (control_org,),
+                    )
                     conn.commit()
                     st.warning(f"{control_org} has been disabled together with all its branches.")
                 st.rerun()
@@ -2004,6 +2020,11 @@ def master_admin_dashboard():
                     if br_row["Status"] == "active":
                         if col3.button("Deactivate", key=f"br_deact_{b_id}"):
                             execute_write(conn, "UPDATE branches SET status='inactive' WHERE id=?", (b_id,))
+                            execute_write(
+                                conn,
+                                "UPDATE user_sessions SET active=0 WHERE username IN (SELECT username FROM users WHERE organization=? AND branch=?)",
+                                (br_row["Organization"], br_row["Branch"]),
+                            )
                             sync_org_status_from_branches(br_row["Organization"])
                             conn.commit()
                             st.rerun()

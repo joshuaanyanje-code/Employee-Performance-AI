@@ -384,7 +384,7 @@ def _restore_session_from_token(conn, token):
 
     urow = user_df.iloc[0]
     user_status = str(urow.get("status", "active") or "active").lower()
-    if user_status in {"suspended", "inactive", "disabled"}:
+    if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
         _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
         _invalidate_login_session(conn, token)
         return False
@@ -446,7 +446,7 @@ def _get_access_block_reason(conn, organization, branch=""):
     if pd.notna(expires_at) and expires_at.to_pydatetime() < datetime.now():
         return f"Organization '{org_name}' subscription has expired. Access is not authorized."
 
-    if org_status in {"inactive", "disabled", "suspended"}:
+    if org_status in {"inactive", "disabled", "suspended", "deactivated", "blocked", "locked"}:
         return f"Organization '{org_name}' is currently {org_status}. Access is not authorized."
 
     if branch_name:
@@ -459,7 +459,7 @@ def _get_access_block_reason(conn, organization, branch=""):
             return f"Branch '{branch_name}' is not authorized for organization '{org_name}'."
 
         branch_status = str(branch_df.iloc[0].get("status", "active") or "active").strip().lower()
-        if branch_status in {"inactive", "disabled", "suspended"}:
+        if branch_status in {"inactive", "disabled", "suspended", "deactivated", "blocked", "locked"}:
             return f"Branch '{branch_name}' is currently {branch_status}. Access is not authorized."
 
     return ""
@@ -487,7 +487,7 @@ def _enforce_logged_in_access(conn):
     else:
         urow = user_df.iloc[0]
         user_status = str(urow.get("status", "active") or "active").strip().lower()
-        if user_status in {"suspended", "inactive", "disabled"}:
+        if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
             _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
         else:
             org = str(urow.get("organization", st.session_state.get("organization", "")) or "").strip()
@@ -701,7 +701,7 @@ def login():
             branch = str(user_row.get("branch", "") or "").strip()
             user_status = str(user_row.get("status", "active") or "active").strip().lower()
 
-            if user_status in {"suspended", "inactive", "disabled"}:
+            if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
                 st.error(f"Your account is currently {user_status}. Access is not authorized.")
                 return
 

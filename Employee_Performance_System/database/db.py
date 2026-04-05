@@ -19,7 +19,54 @@ except Exception:
 if load_dotenv is not None:
     load_dotenv()
 
-DB_PATH = "team_ai.db"
+
+def _score_existing_db(path):
+    if not path or not os.path.exists(path):
+        return (-1, -1, -1)
+
+    try:
+        size = os.path.getsize(path)
+    except Exception:
+        size = 0
+
+    core_tables = 0
+    extra_tables = 0
+    try:
+        probe = sqlite3.connect(path)
+        tables = {row[0] for row in probe.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        probe.close()
+        core_tables = sum(1 for name in ("organizations", "branches", "users") if name in tables)
+        extra_tables = sum(1 for name in ("attendance", "ratings", "leaves", "payments") if name in tables)
+    except Exception:
+        pass
+
+    return (core_tables, extra_tables, size)
+
+
+def _resolve_db_path():
+    env_path = str(os.getenv("TEAM_AI_DB_PATH", "") or "").strip()
+    if env_path:
+        return os.path.abspath(env_path)
+
+    package_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    workspace_root = os.path.abspath(os.path.join(package_root, ".."))
+    candidates = [
+        os.path.join(package_root, "team_ai.db"),
+        os.path.join(workspace_root, "team_ai.db"),
+    ]
+
+    best_path = candidates[0]
+    best_score = (-1, -1, -1)
+    for candidate in candidates:
+        score = _score_existing_db(candidate)
+        if score > best_score:
+            best_score = score
+            best_path = candidate
+
+    return os.path.abspath(best_path)
+
+
+DB_PATH = _resolve_db_path()
 
 
 class SyncedCursor(sqlite3.Cursor):
@@ -106,6 +153,7 @@ def _normalize_sqlite_now(query):
 
 
 def get_connection():
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=SyncedConnection)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
