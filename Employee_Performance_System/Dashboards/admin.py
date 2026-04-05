@@ -1787,8 +1787,19 @@ def admin_dashboard():
                         meta_bits.append(f"Deadline: {expires_text[:16]}")
                     st.caption(" | ".join(meta_bits))
 
+                    summary_df = results.get("summary_breakdown")
+                    if summary_df is not None and not summary_df.empty:
+                        st.markdown("**Response Counts Table**")
+                        st.dataframe(summary_df, use_container_width=True)
+
+                    detail_df = results.get("detailed_breakdown")
+                    if detail_df is not None and not detail_df.empty:
+                        st.markdown("**All Answers Breakdown**")
+                        st.dataframe(detail_df, use_container_width=True)
+
                     custom_df = results.get("custom_answers")
                     if custom_df is not None and not custom_df.empty:
+                        st.markdown("**Custom Answers Only**")
                         st.dataframe(custom_df, use_container_width=True)
                     else:
                         st.info("No custom answers yet.")

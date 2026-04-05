@@ -440,6 +440,8 @@ def get_poll_results(conn, poll_id, can_view_identities=False):
             "no_count": 0,
             "custom_count": 0,
             "custom_answers": pd.DataFrame(),
+            "summary_breakdown": pd.DataFrame(columns=["Response Type", "Count"]),
+            "detailed_breakdown": pd.DataFrame(columns=["Answer", "Count"]),
             "named_responses": pd.DataFrame(),
         }
 
@@ -463,28 +465,48 @@ def get_poll_results(conn, poll_id, can_view_identities=False):
             "no_count": 0,
             "custom_count": 0,
             "custom_answers": pd.DataFrame(columns=["Custom Answer", "Count"]),
+            "summary_breakdown": pd.DataFrame(
+                {"Response Type": ["Yes", "No", "Custom"], "Count": [0, 0, 0]}
+            ),
+            "detailed_breakdown": pd.DataFrame(columns=["Answer", "Count"]),
             "named_responses": pd.DataFrame(columns=["Responder", "Role", "Answer", "Branch", "Submitted At"]),
         }
 
     work = responses.copy()
-    work["response_choice"] = work["response_choice"].astype(str).str.title().str.strip()
+    work["response_choice"] = work["response_choice"].fillna("").astype(str).str.title().str.strip()
     work["custom_answer"] = work["custom_answer"].fillna("").astype(str).str.strip()
+    work["final_answer"] = work.apply(
+        lambda row: row["custom_answer"] if str(row["custom_answer"]).strip() else row["response_choice"],
+        axis=1,
+    )
+    work["answer_bucket"] = work["final_answer"].apply(
+        lambda value: value if str(value).strip().title() in {"Yes", "No"} else "Custom"
+    )
 
-    yes_count = int((work["response_choice"] == "Yes").sum())
-    no_count = int((work["response_choice"] == "No").sum())
-    custom_rows = work[(work["response_choice"] == "Custom") | (work["custom_answer"] != "")].copy()
-    custom_count = int(len(custom_rows))
+    yes_count = int((work["answer_bucket"] == "Yes").sum())
+    no_count = int((work["answer_bucket"] == "No").sum())
+    custom_count = int((work["answer_bucket"] == "Custom").sum())
 
-    if custom_rows.empty:
-        custom_answers = pd.DataFrame(columns=["Custom Answer", "Count"])
-    else:
-        custom_rows["display_answer"] = custom_rows["custom_answer"].replace("", "(Custom answer)")
-        custom_answers = (
-            custom_rows.groupby("display_answer").size().reset_index(name="Count")
-            .rename(columns={"display_answer": "Custom Answer"})
-            .sort_values(["Count", "Custom Answer"], ascending=[False, True])
-            .reset_index(drop=True)
-        )
+    summary_breakdown = pd.DataFrame(
+        {
+            "Response Type": ["Yes", "No", "Custom"],
+            "Count": [yes_count, no_count, custom_count],
+        }
+    )
+
+    detailed_breakdown = (
+        work.assign(display_answer=work["final_answer"].replace("", "(Blank answer)"))
+        .groupby("display_answer")
+        .size()
+        .reset_index(name="Count")
+        .rename(columns={"display_answer": "Answer"})
+        .sort_values(["Count", "Answer"], ascending=[False, True])
+        .reset_index(drop=True)
+    )
+
+    custom_answers = detailed_breakdown[
+        ~detailed_breakdown["Answer"].astype(str).str.title().isin(["Yes", "No"])
+    ].rename(columns={"Answer": "Custom Answer"}).reset_index(drop=True)
 
     named_responses = pd.DataFrame(columns=["Responder", "Role", "Answer", "Branch", "Submitted At"])
     try:
@@ -494,10 +516,7 @@ def get_poll_results(conn, poll_id, can_view_identities=False):
 
     if can_view_identities and anonymous_flag == 0:
         named_responses = work.copy()
-        named_responses["Answer"] = named_responses.apply(
-            lambda row: row["custom_answer"] if row["response_choice"] == "Custom" and row["custom_answer"] else row["response_choice"],
-            axis=1,
-        )
+        named_responses["Answer"] = named_responses["final_answer"]
         named_responses = named_responses.rename(
             columns={
                 "responder": "Responder",
@@ -514,5 +533,7 @@ def get_poll_results(conn, poll_id, can_view_identities=False):
         "no_count": no_count,
         "custom_count": custom_count,
         "custom_answers": custom_answers,
+        "summary_breakdown": summary_breakdown,
+        "detailed_breakdown": detailed_breakdown,
         "named_responses": named_responses,
     }
