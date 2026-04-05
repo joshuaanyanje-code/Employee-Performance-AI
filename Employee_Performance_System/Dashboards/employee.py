@@ -4,6 +4,7 @@ from datetime import datetime, date, timedelta
 from database.db import get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
+from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
 
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -124,6 +125,7 @@ def employee_dashboard():
     apply_responsive_ui("default")
 
     conn = get_connection()
+    ensure_poll_tables(conn)
     username = st.session_state.get("username")
     org = st.session_state.get("organization")
 
@@ -181,7 +183,7 @@ def employee_dashboard():
         "Profile", "Schedule", "Attendance", "Leave",
         "Notifications", "Rate", "My Score",
         "Analytics", "Top Performers",
-        "🏅 Badges", "Message Management", "Settings"
+        "🏅 Badges", "Polls", "Message Management", "Settings"
     ]
 
     if is_mobile:
@@ -715,6 +717,104 @@ def employee_dashboard():
                 st.dataframe(mine[show_cols], use_container_width=True)
             else:
                 st.info("You currently hold no active badge. Improve and badges will shift to you.")
+
+    # =====================================================
+    # POLLS
+    # =====================================================
+    elif page == "Polls":
+        st.subheader("Active Polls")
+        st.caption("Questions appear one by one. After you submit, the form resets and the next question opens automatically. Previous answers are locked.")
+        st.info(
+            "🔒 Privacy Notice: your responses are not shown to peers or branch managers. "
+            "If a poll is marked fully anonymous, even the Managing Director / super admin cannot identify you. "
+            "If anonymity is turned off for an investigation poll, only the Managing Director / super admin may see names."
+        )
+
+        polls_df = get_visible_polls(
+            conn,
+            org,
+            viewer_branch=branch,
+            viewer_role="employee",
+            include_closed=False,
+        )
+
+        poll_records = polls_df.to_dict("records") if not polls_df.empty else []
+        answered_items = []
+        unanswered_items = []
+        for row in poll_records:
+            existing = get_user_poll_response(conn, int(row.get("id", 0)), username)
+            if existing:
+                answered_items.append((row, existing))
+            else:
+                unanswered_items.append(row)
+
+        if poll_records:
+            p1, p2, p3 = st.columns(3)
+            p1.metric("Total Questions", len(poll_records))
+            p2.metric("Answered", len(answered_items))
+            p3.metric("Remaining", len(unanswered_items))
+
+        if unanswered_items:
+            current_poll = unanswered_items[0]
+            poll_id = int(current_poll["id"])
+            current_number = len(answered_items) + 1
+            total_questions = len(poll_records)
+            scope_label = "All Branches" if not str(current_poll.get("branch", "")).strip() else str(current_poll.get("branch", ""))
+            anonymous_flag = int(current_poll.get("anonymous", 1)) == 1
+            privacy_label = "Anonymous to peers, managers, and MD" if anonymous_flag else "Hidden from peers/managers; visible only to MD if needed"
+            expires_text = str(current_poll.get("expires_at", "") or "").strip()
+            options = ["Yes", "No"] + (["Custom"] if int(current_poll.get("allow_custom", 1)) == 1 else [])
+
+            st.markdown(f"### Current Question ({current_number}/{total_questions})")
+            st.write(str(current_poll.get("question", "")))
+            meta_bits = [f"Scope: {scope_label}", f"Privacy: {privacy_label}"]
+            if expires_text:
+                meta_bits.append(f"Deadline: {expires_text[:16]}")
+            st.caption(" | ".join(meta_bits))
+
+            with st.form(f"employee_poll_vote_{poll_id}", clear_on_submit=True):
+                answer_choice = st.radio(
+                    "Your answer",
+                    options,
+                    key=f"employee_poll_choice_{poll_id}",
+                )
+                custom_answer = ""
+                if answer_choice == "Custom":
+                    custom_answer = st.text_input(
+                        "Type custom answer / name / word",
+                        key=f"employee_poll_custom_{poll_id}",
+                    )
+                submit_vote = st.form_submit_button("Submit Answer")
+                if submit_vote:
+                    ok, message = submit_poll_response(
+                        conn,
+                        poll_id,
+                        org,
+                        username,
+                        "employee",
+                        responder_branch=branch,
+                        answer_choice=answer_choice,
+                        custom_answer=custom_answer,
+                    )
+                    if ok:
+                        refresh_with_message("Answer saved. Moving to the next question.")
+                    else:
+                        st.error(message)
+        else:
+            if poll_records:
+                st.success("✅ Thank you. You have completed all poll questions.")
+                st.info("Your answers have been recorded securely. Previous answers are locked and cannot be edited.")
+            else:
+                st.info("No active polls for you right now.")
+
+        if answered_items:
+            st.markdown("### Answered Questions (Locked)")
+            for row, existing in answered_items:
+                poll_id = int(row.get("id", 0))
+                saved_answer = str(existing.get("custom_answer", "") or existing.get("response_choice", ""))
+                with st.expander(f"#{poll_id} • {row.get('question', '')}"):
+                    st.success(f"Submitted answer: {saved_answer}")
+                    st.caption("Locked after submit. You cannot go back to change this answer.")
 
     # =====================================================
     # MESSAGE MANAGEMENT

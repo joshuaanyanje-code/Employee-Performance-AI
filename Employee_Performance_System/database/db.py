@@ -532,6 +532,50 @@ def create_tables():
     """)
 
     # =========================
+    # POLLS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS polls(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT DEFAULT '',
+        question TEXT,
+        allow_custom INTEGER DEFAULT 1,
+        anonymous INTEGER DEFAULT 1,
+        status TEXT DEFAULT 'open',
+        created_by TEXT,
+        creator_role TEXT DEFAULT '',
+        created_at TEXT,
+        closed_at TEXT DEFAULT '',
+        expires_at TEXT DEFAULT '',
+        archived INTEGER DEFAULT 0
+    )
+    """)
+    try:
+        c.execute("ALTER TABLE polls ADD COLUMN expires_at TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE polls ADD COLUMN archived INTEGER DEFAULT 0")
+    except Exception:
+        pass
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS poll_responses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        poll_id INTEGER,
+        organization TEXT,
+        branch TEXT DEFAULT '',
+        responder TEXT,
+        responder_role TEXT DEFAULT '',
+        response_choice TEXT DEFAULT '',
+        custom_answer TEXT DEFAULT '',
+        created_at TEXT,
+        UNIQUE(poll_id, responder)
+    )
+    """)
+
+    # =========================
     # PAYMENTS
     # =========================
     c.execute("""
@@ -834,6 +878,8 @@ def create_tables():
     c.execute("CREATE INDEX IF NOT EXISTS idx_warnings_user_org_created ON warnings(username, organization, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_messages_receiver_org_created ON messages(receiver, organization, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_system_messages_to_org_created ON system_messages(to_user, organization, created_at)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_polls_org_branch_status ON polls(organization, branch, status)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_poll_responses_poll_org ON poll_responses(poll_id, organization)")
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_leaves_org_branch_status ON leaves(organization, branch, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_schedules_user_org_day ON schedules(username, organization, day)")

@@ -10,6 +10,15 @@ except Exception:
     def is_mobile_device():
         return False
 from Analytics.badges import compute_badges_for_organization, get_badge_icon
+from Analytics.polls import (
+    create_poll_batch,
+    ensure_poll_tables,
+    get_poll_results,
+    get_user_poll_response,
+    get_visible_polls,
+    set_poll_status,
+    submit_poll_response,
+)
 
 
 # ==============================
@@ -145,6 +154,7 @@ def admin_dashboard():
 
     work_start = parse_hhmm(settings.get("work_start", "09:00"), "09:00")
     work_end = parse_hhmm(settings.get("work_end", "18:00"), "18:00")
+    ensure_poll_tables(conn)
 
     st.title("Admin Dashboard")
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
@@ -179,6 +189,7 @@ def admin_dashboard():
         "Badges",
         "Topics",
         "Messages",
+        "Polls",
         "Staff Check In",
         "Settings",
     ]
@@ -1587,6 +1598,222 @@ def admin_dashboard():
         if not sent_df.empty:
             st.markdown("### Sent Messages")
             st.dataframe(sent_df, use_container_width=True)
+
+    # =====================================================
+    # POLLS
+    # =====================================================
+    elif menu == "Polls":
+        st.subheader("Branch Polls")
+        st.caption("One question per line creates a step-by-step poll flow. Each person can answer once only, then the next question appears automatically.")
+        st.info(
+            "🔒 Privacy Notice: responses are not exposed to peers or ordinary staff. "
+            "For fully anonymous polls, even the Managing Director / super admin cannot identify the responder. "
+            "If anonymity is disabled for an investigation poll, identity remains hidden from branch viewers and is visible only to the Managing Director / super admin."
+        )
+
+        with st.form("admin_create_poll", clear_on_submit=True):
+            poll_questions = st.text_area(
+                "Poll Question(s)",
+                placeholder="Example:\nWho moved the wall clock?\nDid you see who took it?",
+            )
+            allow_custom = st.checkbox("Allow custom typed answers", value=True)
+            use_deadline = st.checkbox("Set deadline / expiry", value=False, key="admin_poll_use_deadline")
+            exp_col1, exp_col2 = st.columns(2)
+            with exp_col1:
+                expiry_date = st.date_input(
+                    "Expiry Date",
+                    value=date.today() + timedelta(days=1),
+                    disabled=not use_deadline,
+                    key="admin_poll_expiry_date",
+                )
+            with exp_col2:
+                expiry_time = st.time_input(
+                    "Expiry Time",
+                    value=time(18, 0),
+                    disabled=not use_deadline,
+                    key="admin_poll_expiry_time",
+                )
+            poll_submit = st.form_submit_button("Create Poll")
+            if poll_submit:
+                expiry_value = ""
+                if use_deadline:
+                    expiry_value = datetime.combine(expiry_date, expiry_time).strftime("%Y-%m-%d %H:%M:%S")
+                ok, message, poll_ids = create_poll_batch(
+                    conn,
+                    org,
+                    poll_questions,
+                    username,
+                    "admin",
+                    branch=admin_branch,
+                    anonymous=True,
+                    allow_custom=allow_custom,
+                    expires_at=expiry_value,
+                )
+                if ok:
+                    log_action(conn, username, "CREATE POLL", f"{admin_branch} | poll_ids={','.join(map(str, poll_ids))}", org)
+                    refresh_with_message(message)
+                else:
+                    st.error(message)
+
+        st.divider()
+        st.markdown("### Answer Polls")
+        open_polls_df = get_visible_polls(
+            conn,
+            org,
+            viewer_branch=admin_branch,
+            viewer_role="admin",
+            include_closed=False,
+        )
+
+        poll_records = open_polls_df.to_dict("records") if not open_polls_df.empty else []
+        answered_items = []
+        unanswered_items = []
+        for row in poll_records:
+            existing = get_user_poll_response(conn, int(row.get("id", 0)), username)
+            if existing:
+                answered_items.append((row, existing))
+            else:
+                unanswered_items.append(row)
+
+        if poll_records:
+            pm1, pm2, pm3 = st.columns(3)
+            pm1.metric("Total Questions", len(poll_records))
+            pm2.metric("Answered", len(answered_items))
+            pm3.metric("Remaining", len(unanswered_items))
+
+        if unanswered_items:
+            current_poll = unanswered_items[0]
+            poll_id = int(current_poll["id"])
+            total_questions = len(poll_records)
+            current_number = len(answered_items) + 1
+            scope_label = "All Branches" if not str(current_poll.get("branch", "")).strip() else str(current_poll.get("branch", ""))
+            anonymous_flag = int(current_poll.get("anonymous", 1)) == 1
+            privacy_label = "Anonymous to peers, managers, and MD" if anonymous_flag else "Hidden from branch viewers; visible only to MD if needed"
+            expires_text = str(current_poll.get("expires_at", "") or "").strip()
+            options = ["Yes", "No"] + (["Custom"] if int(current_poll.get("allow_custom", 1)) == 1 else [])
+
+            st.markdown(f"### Current Question ({current_number}/{total_questions})")
+            st.write(str(current_poll.get("question", "")))
+            meta_bits = [f"Scope: {scope_label}", f"Privacy: {privacy_label}"]
+            if expires_text:
+                meta_bits.append(f"Deadline: {expires_text[:16]}")
+            st.caption(" | ".join(meta_bits))
+
+            with st.form(f"admin_poll_vote_{poll_id}", clear_on_submit=True):
+                answer_choice = st.radio(
+                    "Your answer",
+                    options,
+                    key=f"admin_poll_choice_{poll_id}",
+                )
+                custom_answer = ""
+                if answer_choice == "Custom":
+                    custom_answer = st.text_input(
+                        "Type custom answer / name / word",
+                        key=f"admin_poll_custom_{poll_id}",
+                    )
+                submit_vote = st.form_submit_button("Submit Answer")
+                if submit_vote:
+                    ok, message = submit_poll_response(
+                        conn,
+                        poll_id,
+                        org,
+                        username,
+                        "admin",
+                        responder_branch=admin_branch,
+                        answer_choice=answer_choice,
+                        custom_answer=custom_answer,
+                    )
+                    if ok:
+                        log_action(conn, username, "ANSWER POLL", f"poll_id={poll_id}", org)
+                        refresh_with_message("Answer saved. Moving to the next question.")
+                    else:
+                        st.error(message)
+        else:
+            if poll_records:
+                st.success("✅ Thank you. You have completed all poll questions.")
+                st.info("Your answers have been recorded securely. Previous answers are locked and cannot be edited.")
+            else:
+                st.info("No open polls for this branch right now.")
+
+        if answered_items:
+            st.markdown("### Answered Questions (Locked)")
+            for row, existing in answered_items:
+                poll_id = int(row.get("id", 0))
+                saved_answer = str(existing.get("custom_answer", "") or existing.get("response_choice", ""))
+                with st.expander(f"#{poll_id} • {row.get('question', '')}"):
+                    st.success(f"Submitted answer: {saved_answer}")
+                    st.caption("Locked after submit. You cannot go back and change this answer.")
+
+        st.divider()
+        st.markdown("### Poll Results")
+        all_polls_df = get_visible_polls(
+            conn,
+            org,
+            viewer_branch=admin_branch,
+            viewer_role="admin",
+            include_closed=True,
+        )
+
+        if all_polls_df.empty:
+            st.info("No polls created yet.")
+        else:
+            for _, poll_row in all_polls_df.iterrows():
+                poll_id = int(poll_row["id"])
+                scope_label = "All Branches" if not str(poll_row.get("branch", "")).strip() else str(poll_row.get("branch", ""))
+                raw_status = str(poll_row.get("status", "open") or "open").strip().lower()
+                is_expired = int(poll_row.get("is_expired", 0) or 0) == 1
+                display_status = "Expired" if raw_status == "open" and is_expired else raw_status.title()
+                results = get_poll_results(conn, poll_id, can_view_identities=False)
+                with st.expander(f"#{poll_id} [{display_status}] {poll_row.get('question', '')}"):
+                    m1, m2, m3, m4 = st.columns(4)
+                    m1.metric("Yes", results.get("yes_count", 0))
+                    m2.metric("No", results.get("no_count", 0))
+                    m3.metric("Custom", results.get("custom_count", 0))
+                    m4.metric("Total", results.get("total", 0))
+
+                    chart_df = pd.DataFrame(
+                        {"Responses": [results.get("yes_count", 0), results.get("no_count", 0), results.get("custom_count", 0)]},
+                        index=["Yes", "No", "Custom"],
+                    )
+                    st.bar_chart(chart_df)
+
+                    meta_bits = [
+                        f"Scope: {scope_label}",
+                        f"Created by: {poll_row.get('created_by', '-')}",
+                        "Identity is hidden for admin/manager views.",
+                    ]
+                    expires_text = str(poll_row.get("expires_at", "") or "").strip()
+                    if expires_text:
+                        meta_bits.append(f"Deadline: {expires_text[:16]}")
+                    st.caption(" | ".join(meta_bits))
+
+                    custom_df = results.get("custom_answers")
+                    if custom_df is not None and not custom_df.empty:
+                        st.dataframe(custom_df, use_container_width=True)
+                    else:
+                        st.info("No custom answers yet.")
+
+                    if str(poll_row.get("created_by", "")).strip() == str(username):
+                        action_col1, action_col2 = st.columns(2)
+                        next_status = "closed" if raw_status == "open" else "open"
+                        action_label = "Close Poll" if raw_status == "open" else "Reopen Poll"
+                        if action_col1.button(action_label, key=f"admin_toggle_poll_{poll_id}"):
+                            ok, message = set_poll_status(conn, poll_id, next_status)
+                            if ok:
+                                log_action(conn, username, action_label.upper(), f"poll_id={poll_id}", org)
+                                refresh_with_message(message, level="warning" if next_status != "open" else "success")
+                            else:
+                                st.error(message)
+
+                        archive_label = "Archive Poll" if raw_status != "archived" else "Restore Poll"
+                        archive_next_status = "archived" if raw_status != "archived" else "open"
+                        if action_col2.button(archive_label, key=f"admin_archive_poll_{poll_id}"):
+                            ok, message = set_poll_status(conn, poll_id, archive_next_status)
+                            if ok:
+                                log_action(conn, username, archive_label.upper(), f"poll_id={poll_id}", org)
+                                refresh_with_message(message, level="warning" if archive_next_status == "archived" else "success")
+                            else:
+                                st.error(message)
 
     # =====================================================
     # KIOSK

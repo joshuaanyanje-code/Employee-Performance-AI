@@ -2,7 +2,7 @@
 import pandas as pd
 import json
 import re
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, time
 from urllib.parse import quote
 import importlib
 
@@ -15,6 +15,7 @@ except Exception:
 
 from database.db import get_connection, hash_password, log_action, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui
+from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -493,6 +494,7 @@ def super_admin_dashboard():
     apply_responsive_ui("default")
 
     conn = get_connection()
+    ensure_poll_tables(conn)
     user = st.session_state.get("username")
     org  = st.session_state.get("organization")
 
@@ -1950,8 +1952,8 @@ def super_admin_dashboard():
     elif menu == "Management" and management_view == "Operations":
         st.subheader("Management")
 
-        tab_topics, tab_leaves, tab_messages, tab_warnings, tab_kiosk, tab_pending = st.tabs([
-            "Topics", "Leaves", "Messages", "Warnings", "Kiosk", "Pending Approvals"
+        tab_topics, tab_leaves, tab_messages, tab_warnings, tab_polls, tab_kiosk, tab_pending = st.tabs([
+            "Topics", "Leaves", "Messages", "Warnings", "Polls", "Kiosk", "Pending Approvals"
         ])
 
         # ---- TOPICS ----
@@ -2315,6 +2317,153 @@ def super_admin_dashboard():
                 st.divider()
                 st.markdown("### Warning History")
                 st.dataframe(warns_history, use_container_width=True)
+
+        # ---- POLLS ----
+        with tab_polls:
+            st.markdown("### Investigation & Feedback Polls")
+            st.caption("Create single or multi-question polls for a branch or the whole organization. Admins only see anonymous counts and grouped custom answers.")
+            show_flash_message("super_admin_poll_flash")
+
+            poll_create_tab, poll_results_tab = st.tabs(["Create Poll", "Poll Results"])
+
+            with poll_create_tab:
+                poll_branch_options = ["All Branches"] + branches if branches else ["All Branches"]
+                with st.form("sa_create_poll", clear_on_submit=True):
+                    poll_questions = st.text_area(
+                        "Poll Question(s)",
+                        placeholder="Example:\nWho moved or stole the clock?\nDid you personally see it happen?",
+                    )
+                    poll_branch = st.selectbox("Target Scope", poll_branch_options, key="sa_poll_branch")
+                    allow_custom = st.checkbox("Allow custom typed answers", value=True)
+                    anonymous = st.checkbox(
+                        "Keep responses anonymous for everyone",
+                        value=True,
+                        help="If turned off, only super admin can see respondent names. Admins/managers still see anonymous summaries only.",
+                    )
+                    use_deadline = st.checkbox("Set deadline / expiry", value=False, key="sa_poll_use_deadline")
+                    exp_col1, exp_col2 = st.columns(2)
+                    with exp_col1:
+                        expiry_date = st.date_input(
+                            "Expiry Date",
+                            value=date.today() + timedelta(days=1),
+                            disabled=not use_deadline,
+                            key="sa_poll_expiry_date",
+                        )
+                    with exp_col2:
+                        expiry_time = st.time_input(
+                            "Expiry Time",
+                            value=time(18, 0),
+                            disabled=not use_deadline,
+                            key="sa_poll_expiry_time",
+                        )
+                    create_poll_submit = st.form_submit_button("Create Poll")
+                    if create_poll_submit:
+                        target_branch = "" if poll_branch == "All Branches" else poll_branch
+                        expiry_value = ""
+                        if use_deadline:
+                            expiry_value = datetime.combine(expiry_date, expiry_time).strftime("%Y-%m-%d %H:%M:%S")
+                        ok, message, poll_ids = create_poll_batch(
+                            conn,
+                            org,
+                            poll_questions,
+                            user,
+                            "superadmin",
+                            branch=target_branch,
+                            anonymous=anonymous,
+                            allow_custom=allow_custom,
+                            expires_at=expiry_value,
+                        )
+                        if ok:
+                            log_action(conn, user, "CREATE POLL", f"poll_ids={','.join(map(str, poll_ids))}", org)
+                            set_flash_message("super_admin_poll_flash", "success", message)
+                            st.rerun()
+                        else:
+                            st.error(message)
+
+            with poll_results_tab:
+                polls_df = get_visible_polls(conn, org, viewer_role="superadmin", include_closed=True)
+                if polls_df.empty:
+                    st.info("No polls created yet.")
+                else:
+                    for _, poll_row in polls_df.iterrows():
+                        poll_id = int(poll_row["id"])
+                        scope_label = "All Branches" if not str(poll_row.get("branch", "")).strip() else str(poll_row.get("branch", ""))
+                        raw_status = str(poll_row.get("status", "open") or "open").strip().lower()
+                        is_expired = int(poll_row.get("is_expired", 0) or 0) == 1
+                        status_label = "Expired" if raw_status == "open" and is_expired else raw_status.title()
+                        results = get_poll_results(conn, poll_id, can_view_identities=True)
+
+                        with st.expander(f"#{poll_id} [{status_label}] {poll_row.get('question', '')}"):
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Yes", results.get("yes_count", 0))
+                            m2.metric("No", results.get("no_count", 0))
+                            m3.metric("Custom", results.get("custom_count", 0))
+                            m4.metric("Total", results.get("total", 0))
+
+                            chart_df = pd.DataFrame(
+                                {"Responses": [results.get("yes_count", 0), results.get("no_count", 0), results.get("custom_count", 0)]},
+                                index=["Yes", "No", "Custom"],
+                            )
+                            st.bar_chart(chart_df)
+
+                            privacy_label = "Anonymous for everyone" if int(poll_row.get("anonymous", 1)) == 1 else "Named view available to super admin only"
+                            meta_bits = [
+                                f"Scope: {scope_label}",
+                                f"Created by: {poll_row.get('created_by', '-')}",
+                                f"Privacy: {privacy_label}",
+                            ]
+                            expires_text = str(poll_row.get("expires_at", "") or "").strip()
+                            if expires_text:
+                                meta_bits.append(f"Deadline: {expires_text[:16]}")
+                            st.caption(" | ".join(meta_bits))
+
+                            custom_df = results.get("custom_answers")
+                            if custom_df is not None and not custom_df.empty:
+                                st.markdown("**Custom Answers**")
+                                st.dataframe(custom_df, use_container_width=True)
+                            else:
+                                st.info("No custom answers yet.")
+
+                            named_df = results.get("named_responses")
+                            if int(poll_row.get("anonymous", 1)) == 0:
+                                if named_df is not None and not named_df.empty:
+                                    st.markdown("**Named Responses (Super Admin Only)**")
+                                    st.dataframe(named_df, use_container_width=True)
+                                else:
+                                    st.info("No named responses yet.")
+                            else:
+                                st.info("This poll is fully anonymous. Names stay hidden from every viewer.")
+
+                            action_col1, action_col2 = st.columns(2)
+                            next_status = "closed" if raw_status == "open" else "open"
+                            toggle_label = "Close Poll" if raw_status == "open" else "Reopen Poll"
+                            if action_col1.button(toggle_label, key=f"sa_poll_toggle_{poll_id}"):
+                                ok, message = set_poll_status(conn, poll_id, next_status)
+                                if ok:
+                                    log_action(conn, user, toggle_label.upper(), f"poll_id={poll_id}", org)
+                                    set_flash_message(
+                                        "super_admin_poll_flash",
+                                        "warning" if next_status != "open" else "success",
+                                        message,
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+
+                            archive_label = "Archive Poll" if raw_status != "archived" else "Restore Poll"
+                            archive_next_status = "archived" if raw_status != "archived" else "open"
+                            if action_col2.button(archive_label, key=f"sa_poll_archive_{poll_id}"):
+                                ok, message = set_poll_status(conn, poll_id, archive_next_status)
+                                if ok:
+                                    log_action(conn, user, archive_label.upper(), f"poll_id={poll_id}", org)
+                                    set_flash_message(
+                                        "super_admin_poll_flash",
+                                        "warning" if archive_next_status == "archived" else "success",
+                                        message,
+                                    )
+                                    st.rerun()
+                                else:
+                                    st.error(message)
 
         # ---- KIOSK (inside Management) ----
         with tab_kiosk:
