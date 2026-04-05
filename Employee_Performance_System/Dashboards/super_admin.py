@@ -13,7 +13,7 @@ except Exception:
     holiday_lib = None
     HOLIDAYS_OK = False
 
-from database.db import get_connection, hash_password, log_action, is_recent_duplicate_message
+from database.db import get_connection, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
@@ -1623,7 +1623,7 @@ def super_admin_dashboard():
                 u    = st.text_input("Username")
                 p    = st.text_input("Password", type="password")
                 pin  = st.text_input("PIN (4 digits, default 1234)")
-                phone = st.text_input("Phone Number (required)")
+                phone = st.text_input("Phone Number (required, full format e.g. 2547XXXXXXXX)")
                 role = st.selectbox("Role", ["employee", "admin"])
                 br   = st.selectbox("Branch", branches if branches else ["Create a branch first"])
                 gender = st.selectbox("Gender", ["unknown", "male", "female"])
@@ -1640,12 +1640,15 @@ def super_admin_dashboard():
                         st.error("Password must be at least 4 characters.")
                     else:
                         exists = safe_read("SELECT id FROM users WHERE username=?", conn, params=(u,))
+                        normalized_phone, phone_error = get_phone_uniqueness_error(conn, phone)
                         if not exists.empty:
                             st.error(f"Username '{u}' already exists.")
+                        elif phone_error:
+                            st.error(phone_error)
                         else:
                             conn.execute(
                                 "INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender) VALUES(?,?,?,?,?,?,?,?,?)",
-                                (u.strip(), hash_password(p), role, br, org, "active", pin.strip() or "1234", phone.strip(), gender)
+                                (u.strip(), hash_password(p), role, br, org, "active", pin.strip() or "1234", normalized_phone, gender)
                             )
                             conn.commit()
                             log_action(conn, user, "CREATE USER", u, org)

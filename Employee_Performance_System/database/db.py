@@ -272,6 +272,60 @@ def verify_password(password, hashed):
     return hash_password(password) == hashed
 
 
+def normalize_phone_number(phone):
+    raw = str(phone or "").strip()
+    digits = re.sub(r"\D+", "", raw)
+
+    if not digits:
+        return "", "Phone number is required."
+
+    if digits.startswith("254"):
+        normalized = digits
+    elif digits.startswith("0") and len(digits) == 10:
+        normalized = "254" + digits[1:]
+    elif len(digits) == 9 and digits[:1] in {"7", "1"}:
+        normalized = "254" + digits
+    else:
+        return "", "Use the full standard phone format like 2547XXXXXXXX."
+
+    if not re.fullmatch(r"254(7\d{8}|1\d{8})", normalized):
+        return "", "Use a valid full standard phone number like 2547XXXXXXXX or 2541XXXXXXXX."
+
+    return normalized, ""
+
+
+def get_phone_uniqueness_error(conn, phone, exclude_username=None, exclude_organization=None):
+    normalized, error = normalize_phone_number(phone)
+    if error:
+        return normalized, error
+
+    try:
+        user_query = "SELECT username FROM users WHERE TRIM(COALESCE(phone, ''))=?"
+        user_params = [normalized]
+        if exclude_username:
+            user_query += " AND lower(trim(username))<>lower(trim(?))"
+            user_params.append(str(exclude_username).strip())
+        user_row = conn.execute(user_query + " LIMIT 1", tuple(user_params)).fetchone()
+        if user_row and str(user_row[0]).strip():
+            return normalized, f"Phone number {normalized} is already used by user '{user_row[0]}'."
+    except Exception:
+        pass
+
+    try:
+        org_query = "SELECT name FROM organizations WHERE TRIM(COALESCE(phone, ''))=?"
+        org_params = [normalized]
+        if exclude_organization:
+            org_query += " AND lower(trim(name))<>lower(trim(?))"
+            org_params.append(str(exclude_organization).strip())
+        org_row = conn.execute(org_query + " LIMIT 1", tuple(org_params)).fetchone()
+        if org_row and str(org_row[0]).strip():
+            return normalized, f"Phone number {normalized} is already used by organization '{org_row[0]}'."
+    except Exception:
+        pass
+
+    return normalized, ""
+
+
 # =========================
 # LOG SYSTEM (NO IMPORT LOOP 🔥)
 # =========================
@@ -914,6 +968,14 @@ def create_tables():
     # =========================
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_org_branch_role_status ON users(organization, branch, role, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_username_org ON users(username, organization)")
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE TRIM(COALESCE(phone, '')) <> ''")
+    except Exception:
+        pass
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_organizations_phone_unique ON organizations(phone) WHERE TRIM(COALESCE(phone, '')) <> ''")
+    except Exception:
+        pass
 
     c.execute("CREATE INDEX IF NOT EXISTS idx_ratings_org_branch_created ON ratings(organization, branch, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_ratings_rated_org ON ratings(rated, organization)")

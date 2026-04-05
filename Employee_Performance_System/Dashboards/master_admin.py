@@ -2,7 +2,7 @@
 import pandas as pd
 import os
 from datetime import datetime, timedelta
-from database.db import get_connection, hash_password, verify_password, execute_write
+from database.db import get_connection, hash_password, verify_password, execute_write, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -1441,10 +1441,11 @@ def master_admin_dashboard():
         with tab_create:
             with st.form("create_org", clear_on_submit=False):
                 st.markdown("#### New Organization")
-                name          = st.text_input("Organization Name")
-                superadmin    = st.text_input("Super Admin Username")
-                phone         = st.text_input("Phone Number (254...)")
-                password      = st.text_input("Password", type="password")
+                name             = st.text_input("Organization Name")
+                superadmin       = st.text_input("Super Admin Username")
+                org_phone        = st.text_input("Organization Phone (full format e.g. 2547XXXXXXXX)")
+                superadmin_phone = st.text_input("Super Admin Phone (full format e.g. 2547XXXXXXXX)")
+                password         = st.text_input("Password", type="password")
                 confirm_pw    = st.text_input("Confirm Password", type="password")
                 email         = st.text_input("Email (optional)")
                 location      = st.text_input("Location")
@@ -1457,8 +1458,8 @@ def master_admin_dashboard():
                 submitted  = st.form_submit_button("✅ Create Organization")
 
                 if submitted:
-                    if not name or not superadmin or not password or not phone.strip():
-                        st.error("Organization name, super admin username, password, and phone are mandatory.")
+                    if not name or not superadmin or not password or not org_phone.strip() or not superadmin_phone.strip():
+                        st.error("Organization name, super admin username, password, organization phone, and super admin phone are mandatory.")
                     elif password != confirm_pw:
                         st.error("Passwords do not match.")
                     else:
@@ -1475,22 +1476,30 @@ def master_admin_dashboard():
                                 conn,
                                 params=(superadmin_name,),
                             )
+                            normalized_org_phone, org_phone_error = get_phone_uniqueness_error(conn, org_phone)
+                            normalized_superadmin_phone, superadmin_phone_error = get_phone_uniqueness_error(conn, superadmin_phone)
 
                             if not existing_org.empty:
                                 st.error(f"Organization '{org_name}' already exists.")
                             elif not existing_user.empty:
                                 st.error(f"Username '{superadmin_name}' already exists.")
+                            elif org_phone_error:
+                                st.error(org_phone_error)
+                            elif superadmin_phone_error:
+                                st.error(superadmin_phone_error)
+                            elif normalized_org_phone == normalized_superadmin_phone:
+                                st.error("Organization phone and super admin phone must be different. Phone numbers cannot be shared.")
                             else:
                                 expiry = datetime.now() + timedelta(days=30)
                                 execute_write(conn, """
                                     INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
                                     VALUES (?,?,?,?,?,?,?,?)
-                                """, (org_name, "active", phone.strip(), email.strip(), location.strip(),
+                                """, (org_name, "active", normalized_org_phone, email.strip(), location.strip(),
                                       str(datetime.now()), str(expiry), business_type))
                                 execute_write(conn, """
                                     INSERT INTO users(username, password, role, organization, status, phone)
                                     VALUES (?,?,?,?,?,?)
-                                """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", phone.strip()))
+                                """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", normalized_superadmin_phone))
                                 conn.commit()
                                 set_flash_message(
                                     "master_org_flash",
@@ -1511,7 +1520,7 @@ def master_admin_dashboard():
 
                 with st.form("edit_org", clear_on_submit=False):
                     new_name   = st.text_input("Organization Name", value=str(row.get("name",     "") or ""))
-                    new_phone  = st.text_input("Phone",             value=str(row.get("phone",    "") or ""))
+                    new_phone  = st.text_input("Phone (full format e.g. 2547XXXXXXXX)", value=str(row.get("phone", "") or ""))
                     new_email  = st.text_input("Email",             value=str(row.get("email",    "") or ""))
                     new_loc    = st.text_input("Location",          value=str(row.get("location", "") or ""))
                     status_idx = 0 if row.get("status") == "active" else 1
@@ -1524,30 +1533,41 @@ def master_admin_dashboard():
 
                     if save_edit:
                         try:
-                            execute_write(conn, """
-                                UPDATE organizations SET name=?, phone=?, email=?, location=?, status=?, business_type=?
-                                WHERE id=?
-                            """, (new_name, new_phone, new_email, new_loc, new_status, new_biz_type, int(row["id"])))
-                            if new_name != org_sel:
-                                for tbl in ["users", "branches", "attendance", "ratings",
-                                            "leaves", "warnings", "messages", "kiosks",
-                                            "payments", "schedules"]:
-                                    try:
-                                        execute_write(
-                                            conn,
-                                            f"UPDATE {tbl} SET organization=? WHERE organization=?",
-                                            (new_name, org_sel)
-                                        )
-                                    except Exception:
-                                        pass
-                            execute_write(
+                            normalized_org_phone, org_phone_error = get_phone_uniqueness_error(conn, new_phone, exclude_organization=org_sel)
+                            name_conflict = safe_read(
+                                "SELECT id FROM organizations WHERE lower(trim(name)) = lower(trim(?)) AND id<>?",
                                 conn,
-                                "UPDATE branches SET status=? WHERE organization=?",
-                                (new_status, new_name)
+                                params=(new_name.strip(), int(row["id"])),
                             )
-                            conn.commit()
-                            st.success("✅ Organization updated successfully!")
-                            st.rerun()
+                            if org_phone_error:
+                                st.error(org_phone_error)
+                            elif not name_conflict.empty:
+                                st.error(f"Organization '{new_name.strip()}' already exists.")
+                            else:
+                                execute_write(conn, """
+                                    UPDATE organizations SET name=?, phone=?, email=?, location=?, status=?, business_type=?
+                                    WHERE id=?
+                                """, (new_name.strip(), normalized_org_phone, new_email.strip(), new_loc.strip(), new_status, new_biz_type, int(row["id"])))
+                                if new_name.strip() != org_sel:
+                                    for tbl in ["users", "branches", "attendance", "ratings",
+                                                "leaves", "warnings", "messages", "kiosks",
+                                                "payments", "schedules"]:
+                                        try:
+                                            execute_write(
+                                                conn,
+                                                f"UPDATE {tbl} SET organization=? WHERE organization=?",
+                                                (new_name.strip(), org_sel)
+                                            )
+                                        except Exception:
+                                            pass
+                                execute_write(
+                                    conn,
+                                    "UPDATE branches SET status=? WHERE organization=?",
+                                    (new_status, new_name.strip())
+                                )
+                                conn.commit()
+                                st.success("✅ Organization updated successfully!")
+                                st.rerun()
                         except Exception as e:
                             st.error(str(e))
 

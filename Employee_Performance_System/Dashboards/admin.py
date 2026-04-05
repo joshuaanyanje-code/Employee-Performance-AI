@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
-from database.db import get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message
+from database.db import get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -311,7 +311,7 @@ def admin_dashboard():
                 new_user = st.text_input("Username", key="admin_create_username")
                 new_pass = st.text_input("Password", type="password", key="admin_create_password")
                 new_pin = st.text_input("PIN", value="1234", key="admin_create_pin")
-                new_phone = st.text_input("Phone Number (required)", key="admin_create_phone")
+                new_phone = st.text_input("Phone Number (required, full format e.g. 2547XXXXXXXX)", key="admin_create_phone")
                 create_sub = st.form_submit_button("Create Employee")
 
                 if create_sub:
@@ -327,8 +327,11 @@ def admin_dashboard():
                             conn,
                             params=(new_user.strip(),),
                         )
+                        normalized_phone, phone_error = get_phone_uniqueness_error(conn, new_phone)
                         if not exists.empty:
                             st.error("Username already exists.")
+                        elif phone_error:
+                            st.error(phone_error)
                         else:
                             conn.execute(
                                 """
@@ -343,7 +346,7 @@ def admin_dashboard():
                                     org,
                                     "active",
                                     new_pin.strip() or "1234",
-                                    new_phone.strip(),
+                                    normalized_phone,
                                 ),
                             )
                             conn.commit()
@@ -364,7 +367,7 @@ def admin_dashboard():
 
                 with st.form("admin_edit_user_form", clear_on_submit=False):
                     new_pin_val = st.text_input("New PIN", value=str(row.get("pin", "1234")))
-                    new_phone_val = st.text_input("Phone Number", value=str(row.get("phone", "") or ""))
+                    new_phone_val = st.text_input("Phone Number (full format e.g. 2547XXXXXXXX)", value=str(row.get("phone", "") or ""))
                     reset_pass = st.text_input("Reset Password (optional)", type="password")
                     save_edit = st.form_submit_button("Save Changes")
 
@@ -372,9 +375,13 @@ def admin_dashboard():
                         if not new_phone_val.strip():
                             st.error("Phone number is required.")
                             return
+                        normalized_phone_val, phone_error = get_phone_uniqueness_error(conn, new_phone_val, exclude_username=selected_user)
+                        if phone_error:
+                            st.error(phone_error)
+                            return
                         conn.execute(
                             "UPDATE users SET pin=?, phone=? WHERE username=? AND organization=? AND branch=?",
-                            (new_pin_val.strip() or "1234", new_phone_val.strip(), selected_user, org, admin_branch),
+                            (new_pin_val.strip() or "1234", normalized_phone_val, selected_user, org, admin_branch),
                         )
                         if reset_pass.strip():
                             if len(reset_pass) < 4:
