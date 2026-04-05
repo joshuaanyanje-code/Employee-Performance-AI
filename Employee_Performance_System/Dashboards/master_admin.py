@@ -1233,7 +1233,7 @@ def master_admin_dashboard():
                         conn.commit()
                         st.rerun()
                     if c4.button("🔴 Deactivate", key=f"{key_prefix}_deact_{entry['name']}"):
-                        execute_write(conn, "UPDATE organizations SET status='inactive' WHERE name=?", (entry["name"],))
+                        execute_write(conn, "UPDATE organizations SET status='disabled' WHERE name=?", (entry["name"],))
                         execute_write(conn, "UPDATE branches SET status='inactive' WHERE organization=?", (entry["name"],))
                         conn.commit()
                         st.rerun()
@@ -1267,7 +1267,22 @@ def master_admin_dashboard():
                 params=(org_name,)
             )
             active_cnt = int(active_df.iloc[0]["cnt"]) if not active_df.empty else 0
-            new_status = "active" if active_cnt > 0 else "inactive"
+
+            org_df = safe_read(
+                "SELECT status, expires_at FROM organizations WHERE name=? LIMIT 1",
+                conn,
+                params=(org_name,),
+            )
+            current_status = str(org_df.iloc[0].get("status", "active") if not org_df.empty else "active").strip().lower()
+            expires_at = pd.to_datetime(org_df.iloc[0].get("expires_at"), errors="coerce") if not org_df.empty else pd.NaT
+
+            if pd.notna(expires_at) and expires_at.to_pydatetime() < datetime.now():
+                new_status = "suspended"
+            elif current_status in {"disabled", "suspended"}:
+                new_status = current_status
+            else:
+                new_status = "active" if active_cnt > 0 else "inactive"
+
             execute_write(conn, "UPDATE organizations SET status=? WHERE name=?", (new_status, org_name))
             conn.commit()
 
@@ -1329,11 +1344,41 @@ def master_admin_dashboard():
                     else:
                         b_id = int(selected.iloc[0]["ID"])
                         new_status = "active" if manual_action == "Activate" else "inactive"
-                        execute_write(conn, "UPDATE branches SET status=? WHERE id=?", (new_status, b_id))
-                        sync_org_status_from_branches(manual_org)
-                        conn.commit()
-                        st.success(f"{manual_branch} set to {new_status}.")
-                        st.rerun()
+                        org_state_df = safe_read("SELECT status FROM organizations WHERE name=? LIMIT 1", conn, params=(manual_org,))
+                        org_state = str(org_state_df.iloc[0].get("status", "active") if not org_state_df.empty else "active").strip().lower()
+                        if new_status == "active" and org_state in {"disabled", "suspended"}:
+                            st.warning(f"{manual_org} is currently {org_state}. Activate the organization first before enabling its branches.")
+                        else:
+                            execute_write(conn, "UPDATE branches SET status=? WHERE id=?", (new_status, b_id))
+                            sync_org_status_from_branches(manual_org)
+                            conn.commit()
+                            st.success(f"{manual_branch} set to {new_status}.")
+                            st.rerun()
+
+            st.markdown("### Organization Access Control")
+            control_org = st.selectbox(
+                "Organization (Entire Org)",
+                sorted(df_br["Organization"].dropna().unique().tolist()),
+                key="manual_org_control_name"
+            )
+            control_action = st.selectbox(
+                "Organization Action",
+                ["Activate Entire Organization", "Disable Entire Organization"],
+                key="manual_org_control_action"
+            )
+
+            if st.button("Apply Organization Status", key="manual_org_apply"):
+                if control_action == "Activate Entire Organization":
+                    execute_write(conn, "UPDATE organizations SET status='active' WHERE name=?", (control_org,))
+                    execute_write(conn, "UPDATE branches SET status='active' WHERE organization=?", (control_org,))
+                    conn.commit()
+                    st.success(f"{control_org} is now active and all its branches are active.")
+                else:
+                    execute_write(conn, "UPDATE organizations SET status='disabled' WHERE name=?", (control_org,))
+                    execute_write(conn, "UPDATE branches SET status='inactive' WHERE organization=?", (control_org,))
+                    conn.commit()
+                    st.warning(f"{control_org} has been disabled together with all its branches.")
+                st.rerun()
 
             for org_name in df_br["Organization"].unique():
                 org_branches = df_br[df_br["Organization"] == org_name]
@@ -1357,10 +1402,15 @@ def master_admin_dashboard():
                             st.rerun()
                     else:
                         if col3.button("Activate", key=f"br_act_{b_id}"):
-                            execute_write(conn, "UPDATE branches SET status='active' WHERE id=?", (b_id,))
-                            sync_org_status_from_branches(br_row["Organization"])
-                            conn.commit()
-                            st.rerun()
+                            org_state_df = safe_read("SELECT status FROM organizations WHERE name=? LIMIT 1", conn, params=(br_row["Organization"],))
+                            org_state = str(org_state_df.iloc[0].get("status", "active") if not org_state_df.empty else "active").strip().lower()
+                            if org_state in {"disabled", "suspended"}:
+                                st.warning(f"{br_row['Organization']} is currently {org_state}. Activate the organization first.")
+                            else:
+                                execute_write(conn, "UPDATE branches SET status='active' WHERE id=?", (b_id,))
+                                sync_org_status_from_branches(br_row["Organization"])
+                                conn.commit()
+                                st.rerun()
 
                 st.divider()
 

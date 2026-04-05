@@ -374,7 +374,7 @@ def _restore_session_from_token(conn, token):
         return True
 
     user_df = pd.read_sql(
-        "SELECT username, role, organization, status FROM users WHERE username=? LIMIT 1",
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? LIMIT 1",
         conn,
         params=(username,),
     )
@@ -383,7 +383,17 @@ def _restore_session_from_token(conn, token):
         return False
 
     urow = user_df.iloc[0]
-    if str(urow.get("status", "active")).lower() == "suspended":
+    user_status = str(urow.get("status", "active") or "active").lower()
+    if user_status in {"suspended", "inactive", "disabled"}:
+        _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
+        _invalidate_login_session(conn, token)
+        return False
+
+    current_org = str(urow.get("organization", org) or "").strip()
+    current_branch = str(urow.get("branch", "") or "").strip()
+    access_issue = _get_access_block_reason(conn, current_org, current_branch)
+    if access_issue:
+        _set_login_blocked_message(access_issue)
         _invalidate_login_session(conn, token)
         return False
 
@@ -391,7 +401,8 @@ def _restore_session_from_token(conn, token):
         "logged": True,
         "role": str(urow.get("role", role)),
         "username": str(urow.get("username", username)),
-        "organization": str(urow.get("organization", org)),
+        "organization": current_org,
+        "branch": current_branch,
         "auth_token": token,
     })
     return True
@@ -405,6 +416,100 @@ def _cleanup_expired_sessions(conn):
         conn.commit()
     except Exception:
         pass
+
+
+def _set_login_blocked_message(message):
+    text = str(message or "").strip()
+    if text:
+        st.session_state["login_blocked_message"] = text
+
+
+def _get_access_block_reason(conn, organization, branch=""):
+    org_name = str(organization or "").strip()
+    branch_name = str(branch or "").strip()
+
+    if not org_name or org_name.upper() == "MASTER":
+        return ""
+
+    org_df = pd.read_sql(
+        "SELECT name, status, expires_at FROM organizations WHERE name=? LIMIT 1",
+        conn,
+        params=(org_name,),
+    )
+    if org_df.empty:
+        return f"Organization '{org_name}' is not authorized or no longer exists."
+
+    org_row = org_df.iloc[0]
+    org_status = str(org_row.get("status", "active") or "active").strip().lower()
+    expires_at = pd.to_datetime(org_row.get("expires_at"), errors="coerce")
+
+    if pd.notna(expires_at) and expires_at.to_pydatetime() < datetime.now():
+        return f"Organization '{org_name}' subscription has expired. Access is not authorized."
+
+    if org_status in {"inactive", "disabled", "suspended"}:
+        return f"Organization '{org_name}' is currently {org_status}. Access is not authorized."
+
+    if branch_name:
+        branch_df = pd.read_sql(
+            "SELECT name, status FROM branches WHERE organization=? AND name=? LIMIT 1",
+            conn,
+            params=(org_name, branch_name),
+        )
+        if branch_df.empty:
+            return f"Branch '{branch_name}' is not authorized for organization '{org_name}'."
+
+        branch_status = str(branch_df.iloc[0].get("status", "active") or "active").strip().lower()
+        if branch_status in {"inactive", "disabled", "suspended"}:
+            return f"Branch '{branch_name}' is currently {branch_status}. Access is not authorized."
+
+    return ""
+
+
+def _enforce_logged_in_access(conn):
+    if not st.session_state.get("logged"):
+        return False
+
+    role = str(st.session_state.get("role", "") or "").strip().lower()
+    if role == "master":
+        return True
+
+    username = str(st.session_state.get("username", "") or "").strip()
+    if not username:
+        return False
+
+    user_df = pd.read_sql(
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? LIMIT 1",
+        conn,
+        params=(username,),
+    )
+    if user_df.empty:
+        _set_login_blocked_message("Your account was not found. Please log in again.")
+    else:
+        urow = user_df.iloc[0]
+        user_status = str(urow.get("status", "active") or "active").strip().lower()
+        if user_status in {"suspended", "inactive", "disabled"}:
+            _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
+        else:
+            org = str(urow.get("organization", st.session_state.get("organization", "")) or "").strip()
+            branch = str(urow.get("branch", "") or "").strip()
+            access_issue = _get_access_block_reason(conn, org, branch)
+            if access_issue:
+                _set_login_blocked_message(access_issue)
+            else:
+                st.session_state["organization"] = org
+                st.session_state["branch"] = branch
+                return True
+
+    current_token = st.session_state.get("auth_token") or _qp_get_value(st.query_params, "auth")
+    _invalidate_login_session(conn, current_token)
+    _clear_auth_query_param()
+    st.session_state["logged"] = False
+    st.session_state["role"] = ""
+    st.session_state["username"] = ""
+    st.session_state["organization"] = ""
+    st.session_state["auth_token"] = ""
+    st.session_state["branch"] = ""
+    st.rerun()
 
 
 # =====================================================
@@ -447,10 +552,15 @@ def check_subscriptions(conn):
             except:
                 continue
 
+            current_status = str(row.get("status", "active") or "active").strip().lower()
             if expiry < datetime.now():
-                conn.execute("UPDATE organizations SET status='suspended' WHERE name=?", (row["name"],))
+                new_status = "suspended"
+            elif current_status in {"inactive", "disabled"}:
+                new_status = current_status
             else:
-                conn.execute("UPDATE organizations SET status='active' WHERE name=?", (row["name"],))
+                new_status = "active"
+
+            conn.execute("UPDATE organizations SET status=? WHERE name=?", (new_status, row["name"]))
 
         conn.commit()
     except:
@@ -460,7 +570,7 @@ def check_subscriptions(conn):
 # =====================================================
 # SESSION INIT
 # =====================================================
-for key in ["logged","username","role","organization","auth_token"]:
+for key in ["logged","username","role","organization","branch","auth_token"]:
     if key not in st.session_state:
         if key == "logged":
             st.session_state[key] = False
@@ -499,9 +609,16 @@ except Exception as e:
 # PUBLIC KIOSK ACCESS (BYPASS LOGIN)
 # =====================================================
 qp = st.query_params
-qp_kiosk = qp.get("kiosk")
-qp_org = qp.get("org")
+qp_kiosk = _qp_get_value(qp, "kiosk")
+qp_org = _qp_get_value(qp, "org")
 if qp_kiosk and qp_org:
+    kiosk_access_issue = _get_access_block_reason(conn, qp_org, qp_kiosk)
+    if kiosk_access_issue:
+        apply_responsive_ui("kiosk")
+        st.error(kiosk_access_issue)
+        st.info("This kiosk is currently disabled. Contact the organization administrator or master admin.")
+        st.stop()
+
     kiosk_dashboard = load_dashboard("kiosk")
     if kiosk_dashboard:
         kiosk_dashboard()
@@ -529,6 +646,10 @@ if not st.session_state.logged:
 def login():
 
     apply_responsive_ui("auth")
+
+    blocked_message = str(st.session_state.pop("login_blocked_message", "") or "").strip()
+    if blocked_message:
+        st.error(blocked_message)
 
     st.markdown('<div class="login-container">', unsafe_allow_html=True)
 
@@ -574,8 +695,21 @@ def login():
                 st.error("Wrong password")
                 return
 
-            role = user_df.iloc[0]["role"]
-            org = user_df.iloc[0]["organization"]
+            user_row = user_df.iloc[0]
+            role = user_row["role"]
+            org = user_row["organization"]
+            branch = str(user_row.get("branch", "") or "").strip()
+            user_status = str(user_row.get("status", "active") or "active").strip().lower()
+
+            if user_status in {"suspended", "inactive", "disabled"}:
+                st.error(f"Your account is currently {user_status}. Access is not authorized.")
+                return
+
+            access_issue = _get_access_block_reason(conn, org, branch)
+            if access_issue:
+                st.error(access_issue)
+                return
+
             token = _create_login_session(conn, username, role, org)
 
             st.session_state.update({
@@ -583,6 +717,7 @@ def login():
                 "role": role,
                 "username": username,
                 "organization": org,
+                "branch": branch,
                 "auth_token": token,
             })
 
@@ -600,6 +735,7 @@ if not st.session_state.logged:
     login()
     st.stop()
 
+_enforce_logged_in_access(conn)
 render_global_sidebar_toggle_button()
 
 
