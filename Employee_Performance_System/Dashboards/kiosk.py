@@ -385,7 +385,7 @@ def kiosk_dashboard():
             color: #c7d2e5;
             margin-top: 0.45rem;
         }
-        .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
+        .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 70%;}
         
         /* Camera Widget Styling */
         [data-testid="stImage"] {
@@ -397,9 +397,9 @@ def kiosk_dashboard():
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
-            .home-kiosk-title .org-name {font-size: 2.1rem;}
-            .home-kiosk-title .branch-name {font-size: 1.6rem;}
-            .home-kiosk-title .manager-name {font-size: 1.05rem;}
+            .home-kiosk-title .org-name {font-size: 2.4rem;}
+            .home-kiosk-title .branch-name {font-size: 1.8rem;}
+            .home-kiosk-title .manager-name {font-size: 1.15rem;}
         }
         </style>
     """, unsafe_allow_html=True)
