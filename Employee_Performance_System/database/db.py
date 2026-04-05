@@ -4,6 +4,7 @@ import time
 import random
 import re
 import os
+import shutil
 from datetime import datetime, timedelta
 
 try:
@@ -30,6 +31,18 @@ if load_dotenv is not None:
 
 DEFAULT_MONGO_URI = str(os.getenv("MONGO_URI", "mongodb://localhost:27017") or "mongodb://localhost:27017").strip() or "mongodb://localhost:27017"
 DEFAULT_MONGO_DB_NAME = str(os.getenv("MONGO_DB_NAME", "barberboss") or "barberboss").strip() or "barberboss"
+LOCAL_BACKUP_DIR = os.path.join(APP_DIR, "local_backups")
+LOCAL_BACKUP_PATH = str(
+    os.getenv("TEAM_AI_LOCAL_BACKUP_PATH", os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db"))
+    or os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db")
+).strip()
+try:
+    AUTO_BACKUP_INTERVAL_SECONDS = max(2.0, float(str(os.getenv("TEAM_AI_AUTO_BACKUP_INTERVAL", "5")).strip() or "5"))
+except Exception:
+    AUTO_BACKUP_INTERVAL_SECONDS = 5.0
+
+_AUTO_BACKUP_IN_PROGRESS = False
+_LAST_AUTO_BACKUP_TS = 0.0
 
 def _score_existing_db(path):
     if not path or not os.path.exists(path):
@@ -95,6 +108,14 @@ class SyncedConnection(sqlite3.Connection):
 
     def executemany(self, sql, seq_of_parameters, /):
         return super().executemany(_normalize_sqlite_now(sql), seq_of_parameters)
+
+    def commit(self):
+        result = super().commit()
+        try:
+            _maybe_auto_backup_after_commit()
+        except Exception:
+            pass
+        return result
 
 
 def get_local_now():
@@ -1047,6 +1068,85 @@ def get_mongo_db():
     return get_mongo_database()
 
 
+def backup_sqlite_to_local_snapshot():
+    source_conn = None
+    dest_conn = None
+    try:
+        if not os.path.exists(DB_PATH):
+            return {
+                "ok": False,
+                "status": "sqlite_missing",
+                "path": LOCAL_BACKUP_PATH,
+            }
+
+        if os.path.abspath(DB_PATH) == os.path.abspath(LOCAL_BACKUP_PATH):
+            return {
+                "ok": True,
+                "status": "snapshot_same_as_primary",
+                "path": LOCAL_BACKUP_PATH,
+            }
+
+        source_conn = sqlite3.connect(DB_PATH)
+        if not _sqlite_has_meaningful_data(source_conn):
+            return {
+                "ok": True,
+                "status": "skipped_sqlite_has_no_meaningful_data",
+                "path": LOCAL_BACKUP_PATH,
+                "preserved_existing": os.path.exists(LOCAL_BACKUP_PATH),
+            }
+
+        backup_dir = os.path.dirname(LOCAL_BACKUP_PATH) or APP_DIR
+        os.makedirs(backup_dir, exist_ok=True)
+        dest_conn = sqlite3.connect(LOCAL_BACKUP_PATH)
+        source_conn.backup(dest_conn)
+        dest_conn.commit()
+        return {
+            "ok": True,
+            "status": "local_snapshot_saved",
+            "path": LOCAL_BACKUP_PATH,
+            "size_bytes": os.path.getsize(LOCAL_BACKUP_PATH) if os.path.exists(LOCAL_BACKUP_PATH) else 0,
+        }
+    except Exception as exc:
+        return {
+            "ok": False,
+            "status": "local_snapshot_failed",
+            "path": LOCAL_BACKUP_PATH,
+            "error": str(exc),
+        }
+    finally:
+        try:
+            if dest_conn is not None:
+                dest_conn.close()
+        except Exception:
+            pass
+        try:
+            if source_conn is not None:
+                source_conn.close()
+        except Exception:
+            pass
+
+
+def _maybe_auto_backup_after_commit():
+    global _AUTO_BACKUP_IN_PROGRESS, _LAST_AUTO_BACKUP_TS
+
+    backup_sqlite_to_local_snapshot()
+
+    now_ts = time.time()
+    if _AUTO_BACKUP_IN_PROGRESS:
+        return
+    if (now_ts - _LAST_AUTO_BACKUP_TS) < AUTO_BACKUP_INTERVAL_SECONDS:
+        return
+    if not mongo_is_configured():
+        return
+
+    _AUTO_BACKUP_IN_PROGRESS = True
+    _LAST_AUTO_BACKUP_TS = now_ts
+    try:
+        backup_sqlite_to_mongo()
+    finally:
+        _AUTO_BACKUP_IN_PROGRESS = False
+
+
 def _get_sqlite_tables(conn):
     cur = conn.execute(
         """
@@ -1080,16 +1180,26 @@ def _sqlite_has_meaningful_data(conn):
 
 
 def backup_sqlite_to_mongo():
+    local_snapshot_result = backup_sqlite_to_local_snapshot()
     db = get_mongo_database()
     if db is None:
         return {
             "ok": False,
             "status": "mongo_not_configured",
-            "message": "Set MONGO_URI and install pymongo",
+            "message": "MongoDB is not reachable. Local snapshot was attempted instead.",
+            "local_snapshot": local_snapshot_result,
         }
 
     try:
         conn = get_connection()
+        if not _sqlite_has_meaningful_data(conn):
+            conn.close()
+            return {
+                "ok": True,
+                "status": "skipped_sqlite_has_no_meaningful_data",
+                "local_snapshot": local_snapshot_result,
+            }
+
         tables = _get_sqlite_tables(conn)
         payload = {}
         total_rows = 0
@@ -1120,6 +1230,7 @@ def backup_sqlite_to_mongo():
             "collection": collection_name,
             "table_count": len(tables),
             "total_rows": total_rows,
+            "local_snapshot": local_snapshot_result,
         }
     except Exception as exc:
         try:
@@ -1134,14 +1245,6 @@ def backup_sqlite_to_mongo():
 
 
 def restore_sqlite_from_mongo_if_empty():
-    db = get_mongo_database()
-    if db is None:
-        return {
-            "ok": False,
-            "status": "mongo_not_configured",
-            "message": "Set MONGO_URI and install pymongo",
-        }
-
     conn = None
     try:
         create_tables()
@@ -1153,7 +1256,29 @@ def restore_sqlite_from_mongo_if_empty():
                 "ok": True,
                 "status": "skipped_sqlite_has_data",
             }
+        conn.close()
 
+        if os.path.exists(LOCAL_BACKUP_PATH) and os.path.getsize(LOCAL_BACKUP_PATH) > 0:
+            shutil.copy2(LOCAL_BACKUP_PATH, DB_PATH)
+            conn = get_connection()
+            local_has_data = _sqlite_has_meaningful_data(conn)
+            conn.close()
+            if local_has_data:
+                return {
+                    "ok": True,
+                    "status": "restore_completed_local_snapshot",
+                    "path": LOCAL_BACKUP_PATH,
+                }
+
+        db = get_mongo_database()
+        if db is None:
+            return {
+                "ok": False,
+                "status": "mongo_not_configured",
+                "message": "MongoDB is not reachable and no usable local snapshot was restored.",
+            }
+
+        conn = get_connection()
         collection_name = os.getenv("MONGO_BACKUP_COLLECTION", "sqlite_backups").strip() or "sqlite_backups"
         doc = db[collection_name].find_one({"backup_key": "latest"})
         if not doc or not isinstance(doc.get("tables"), dict):
