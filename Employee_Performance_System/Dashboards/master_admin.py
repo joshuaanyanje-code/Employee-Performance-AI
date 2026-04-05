@@ -27,13 +27,30 @@ except Exception:
 try:
     from Analytics.insights import generate_insights
     from Analytics.decision_engine import management_recommendations
-    from Analytics.stability import stability_analysis
+    from Analytics.stability import (
+        stability_analysis,
+        detect_favoritism,
+        detect_power_abuse_and_retaliation,
+        detect_peer_gangup_and_targeting,
+        detect_isolation_and_low_performers,
+    )
     from Analytics.prediction import predict_future
     from Analytics.leadership import detect_leaders
+    from Analytics.powermap import analyze_relationships
     from Analytics.badges import get_best_employees_across_organizations
+    from Analytics.ai_recommendations import get_cached_recommendations
     ANALYTICS_AVAILABLE = True
 except Exception:
     ANALYTICS_AVAILABLE = False
+
+    def get_cached_recommendations(business_type="Office"):
+        return {
+            "articles": [],
+            "fetched_at": "",
+            "sources_ok": 0,
+            "business_type": business_type,
+            "error": "Live industry recommendations are currently unavailable.",
+        }
 
 
 # ==============================
@@ -270,7 +287,167 @@ def summarize_attendance_lateness(attendance_df, lateness_df):
     }
 
 
-def generate_org_ai_intelligence(conn, org_name):
+def _normalize_business_type(value):
+    raw = str(value or "Office").strip().lower()
+    if any(token in raw for token in ["salon", "spa", "barber", "beauty", "restaurant", "hotel", "hospitality", "service", "clinic", "school", "cafe"]):
+        return "Service"
+    if any(token in raw for token in ["retail", "shop", "store", "boutique", "supermarket", "merch", "pharmacy"]):
+        return "Merchandiser"
+    if any(token in raw for token in ["manufact", "factory", "production", "plant", "industrial", "warehouse"]):
+        return "Manufacturer"
+    return "Office"
+
+
+def get_business_playbook(value):
+    normalized = _normalize_business_type(value)
+    playbooks = {
+        "Office": {
+            "keep_doing": [
+                "Run weekly manager score reviews and short team check-ins so issues are caught early.",
+                "Keep clear service/quality standards documented and reviewed branch by branch.",
+            ],
+            "introduce": [
+                "Introduce monthly branch scorecards with one owner per improvement area.",
+                "Introduce customer/staff feedback review in management meetings.",
+            ],
+            "remove": [
+                "Remove slow follow-up on warnings, leave approvals, and attendance issues.",
+            ],
+            "improve": [
+                "Improve manager coaching consistency and cross-branch knowledge sharing.",
+            ],
+            "research": [
+                "Research high-performing office teams that use clear KPIs, quick 1:1 coaching, and meeting discipline.",
+            ],
+        },
+        "Service": {
+            "keep_doing": [
+                "Top service branches protect customer wait time, greeting quality, and shift punctuality every day.",
+                "Strong service organizations use quick huddles before opening and end-of-day issue reviews.",
+            ],
+            "introduce": [
+                "Introduce service recovery scripts and branch-level customer experience tracking.",
+                "Introduce upsell or repeat-customer routines for strong staff at busy branches.",
+            ],
+            "remove": [
+                "Remove long customer queues, inconsistent handovers, and late opening habits.",
+            ],
+            "improve": [
+                "Improve cleanliness, service speed, and visible branch leadership during peak hours.",
+            ],
+            "research": [
+                "Research hospitality and salon case studies on wait-time reduction, customer loyalty, and repeat visits.",
+            ],
+        },
+        "Merchandiser": {
+            "keep_doing": [
+                "Strong retail-style branches keep shelves, stock visibility, and branch discipline tight every day.",
+                "Top-performing merchandisers use branch scoreboards for conversion, shrinkage, and attendance.",
+            ],
+            "introduce": [
+                "Introduce weekly merchandising audits and fast-moving product reviews by branch.",
+                "Introduce cross-branch learning from the best-selling or best-disciplined branches.",
+            ],
+            "remove": [
+                "Remove poor stock visibility, weak shift handovers, and unclear branch accountability.",
+            ],
+            "improve": [
+                "Improve demand forecasting, customer flow management, and manager floor presence.",
+            ],
+            "research": [
+                "Research retail case studies on merchandising discipline, repeat customers, and queue management.",
+            ],
+        },
+        "Manufacturer": {
+            "keep_doing": [
+                "High-performing operations protect standard work, punctual start times, and daily quality checks.",
+                "Top manufacturing teams review defects, downtime, and attendance at the start of each shift.",
+            ],
+            "introduce": [
+                "Introduce visible KPI boards for defects, uptime, throughput, and late arrivals.",
+                "Introduce short continuous-improvement reviews led by line or branch supervisors.",
+            ],
+            "remove": [
+                "Remove repeated process drift, unclear ownership, and delayed corrective action.",
+            ],
+            "improve": [
+                "Improve preventive planning, shift handover discipline, and manager response speed.",
+            ],
+            "research": [
+                "Research lean operations and quality-improvement case studies from similar production teams.",
+            ],
+        },
+    }
+    selected = playbooks.get(normalized, playbooks["Office"])
+    return {
+        "business_type": str(value or normalized).strip() or normalized,
+        "feed_type": normalized,
+        **selected,
+    }
+
+
+def build_peer_benchmark_context(conn, org_name, business_type, avg_score, true_late_rate):
+    orgs_df = safe_read(
+        "SELECT name, business_type, status FROM organizations WHERE name != ? ORDER BY name",
+        conn,
+        params=(org_name,),
+    )
+    if orgs_df.empty:
+        return [], []
+
+    peer_type = _normalize_business_type(business_type)
+    orgs_df["peer_type"] = orgs_df["business_type"].apply(_normalize_business_type)
+    peers = orgs_df[orgs_df["peer_type"] == peer_type].copy()
+    if peers.empty:
+        peers = orgs_df.copy()
+
+    rows = []
+    for _, row in peers.iterrows():
+        peer_name = str(row.get("name", "")).strip()
+        if not peer_name:
+            continue
+
+        ratings_df = safe_read("SELECT score, branch FROM ratings WHERE organization=?", conn, params=(peer_name,))
+        attendance_df = safe_read("SELECT status, branch FROM attendance WHERE organization=?", conn, params=(peer_name,))
+        branches_df = safe_read("SELECT name, status FROM branches WHERE organization=?", conn, params=(peer_name,))
+
+        peer_avg_score = round(float(pd.to_numeric(ratings_df.get("score"), errors="coerce").mean()), 2) if not ratings_df.empty and "score" in ratings_df.columns else 0.0
+        late_count = int((attendance_df["status"].astype(str).str.upper() == "LATE").sum()) if not attendance_df.empty and "status" in attendance_df.columns else 0
+        attendance_count = int(len(attendance_df))
+        late_rate = round(_safe_pct(late_count, attendance_count), 1)
+        active_branches = int((branches_df["status"].astype(str).str.lower() == "active").sum()) if not branches_df.empty and "status" in branches_df.columns else len(branches_df)
+
+        rows.append({
+            "Organization": peer_name,
+            "Business Type": str(row.get("business_type", peer_type) or peer_type),
+            "Status": str(row.get("status", "active") or "active"),
+            "Avg Score": peer_avg_score,
+            "True Late %": late_rate,
+            "Active Branches": active_branches,
+        })
+
+    peer_df = pd.DataFrame(rows)
+    if peer_df.empty:
+        return [], []
+
+    peer_df = peer_df.sort_values(["Avg Score", "True Late %", "Active Branches"], ascending=[False, True, False]).head(5)
+    peer_avg_score = float(peer_df["Avg Score"].mean()) if not peer_df.empty else 0.0
+    peer_avg_late = float(peer_df["True Late %"].mean()) if not peer_df.empty else 0.0
+    top_names = ", ".join(peer_df["Organization"].head(3).astype(str).tolist())
+
+    notes = []
+    if top_names:
+        notes.append(f"Top {peer_type.lower()} organisations currently leading in the system include {top_names}.")
+    notes.append(f"Their average performance is about {peer_avg_score:.1f} with true lateness around {peer_avg_late:.1f}%.")
+    if avg_score + 2 < peer_avg_score:
+        notes.append(f"This organisation is trailing peer leaders by about {peer_avg_score - avg_score:.1f} performance points; copy the strongest branch routines first.")
+    if true_late_rate > peer_avg_late + 5:
+        notes.append("Peer leaders keep attendance tighter; add opening huddles, supervisor follow-up, and schedule discipline.")
+
+    return notes[:4], peer_df.to_dict("records")
+
+
+def generate_org_ai_intelligence(conn, org_name, include_peer_benchmark=True):
     org_df = safe_read("SELECT * FROM organizations WHERE name=?", conn, params=(org_name,))
     users_df = safe_read(
         """
@@ -399,8 +576,10 @@ def generate_org_ai_intelligence(conn, org_name):
 
     expires_days = None
     org_status = "unknown"
+    business_type_raw = "Office"
     if not org_df.empty:
         org_status = str(org_df.iloc[0].get("status", "unknown"))
+        business_type_raw = str(org_df.iloc[0].get("business_type", "Office") or "Office").strip() or "Office"
         expires_raw = org_df.iloc[0].get("expires_at")
         try:
             exp_dt = pd.to_datetime(expires_raw, errors="coerce")
@@ -409,11 +588,40 @@ def generate_org_ai_intelligence(conn, org_name):
         except Exception:
             expires_days = None
 
+    playbook = get_business_playbook(business_type_raw)
+
     message_activity_recent_30 = 0
     if not messages_df.empty and "created_at" in messages_df.columns:
         messages_df = messages_df.copy()
         messages_df["created_at"] = _parse_dt(messages_df["created_at"])
         message_activity_recent_30 = int((messages_df["created_at"] >= cutoff_30).sum())
+
+    relationship_flags = []
+    favoritism_flags = []
+    power_flags = []
+    peer_gangup_flags = []
+    isolation_flags = []
+    if ANALYTICS_AVAILABLE and not ratings_df.empty:
+        try:
+            relationship_flags = analyze_relationships(ratings_df, users_df, attendance_df)
+        except Exception:
+            relationship_flags = []
+        try:
+            favoritism_flags = detect_favoritism(ratings_df, users_df)
+        except Exception:
+            favoritism_flags = []
+        try:
+            power_flags = detect_power_abuse_and_retaliation(ratings_df, users_df, leaves_df, warnings_df, messages_df)
+        except Exception:
+            power_flags = []
+        try:
+            peer_gangup_flags = detect_peer_gangup_and_targeting(ratings_df, users_df)
+        except Exception:
+            peer_gangup_flags = []
+        try:
+            isolation_flags = detect_isolation_and_low_performers(ratings_df, users_df)
+        except Exception:
+            isolation_flags = []
 
     branch_variance = 0.0
     weakest_branch = "-"
@@ -453,10 +661,21 @@ def generate_org_ai_intelligence(conn, org_name):
     advice = []
     growth_moves = []
     risk_flags = []
+    benchmark_notes = []
+    benchmark_examples = []
+
+    if include_peer_benchmark:
+        benchmark_notes, benchmark_examples = build_peer_benchmark_context(
+            conn,
+            org_name,
+            business_type_raw,
+            avg_score,
+            true_late_rate,
+        )
 
     if avg_score < 65:
         risk_flags.append("Internal performance quality is low; coaching and standards enforcement are needed.")
-        advice.append("ACTION: Run 30-day manager-led quality improvement with weekly score checkpoints.")
+        advice.append("ACTION: Run a 30-day manager-led quality improvement cycle with weekly score checkpoints.")
     else:
         growth_moves.append("Leverage current quality level to scale best practices across all branches.")
 
@@ -470,11 +689,11 @@ def generate_org_ai_intelligence(conn, org_name):
 
     if warnings_recent_30 > max(5, total_users // 2):
         risk_flags.append("Warning frequency is elevated in the last 30 days.")
-        advice.append("SUPPORT: Investigate root causes (leadership conflict, workload stress, policy gaps).")
+        advice.append("SUPPORT: Investigate root causes such as leadership conflict, workload stress, or policy gaps.")
 
     if payment_trend == "declining":
         risk_flags.append("Payment momentum is declining.")
-        advice.append("ACTION: Trigger super admin commercial recovery plan and verify billing follow-up cadence.")
+        advice.append("ACTION: Trigger a commercial recovery plan and verify billing follow-up cadence.")
     elif payment_trend == "growing":
         growth_moves.append("Payment trend is growing; explore controlled expansion and branch strengthening.")
 
@@ -488,17 +707,71 @@ def generate_org_ai_intelligence(conn, org_name):
 
     if branch_variance > 10:
         advice.append(
-            f"GUIDE: Branch performance gap is high (variance {branch_variance:.2f}). Coach weakest branch '{weakest_branch}' using '{strongest_branch}' playbook."
+            f"GUIDE: Branch performance gap is high (variance {branch_variance:.2f}). Coach weakest branch '{weakest_branch}' using the strongest branch '{strongest_branch}' playbook."
         )
 
     if open_leaves > max(3, total_users // 6):
-        advice.append("SUPPORT: Pending/reapply leaves are high; review staffing pressure and manager responsiveness.")
+        advice.append("SUPPORT: Pending or reapply leaves are high; review staffing pressure and manager responsiveness.")
 
+    if relationship_flags:
+        risk_flags.append("Relationship conflict or team tension signals are showing in ratings patterns.")
+        advice.append("ACTION: Review repeated conflict pairs and mediate branch-level tension before it spreads.")
+    if favoritism_flags:
+        risk_flags.append("Favoritism or scoring bias signals are present.")
+        advice.append("ACTION: Audit rating fairness by managers/admins and rebalance branch accountability standards.")
+    if power_flags:
+        risk_flags.append("Manager or admin pressure / retaliation signals need review.")
+        advice.append("SUPPORT: Check warnings, leave decisions, and manager follow-up for fairness and consistency.")
+    if peer_gangup_flags:
+        risk_flags.append("Peer gang-up or clique behavior may be weakening trust and morale.")
+        advice.append("ACTION: Break up clique dynamics with closer supervision, rotation, and documented coaching.")
+    if isolation_flags:
+        risk_flags.append("Isolation or exclusion signals are affecting some staff.")
+        advice.append("SUPPORT: Confirm whether weak scores reflect performance issues or social exclusion and bias.")
+
+    root_causes = []
+    if avg_score < 65:
+        root_causes.append("low service or output quality")
+    if true_late_rate > 20:
+        root_causes.append("poor clock-in and attendance discipline")
+    if open_leaves > max(3, total_users // 6):
+        root_causes.append("staffing strain and leave backlog")
+    if warnings_recent_30 > max(5, total_users // 2):
+        root_causes.append("behavioral friction or policy issues")
+    if total_admins < max(1, total_branches):
+        root_causes.append("thin management/admin coverage")
+    if payment_trend == "declining":
+        root_causes.append("commercial or retention pressure")
+    if relationship_flags or favoritism_flags or power_flags or peer_gangup_flags or isolation_flags:
+        root_causes.append("relationship, bias, favoritism, or gang-up risk")
+    if branch_variance > 10:
+        root_causes.append("large execution gap between branches")
+
+    if playbook.get("keep_doing"):
+        growth_moves.append(f"KEEP: {playbook['keep_doing'][0]}")
+    if org_health_status != "Strong" and playbook.get("introduce"):
+        advice.append(f"ADD: {playbook['introduce'][0]}")
+    if playbook.get("remove") and (true_late_rate > 15 or warnings_recent_30 > max(3, total_users // 3)):
+        advice.append(f"REMOVE: {playbook['remove'][0]}")
+    if playbook.get("improve"):
+        advice.append(f"IMPROVE: {playbook['improve'][0]}")
+    if playbook.get("research"):
+        growth_moves.append(f"RESEARCH: {playbook['research'][0]}")
+
+    for note in benchmark_notes[:3]:
+        if "trailing" in note.lower() or "attendance tighter" in note.lower():
+            advice.append(f"BENCHMARK: {note}")
+        else:
+            growth_moves.append(f"BENCHMARK: {note}")
+
+    if not root_causes:
+        root_causes.append("no major systemic root cause detected")
     if not advice:
         advice.append("KEEP: Continue current operating rhythm; no high-severity intervention detected.")
 
     return {
         "organization": org_name,
+        "business_type": business_type_raw,
         "org_status": org_status,
         "org_health_score": org_health_score,
         "org_health_status": org_health_status,
@@ -539,14 +812,346 @@ def generate_org_ai_intelligence(conn, org_name):
             "payment_trend": payment_trend,
             "expires_in_days": expires_days,
         },
-        "risk_flags": risk_flags[:8],
-        "growth_moves": growth_moves[:8],
-        "advice": advice[:12],
+        "playbook": {
+            "business_type": playbook.get("business_type", business_type_raw),
+            "feed_type": playbook.get("feed_type", "Office"),
+            "keep_doing": playbook.get("keep_doing", [])[:3],
+            "introduce": playbook.get("introduce", [])[:3],
+            "remove": playbook.get("remove", [])[:3],
+            "improve": playbook.get("improve", [])[:3],
+            "research": playbook.get("research", [])[:3],
+        },
+        "root_causes": root_causes[:10],
+        "people_signals": {
+            "relationships": relationship_flags[:8],
+            "favoritism": favoritism_flags[:8],
+            "management_pressure": power_flags[:8],
+            "peer_gangups": peer_gangup_flags[:8],
+            "isolation": isolation_flags[:8],
+        },
+        "benchmark_notes": benchmark_notes[:6],
+        "benchmark_examples": benchmark_examples[:5],
+        "risk_flags": risk_flags[:10],
+        "growth_moves": growth_moves[:10],
+        "advice": advice[:16],
     }
 
 
+def build_branch_performance_table(ratings_df, attendance_df, users_df, branches_df=None):
+    branch_names = set()
+
+    for df, col in [(ratings_df, "branch"), (attendance_df, "branch"), (users_df, "branch")]:
+        if df is not None and not df.empty and col in df.columns:
+            branch_names.update(
+                str(v).strip() for v in df[col].dropna().tolist() if str(v).strip()
+            )
+
+    if branches_df is not None and not branches_df.empty and "name" in branches_df.columns:
+        branch_names.update(
+            str(v).strip() for v in branches_df["name"].dropna().tolist() if str(v).strip()
+        )
+
+    if not branch_names:
+        return pd.DataFrame()
+
+    rows = []
+    for branch in sorted(branch_names):
+        branch_status = "active"
+        if branches_df is not None and not branches_df.empty and {"name", "status"}.issubset(branches_df.columns):
+            match = branches_df[branches_df["name"].astype(str).str.strip() == branch]
+            if not match.empty:
+                branch_status = str(match.iloc[0].get("status", "active") or "active").strip().lower()
+
+        branch_ratings = ratings_df[ratings_df["branch"].astype(str).str.strip() == branch].copy() if ratings_df is not None and not ratings_df.empty and "branch" in ratings_df.columns else pd.DataFrame()
+        branch_attendance = attendance_df[attendance_df["branch"].astype(str).str.strip() == branch].copy() if attendance_df is not None and not attendance_df.empty and "branch" in attendance_df.columns else pd.DataFrame()
+        branch_users = users_df[users_df["branch"].astype(str).str.strip() == branch].copy() if users_df is not None and not users_df.empty and "branch" in users_df.columns else pd.DataFrame()
+
+        avg_score = round(float(pd.to_numeric(branch_ratings.get("score"), errors="coerce").mean()), 2) if not branch_ratings.empty and "score" in branch_ratings.columns else 0.0
+        rating_count = int(len(branch_ratings))
+        attendance_count = int(len(branch_attendance))
+        late_count = int((branch_attendance["status"].astype(str).str.upper() == "LATE").sum()) if not branch_attendance.empty and "status" in branch_attendance.columns else 0
+        late_rate = round(_safe_pct(late_count, attendance_count), 1)
+        total_users = int(len(branch_users))
+        active_users = int((branch_users["status"].astype(str).str.lower() == "active").sum()) if not branch_users.empty and "status" in branch_users.columns else total_users
+
+        if branch_status != "active":
+            health = "Inactive"
+            recommendation = "Branch is inactive; only reactivate when staffing and leadership are ready."
+        elif rating_count == 0 and attendance_count == 0:
+            health = "No Data"
+            recommendation = "No branch activity data yet; verify rollout, usage, and reporting discipline."
+        elif avg_score >= 80 and late_rate <= 10:
+            health = "Strong"
+            recommendation = "Use this branch as a benchmark and replicate its working playbook elsewhere."
+        elif avg_score >= 65 and late_rate <= 20:
+            health = "Stable"
+            recommendation = "Maintain branch rhythm with light coaching and attendance follow-up."
+        elif avg_score < 65 and late_rate > 20:
+            health = "Needs Support"
+            recommendation = "Urgent coaching needed: improve service quality and tighten attendance control."
+        elif avg_score < 65:
+            health = "Needs Support"
+            recommendation = "Performance quality is low; schedule manager coaching and branch skill refresh."
+        else:
+            health = "Needs Support"
+            recommendation = "Attendance discipline needs attention to protect branch performance."
+
+        rows.append({
+            "Branch": branch,
+            "Status": branch_status,
+            "Avg Score": avg_score,
+            "Ratings": rating_count,
+            "Attendance": attendance_count,
+            "Late Cases": late_count,
+            "Late %": late_rate,
+            "Active Users": active_users,
+            "Total Users": total_users,
+            "Branch Health": health,
+            "Recommended Action": recommendation,
+        })
+
+    return pd.DataFrame(rows).sort_values(["Status", "Avg Score", "Branch"], ascending=[True, False, True])
+
+
+def build_cross_org_branch_benchmark(conn, business_type=None, exclude_org=None):
+    orgs_df = safe_read("SELECT name, business_type, status FROM organizations ORDER BY name", conn)
+    if orgs_df.empty:
+        return pd.DataFrame()
+
+    normalized_type = _normalize_business_type(business_type)
+    rows = []
+
+    for _, org_row in orgs_df.iterrows():
+        org_name = str(org_row.get("name", "") or "").strip()
+        if not org_name:
+            continue
+        if exclude_org and org_name == exclude_org:
+            continue
+
+        peer_type = _normalize_business_type(org_row.get("business_type", "Office"))
+        if business_type and peer_type != normalized_type:
+            continue
+
+        ratings_df = safe_read("SELECT score, branch FROM ratings WHERE organization=?", conn, params=(org_name,))
+        attendance_df = safe_read("SELECT status, branch FROM attendance WHERE organization=?", conn, params=(org_name,))
+        users_df = safe_read("SELECT username, role, branch, status FROM users WHERE organization=?", conn, params=(org_name,))
+        branches_df = safe_read("SELECT name, status FROM branches WHERE organization=?", conn, params=(org_name,))
+
+        branch_df = build_branch_performance_table(ratings_df, attendance_df, users_df, branches_df)
+        if branch_df.empty:
+            continue
+
+        branch_df = branch_df.copy()
+        branch_df["Organization"] = org_name
+        branch_df["Business Type"] = str(org_row.get("business_type", peer_type) or peer_type)
+        rows.append(branch_df)
+
+    if not rows:
+        return pd.DataFrame()
+
+    benchmark_df = pd.concat(rows, ignore_index=True)
+    if benchmark_df.empty:
+        return benchmark_df
+
+    health_rank = {"Strong": 0, "Stable": 1, "Needs Support": 2, "No Data": 3, "Inactive": 4}
+    benchmark_df["health_rank"] = benchmark_df["Branch Health"].map(health_rank).fillna(9)
+    benchmark_df = benchmark_df.sort_values(
+        ["health_rank", "Avg Score", "Late %", "Active Users"],
+        ascending=[True, False, True, False],
+    ).drop(columns=["health_rank"])
+    return benchmark_df.reset_index(drop=True)
+
+
+def build_branch_diagnostic_table(
+    conn,
+    org_name,
+    business_type,
+    ratings_df,
+    attendance_df,
+    users_df,
+    leaves_df=None,
+    warnings_df=None,
+    messages_df=None,
+    branches_df=None,
+):
+    branch_view = build_branch_performance_table(ratings_df, attendance_df, users_df, branches_df)
+    if branch_view.empty:
+        return pd.DataFrame()
+
+    peer_benchmark = build_cross_org_branch_benchmark(conn, business_type=business_type)
+    diagnostics = []
+
+    for _, row in branch_view.iterrows():
+        branch = str(row.get("Branch", "") or "").strip()
+        if not branch:
+            continue
+
+        branch_ratings = ratings_df[ratings_df["branch"].astype(str).str.strip() == branch].copy() if ratings_df is not None and not ratings_df.empty and "branch" in ratings_df.columns else pd.DataFrame()
+        branch_attendance = attendance_df[attendance_df["branch"].astype(str).str.strip() == branch].copy() if attendance_df is not None and not attendance_df.empty and "branch" in attendance_df.columns else pd.DataFrame()
+        branch_users = users_df[users_df["branch"].astype(str).str.strip() == branch].copy() if users_df is not None and not users_df.empty and "branch" in users_df.columns else pd.DataFrame()
+        branch_leaves = leaves_df[leaves_df["branch"].astype(str).str.strip() == branch].copy() if leaves_df is not None and not leaves_df.empty and "branch" in leaves_df.columns else pd.DataFrame()
+        branch_warnings = warnings_df[warnings_df["branch"].astype(str).str.strip() == branch].copy() if warnings_df is not None and not warnings_df.empty and "branch" in warnings_df.columns else pd.DataFrame()
+        branch_messages = messages_df[messages_df["branch"].astype(str).str.strip() == branch].copy() if messages_df is not None and not messages_df.empty and "branch" in messages_df.columns else pd.DataFrame()
+
+        total_users = int(len(branch_users))
+        admin_count = int(branch_users["role"].astype(str).str.lower().isin(["admin", "manager", "superadmin", "super_admin"]).sum()) if not branch_users.empty and "role" in branch_users.columns else 0
+        absent_count = int(branch_attendance["status"].astype(str).str.upper().str.contains("ABSENT|NO SHOW|NOSHOW|MISS", regex=True, na=False).sum()) if not branch_attendance.empty and "status" in branch_attendance.columns else 0
+        pending_leaves = int(branch_leaves["status"].astype(str).str.lower().isin(["pending", "reapply"]).sum()) if not branch_leaves.empty and "status" in branch_leaves.columns else 0
+        warning_count = int(len(branch_warnings))
+        message_count = int(len(branch_messages))
+
+        people_risks = []
+        if ANALYTICS_AVAILABLE and not branch_ratings.empty:
+            try:
+                if detect_favoritism(branch_ratings, branch_users):
+                    people_risks.append("favoritism/bias")
+            except Exception:
+                pass
+            try:
+                if detect_power_abuse_and_retaliation(branch_ratings, branch_users, branch_leaves, branch_warnings, branch_messages):
+                    people_risks.append("management pressure")
+            except Exception:
+                pass
+            try:
+                if detect_peer_gangup_and_targeting(branch_ratings, branch_users):
+                    people_risks.append("gang-up/clique")
+            except Exception:
+                pass
+            try:
+                if detect_isolation_and_low_performers(branch_ratings, branch_users):
+                    people_risks.append("isolation/low morale")
+            except Exception:
+                pass
+            try:
+                if analyze_relationships(branch_ratings, branch_users, branch_attendance):
+                    people_risks.append("relationship conflict")
+            except Exception:
+                pass
+
+        root_causes = []
+        if float(row.get("Avg Score", 0)) < 65:
+            root_causes.append("low service/performance quality")
+        if float(row.get("Late %", 0)) > 20 or absent_count > 0:
+            root_causes.append("attendance or absenteeism discipline")
+        if pending_leaves > max(2, total_users // 3):
+            root_causes.append("staffing pressure and leave backlog")
+        if warning_count > max(2, total_users // 2):
+            root_causes.append("behavior or policy friction")
+        if admin_count == 0 and total_users > 0:
+            root_causes.append("weak branch management coverage")
+        if message_count == 0 and float(row.get("Avg Score", 0)) < 65 and total_users >= 3:
+            root_causes.append("low management follow-up or communication")
+        if people_risks:
+            root_causes.append("people-risk tension: " + ", ".join(sorted(set(people_risks))[:3]))
+        if not root_causes:
+            root_causes.append("no major weakness detected; maintain standards and benchmark discipline")
+
+        partner_label = "-"
+        same_org_partner = branch_view[
+            (branch_view["Branch"].astype(str) != branch)
+            & (branch_view["Status"].astype(str).str.lower() == "active")
+            & (pd.to_numeric(branch_view["Avg Score"], errors="coerce") >= float(row.get("Avg Score", 0)) + 5)
+        ].sort_values(["Avg Score", "Late %"], ascending=[False, True]).head(1)
+        if not same_org_partner.empty:
+            partner_label = f"{same_org_partner.iloc[0]['Branch']} ({org_name})"
+        elif not peer_benchmark.empty:
+            peer_partner = peer_benchmark[
+                (peer_benchmark["Organization"].astype(str) != org_name)
+                & (peer_benchmark["Status"].astype(str).str.lower() == "active")
+                & (peer_benchmark["Branch Health"].astype(str).isin(["Strong", "Stable"]))
+            ].head(1)
+            if not peer_partner.empty:
+                partner_label = f"{peer_partner.iloc[0]['Branch']} ({peer_partner.iloc[0]['Organization']})"
+
+        action_parts = []
+        if partner_label != "-" and str(row.get("Branch Health", "")) != "Strong":
+            action_parts.append(f"Use {partner_label} as the learning partner branch.")
+        if str(row.get("Recommended Action", "")).strip():
+            action_parts.append(str(row.get("Recommended Action", "")).strip())
+        if people_risks:
+            action_parts.append("Review manager fairness, peer dynamics, and any clique or targeting patterns.")
+        if float(row.get("Late %", 0)) > 20 or absent_count > 0:
+            action_parts.append("Tighten daily clock-in, absence follow-up, and opening discipline.")
+
+        diagnostics.append({
+            "Branch": branch,
+            "Branch Health": row.get("Branch Health", "Unknown"),
+            "Avg Score": row.get("Avg Score", 0),
+            "Late %": row.get("Late %", 0),
+            "Absent Cases": absent_count,
+            "Pending Leaves": pending_leaves,
+            "Warnings (30d)": warning_count,
+            "Admins": admin_count,
+            "People Risks": ", ".join(sorted(set(people_risks))) if people_risks else "None detected",
+            "Root Cause Summary": "; ".join(root_causes[:4]),
+            "Learning Partner": partner_label,
+            "Recommended Intervention": " ".join(dict.fromkeys(action_parts)),
+        })
+
+    diag_df = pd.DataFrame(diagnostics)
+    if not diag_df.empty:
+        severity_rank = {"Needs Support": 0, "No Data": 1, "Inactive": 2, "Stable": 3, "Strong": 4}
+        diag_df["severity_rank"] = diag_df["Branch Health"].map(severity_rank).fillna(9)
+        diag_df = diag_df.sort_values(["severity_rank", "Avg Score", "Late %"], ascending=[True, True, False]).drop(columns=["severity_rank"])
+    return diag_df
+
+
+def build_priority_action_flow(intel, branch_diag=None):
+    root_causes = [str(x).strip() for x in intel.get("root_causes", []) if str(x).strip()]
+    risk_flags = [str(x).strip() for x in intel.get("risk_flags", []) if str(x).strip()]
+    urgent_actions = []
+    for item in intel.get("advice", []):
+        text = str(item).strip()
+        upper = text.upper()
+        if any(tag in upper for tag in ["ACTION:", "ADD:", "REMOVE:", "IMPROVE:", "BENCHMARK:"]):
+            urgent_actions.append(text)
+    urgent_actions = urgent_actions[:3]
+
+    flow = {
+        "problem": "No urgent organization problem detected right now.",
+        "causes": root_causes[:3] if root_causes else risk_flags[:3],
+        "learning_partner": "-",
+        "learning_reason": "No clear benchmark partner identified yet.",
+        "urgent_actions": urgent_actions,
+    }
+
+    if branch_diag is not None and not branch_diag.empty:
+        watch_df = branch_diag[
+            branch_diag["Branch Health"].astype(str).isin(["Needs Support", "No Data", "Inactive"])
+        ].copy()
+        if watch_df.empty:
+            watch_df = branch_diag.sort_values(["Avg Score", "Late %"], ascending=[True, False]).head(1)
+
+        if not watch_df.empty:
+            row = watch_df.iloc[0]
+            branch_name = str(row.get("Branch", "this branch"))
+            flow["problem"] = (
+                f"{branch_name} is the main watch branch: {row.get('Branch Health', 'Needs Review')} "
+                f"(score {row.get('Avg Score', 0)}, late {row.get('Late %', 0)}%)."
+            )
+            branch_causes = [
+                part.strip() for part in str(row.get("Root Cause Summary", "")).split(";") if part.strip()
+            ]
+            if branch_causes:
+                flow["causes"] = branch_causes[:3]
+
+            partner = str(row.get("Learning Partner", "") or "").strip()
+            if partner and partner != "-":
+                flow["learning_partner"] = partner
+                flow["learning_reason"] = str(row.get("Recommended Intervention", "") or "").strip() or "Use this partner branch to copy stronger routines."
+            elif str(row.get("Recommended Intervention", "") or "").strip():
+                flow["learning_reason"] = str(row.get("Recommended Intervention", "") or "").strip()
+
+    if not flow["causes"]:
+        flow["causes"] = ["No major root cause is currently standing out."]
+    if not flow["urgent_actions"]:
+        flow["urgent_actions"] = ["Continue current operating rhythm and keep monitoring branch performance."]
+
+    return flow
+
+
 def build_master_advisor_benchmark(conn):
-    orgs = safe_read("SELECT name FROM organizations ORDER BY name", conn)
+    orgs = safe_read("SELECT name, business_type FROM organizations ORDER BY name", conn)
     if orgs.empty:
         return pd.DataFrame(), []
 
@@ -557,9 +1162,10 @@ def build_master_advisor_benchmark(conn):
         if not org_name:
             continue
 
-        intel = generate_org_ai_intelligence(conn, org_name)
+        intel = generate_org_ai_intelligence(conn, org_name, include_peer_benchmark=False)
         rows.append({
             "Organization": org_name,
+            "Business Type": intel.get("business_type", "Office"),
             "Health Score": intel.get("org_health_score", 0),
             "Health Status": intel.get("org_health_status", "Unknown"),
             "Users": intel.get("users", {}).get("total", 0),
@@ -567,6 +1173,7 @@ def build_master_advisor_benchmark(conn):
             "True Late %": intel.get("operations", {}).get("late_rate_pct", 0),
             "Approved Late %": intel.get("operations", {}).get("approved_late_rate_pct", 0),
             "Payment Trend": intel.get("finance", {}).get("payment_trend", "stable"),
+            "Primary Root Cause": "; ".join(intel.get("root_causes", [])[:2]) or "Monitor",
             "Expiry (days)": intel.get("finance", {}).get("expires_in_days", "N/A"),
         })
 
@@ -1463,9 +2070,9 @@ def master_admin_dashboard():
     # ==========================================================
     elif menu == "📈 Analytics":
 
-        st.subheader("📈 Analytics & Insights")
+        st.subheader("📈 Organization Performance Intelligence")
 
-        tab_sys, tab_org, tab_ai = st.tabs(["🌐 System Overview", "🔍 Org Deep Dive", "🤖 Chief Administrator AI Advisor"])
+        tab_sys, tab_org, tab_ai = st.tabs(["🌐 System Overview", "🏢 Organization Performance", "🤖 Chief Administrator Advisory"])
 
         with tab_sys:
             ratings_all    = safe_read("SELECT * FROM ratings",    conn)
@@ -1543,89 +2150,210 @@ def master_admin_dashboard():
             else:
                 sel_org = st.selectbox("Select Organization to Analyse", orgs_d["name"].tolist(), key="adive_org")
 
-                ratings_o    = safe_read("SELECT * FROM ratings    WHERE organization=?", conn, params=(sel_org,))
+                ratings_o = safe_read("SELECT * FROM ratings WHERE organization=?", conn, params=(sel_org,))
                 attendance_o = safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(sel_org,))
-                leaves_o     = safe_read("SELECT * FROM leaves     WHERE organization=?", conn, params=(sel_org,))
-                users_o      = safe_read("SELECT * FROM users      WHERE organization=?", conn, params=(sel_org,))
-                messages_o   = safe_read("SELECT * FROM messages   WHERE organization=?", conn, params=(sel_org,))
-                schedules_o  = safe_read("SELECT * FROM schedules  WHERE organization=?", conn, params=(sel_org,))
+                users_o = safe_read("SELECT * FROM users WHERE organization=?", conn, params=(sel_org,))
+                leaves_o = safe_read("SELECT * FROM leaves WHERE organization=?", conn, params=(sel_org,))
+                warnings_o = safe_read("SELECT * FROM warnings WHERE organization=?", conn, params=(sel_org,))
+                messages_o = safe_read("SELECT * FROM messages WHERE organization=?", conn, params=(sel_org,))
+                branches_o = safe_read("SELECT name, status FROM branches WHERE organization=? ORDER BY name", conn, params=(sel_org,))
+                intel = generate_org_ai_intelligence(conn, sel_org)
+                branch_view = build_branch_performance_table(ratings_o, attendance_o, users_o, branches_o)
+                branch_diag = build_branch_diagnostic_table(
+                    conn,
+                    sel_org,
+                    intel.get("business_type", "Office"),
+                    ratings_o,
+                    attendance_o,
+                    users_o,
+                    leaves_o,
+                    warnings_o,
+                    messages_o,
+                    branches_o,
+                )
 
-                qc1, qc2, qc3 = st.columns(3)
-                qc1.metric("Ratings",    len(ratings_o))
-                qc2.metric("Attendance", len(attendance_o))
-                qc3.metric("Users",      len(users_o))
+                ops_block = intel.get("operations", {})
+                perf_block = intel.get("performance", {})
+                finance_block = intel.get("finance", {})
+                playbook = intel.get("playbook", {})
+                benchmark_notes = intel.get("benchmark_notes", [])
+                benchmark_examples_df = pd.DataFrame(intel.get("benchmark_examples", []))
+                people_signals = intel.get("people_signals", {})
+                live_data = get_cached_recommendations(business_type=playbook.get("feed_type", "Office"))
 
-                if ratings_o.empty:
-                    st.info(f"No performance data yet for '{sel_org}'. Analytics will appear once employees start rating each other.")
-                elif not ANALYTICS_AVAILABLE:
-                    st.warning("Analytics modules could not be loaded.")
+                st.caption(
+                    f"Business Type: {intel.get('business_type', 'Office')} | Recommendations combine internal org/branch benchmarks with live industry guidance."
+                )
+
+                qc1, qc2, qc3, qc4 = st.columns(4)
+                qc1.metric("Branches", ops_block.get("branches_total", 0))
+                qc2.metric("Active Branches", f"{ops_block.get('branches_active', 0)}/{ops_block.get('branches_total', 0)}")
+                qc3.metric("Avg Org Score", f"{perf_block.get('avg_score', 0):.1f}")
+                qc4.metric("Health Status", intel.get("org_health_status", "Unknown"))
+
+                qd1, qd2, qd3, qd4 = st.columns(4)
+                qd1.metric("Strongest Branch", perf_block.get("strongest_branch", "-"))
+                qd2.metric("Weakest Branch", perf_block.get("weakest_branch", "-"))
+                qd3.metric("True Late Rate", f"{ops_block.get('late_rate_pct', 0):.1f}%")
+                qd4.metric("Payment Trend", str(finance_block.get("payment_trend", "stable")).title())
+
+                flow = build_priority_action_flow(intel, branch_diag)
+
+                st.markdown("### 🔄 Improvement Flow")
+                fl1, fl2, fl3, fl4 = st.columns(4)
+                fl1.markdown("**1. Main Problem**")
+                fl1.write(flow.get("problem", "-"))
+                fl2.markdown("**2. Likely Causes**")
+                for cause in flow.get("causes", [])[:3]:
+                    fl2.write(f"- {cause}")
+                fl3.markdown("**3. Best Branch to Copy**")
+                fl3.write(flow.get("learning_partner", "-"))
+                fl3.caption(flow.get("learning_reason", ""))
+                fl4.markdown("**4. Top Actions**")
+                for action in flow.get("urgent_actions", [])[:3]:
+                    fl4.write(f"- {action}")
+
+                st.markdown("### 🌿 Branch Health Summary")
+                if branch_view.empty:
+                    st.info(f"No branch-level data yet for '{sel_org}'.")
                 else:
-                    atab1, atab2, atab3, atab4, atab5 = st.tabs([
-                        "💡 Insights", "🧭 Decisions", "📊 Stability", "🔮 Predictions", "🏅 Leadership"
-                    ])
-
-                    with atab1:
+                    st.dataframe(branch_view, use_container_width=True)
+                    if PLOTLY_AVAILABLE and "Avg Score" in branch_view.columns:
                         try:
-                            items = generate_insights(ratings_o, attendance_o, leaves_o, users_o, messages_o)
-                            if items:
-                                for item in items:
-                                    st.info(item)
-                            else:
-                                st.success("No critical insights flagged at this time.")
-                        except Exception as ex:
-                            st.warning(f"Insights unavailable: {ex}")
+                            chart_df = branch_view.copy()
+                            fig = px.bar(
+                                chart_df,
+                                x="Branch",
+                                y="Avg Score",
+                                color="Branch Health",
+                                title=f"{sel_org} Branch Performance"
+                            )
+                            st.plotly_chart(fig, use_container_width=True)
+                        except Exception:
+                            pass
 
-                    with atab2:
-                        try:
-                            recs = management_recommendations(ratings_o, attendance_o, schedules_o)
-                            if recs:
-                                for rec in recs:
-                                    st.write(f"✅ {rec}")
-                            else:
-                                st.success("No management actions needed at this time.")
-                        except Exception as ex:
-                            st.warning(f"Decisions unavailable: {ex}")
+                    needs_attention = branch_view[
+                        branch_view["Branch Health"].astype(str).isin(["Needs Support", "Inactive", "No Data"])
+                    ].copy()
+                    if not needs_attention.empty:
+                        st.markdown("### ⚠️ Branches Requiring Attention")
+                        st.dataframe(needs_attention, use_container_width=True)
 
-                    with atab3:
-                        try:
-                            stab_df, stab_insights = stability_analysis(ratings_o, attendance_o, users_o)
-                            if stab_insights:
-                                for s in stab_insights:
-                                    st.write(f"⚠️ {s}")
-                            if stab_df is not None and not stab_df.empty:
-                                st.dataframe(stab_df, use_container_width=True)
-                            if not stab_insights and (stab_df is None or stab_df.empty):
-                                st.success("System is stable.")
-                        except Exception as ex:
-                            st.warning(f"Stability analysis unavailable: {ex}")
+                rx, ry = st.columns(2)
+                with rx:
+                    st.markdown("### ⚠️ Organization Risk Summary")
+                    risks = intel.get("risk_flags", [])
+                    if risks:
+                        for risk in risks:
+                            st.warning(risk)
+                    else:
+                        st.success("No major organization-level risks flagged.")
 
-                    with atab4:
-                        try:
-                            preds = predict_future(ratings_o, attendance_o, users_o)
-                            if preds:
-                                for p in preds:
-                                    st.write(f"🔮 {p}")
-                            else:
-                                st.success("No prediction signals detected.")
-                        except Exception as ex:
-                            st.warning(f"Predictions unavailable: {ex}")
+                with ry:
+                    st.markdown("### 🚀 Growth & Improvement Opportunities")
+                    growth = intel.get("growth_moves", [])
+                    if growth:
+                        for move in growth:
+                            st.success(move)
+                    else:
+                        st.info("No special growth opportunities surfaced yet.")
 
-                    with atab5:
-                        try:
-                            leaders_df, leader_insights = detect_leaders(ratings_o, attendance_o, leaves_o, users_o, messages_o)
-                            if leader_insights:
-                                for li in leader_insights:
-                                    st.write(f"🏅 {li}")
-                            if leaders_df is not None and not leaders_df.empty:
-                                st.dataframe(leaders_df, use_container_width=True)
-                            if not leader_insights and (leaders_df is None or leaders_df.empty):
-                                st.info("No leadership data available yet.")
-                        except Exception as ex:
-                            st.warning(f"Leadership analysis unavailable: {ex}")
+                st.markdown("### 🚨 Top 3 Urgent Actions")
+                urgent_actions = []
+                for item in intel.get("advice", []):
+                    tag = str(item).upper()
+                    if any(marker in tag for marker in ["ACTION:", "REMOVE:", "IMPROVE:", "ADD:", "BENCHMARK:"]):
+                        urgent_actions.append(item)
+                urgent_actions = urgent_actions[:3]
+                if urgent_actions:
+                    for idx, item in enumerate(urgent_actions, start=1):
+                        st.warning(f"{idx}. {item}")
+                else:
+                    st.success("No urgent action is currently required.")
+
+                st.markdown("### ✅ Recommended Organization Actions")
+                advice = intel.get("advice", [])
+                if advice:
+                    for item in advice:
+                        st.write(f"- {item}")
+                else:
+                    st.info("No organization-level recommendations yet.")
+
+                st.markdown("### 🩺 Why This Organization or Its Branches May Be Underperforming")
+                root_causes = intel.get("root_causes", [])
+                if root_causes:
+                    for cause in root_causes:
+                        st.error(cause)
+                else:
+                    st.success("No major root-cause issues flagged yet.")
+
+                if not branch_diag.empty:
+                    st.markdown("### 🧭 Branch Diagnosis & Learning Partners")
+                    st.dataframe(branch_diag, use_container_width=True)
+
+                bx, by = st.columns(2)
+                with bx:
+                    st.markdown("### 🧠 What Strong Organizations Are Doing")
+                    if benchmark_notes:
+                        for note in benchmark_notes:
+                            st.info(note)
+                    else:
+                        st.info("Peer benchmark notes will appear as more organization data grows.")
+
+                    if not benchmark_examples_df.empty:
+                        st.dataframe(benchmark_examples_df, use_container_width=True)
+
+                with by:
+                    st.markdown("### 🛠️ Add / Remove / Improve / Research Cases")
+                    for label, items in [
+                        ("Add", playbook.get("introduce", [])),
+                        ("Remove", playbook.get("remove", [])),
+                        ("Improve", playbook.get("improve", [])),
+                        ("Research", playbook.get("research", [])),
+                    ]:
+                        if items:
+                            st.markdown(f"**{label}**")
+                            for item in items:
+                                st.write(f"- {item}")
+
+                st.markdown("### 🚨 Management, Bias & Relationship Signals")
+                signal_sections = [
+                    ("Management Pressure", people_signals.get("management_pressure", [])),
+                    ("Favoritism / Bias", people_signals.get("favoritism", [])),
+                    ("Peer Gang-Ups", people_signals.get("peer_gangups", [])),
+                    ("Isolation", people_signals.get("isolation", [])),
+                    ("Relationships / Conflict", people_signals.get("relationships", [])),
+                ]
+                shown_signal = False
+                for label, items in signal_sections:
+                    if items:
+                        shown_signal = True
+                        st.markdown(f"**{label}**")
+                        for item in items[:4]:
+                            st.write(f"- {item}")
+                if not shown_signal:
+                    st.success("No major people-risk signals detected at the moment.")
+
+                st.markdown("### 🌐 Live Industry Advice")
+                st.caption(
+                    f"Tailored for {intel.get('business_type', 'Office')} organizations using live public feeds like SHRM, HR Dive, HBR, MIT Sloan and sector-specific sources."
+                )
+                if live_data.get("error"):
+                    st.warning(live_data.get("error"))
+                else:
+                    st.success(
+                        f"Live sources responding: {live_data.get('sources_ok', 0)} | Last refresh: {live_data.get('fetched_at', 'recently')}"
+                    )
+                    for article in live_data.get("articles", [])[:5]:
+                        st.markdown(
+                            f"- **{article.get('title', 'Untitled')}** ({article.get('source', 'Source')} - {article.get('category', 'Advice')})"
+                        )
+                        if article.get("summary"):
+                            st.caption(article.get("summary"))
 
         with tab_ai:
-            st.markdown("### 🤖 Chief Administrator AI Advisory Intelligence")
-            st.caption("Deep organization coaching intelligence to guide super admins with clear actions.")
+            st.markdown("### 🤖 Chief Administrator Advisory Intelligence")
+            st.caption("Organization-level guidance based on branch performance, operational risk, and growth opportunity.")
 
             benchmark_df, key_alerts = build_master_advisor_benchmark(conn)
 
@@ -1637,31 +2365,57 @@ def master_admin_dashboard():
                 b2.metric("Avg Health Score", f"{benchmark_df['Health Score'].mean():.1f}")
                 b3.metric("Needs Intervention", int((benchmark_df["Health Status"] == "Needs Intervention").sum()))
 
-                st.markdown("**Cross-Organization Benchmark**")
+                st.markdown("**Cross-Organization Performance Benchmark**")
                 st.dataframe(benchmark_df, use_container_width=True)
 
-                st.markdown("**Best Employees Across All Organizations**")
-                try:
-                    best_employees_df = get_best_employees_across_organizations()
-                    if best_employees_df.empty:
-                        st.info("No cross-organization best employee data yet.")
-                    else:
-                        st.dataframe(best_employees_df, use_container_width=True)
-                except Exception:
-                    st.info("Best employee leaderboard is currently unavailable.")
+                st.markdown("**Top Organizations to Learn From**")
+                top_orgs = benchmark_df[[
+                    "Organization", "Business Type", "Health Score", "Health Status", "Avg Score", "True Late %", "Payment Trend"
+                ]].head(5)
+                st.dataframe(top_orgs, use_container_width=True)
+
+                turnaround_cases = benchmark_df[benchmark_df["Health Status"].astype(str) != "Strong"].copy()
+                if not turnaround_cases.empty:
+                    st.markdown("**Organizations Needing Turnaround Support**")
+                    st.dataframe(
+                        turnaround_cases[[
+                            "Organization", "Business Type", "Health Score", "Primary Root Cause", "True Late %", "Payment Trend"
+                        ]].sort_values("Health Score", ascending=True),
+                        use_container_width=True,
+                    )
 
                 if key_alerts:
-                    st.markdown("**Priority Alerts for Chief Administrator**")
+                    st.markdown("**Priority Organization Alerts**")
                     for alert in key_alerts:
                         st.warning(alert)
 
                 st.divider()
                 selected_org = st.selectbox(
-                    "Select Organization for Deep Advisory",
+                    "Select Organization for Advisory Review",
                     benchmark_df["Organization"].tolist(),
                     key="master_ai_org",
                 )
                 intel = generate_org_ai_intelligence(conn, selected_org)
+                ratings_sel = safe_read("SELECT * FROM ratings WHERE organization=?", conn, params=(selected_org,))
+                attendance_sel = safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(selected_org,))
+                users_sel = safe_read("SELECT * FROM users WHERE organization=?", conn, params=(selected_org,))
+                leaves_sel = safe_read("SELECT * FROM leaves WHERE organization=?", conn, params=(selected_org,))
+                warnings_sel = safe_read("SELECT * FROM warnings WHERE organization=?", conn, params=(selected_org,))
+                messages_sel = safe_read("SELECT * FROM messages WHERE organization=?", conn, params=(selected_org,))
+                branches_sel = safe_read("SELECT name, status FROM branches WHERE organization=? ORDER BY name", conn, params=(selected_org,))
+                branch_diag = build_branch_diagnostic_table(
+                    conn,
+                    selected_org,
+                    intel.get("business_type", "Office"),
+                    ratings_sel,
+                    attendance_sel,
+                    users_sel,
+                    leaves_sel,
+                    warnings_sel,
+                    messages_sel,
+                    branches_sel,
+                )
+                flow = build_priority_action_flow(intel, branch_diag)
 
                 m1, m2, m3, m4 = st.columns(4)
                 m1.metric("Health Score", f"{intel.get('org_health_score', 0):.1f}")
@@ -1669,10 +2423,28 @@ def master_admin_dashboard():
                 m3.metric("Avg Performance", f"{intel.get('performance', {}).get('avg_score', 0):.1f}")
                 m4.metric("True Late Rate", f"{intel.get('operations', {}).get('late_rate_pct', 0):.1f}%")
 
+                st.markdown("**Priority Improvement Flow**")
+                af1, af2, af3, af4 = st.columns(4)
+                af1.markdown("**1. Problem**")
+                af1.write(flow.get("problem", "-"))
+                af2.markdown("**2. Causes**")
+                for cause in flow.get("causes", [])[:3]:
+                    af2.write(f"- {cause}")
+                af3.markdown("**3. Learning Partner**")
+                af3.write(flow.get("learning_partner", "-"))
+                af3.caption(flow.get("learning_reason", ""))
+                af4.markdown("**4. Top Actions**")
+                for action in flow.get("urgent_actions", [])[:3]:
+                    af4.write(f"- {action}")
+
                 ux, uy, uz = st.columns(3)
                 users_block = intel.get("users", {})
                 finance_block = intel.get("finance", {})
                 ops_block = intel.get("operations", {})
+                playbook = intel.get("playbook", {})
+                benchmark_notes = intel.get("benchmark_notes", [])
+                benchmark_examples_df = pd.DataFrame(intel.get("benchmark_examples", []))
+                live_data = get_cached_recommendations(business_type=playbook.get("feed_type", "Office"))
 
                 ux.markdown("**People Intelligence**")
                 ux.write(f"Users: {users_block.get('total', 0)}")
@@ -1712,14 +2484,72 @@ def master_admin_dashboard():
                 else:
                     st.info("No immediate growth moves suggested yet.")
 
+                st.markdown("**Top 3 Urgent Actions**")
+                urgent_actions = []
+                for item in intel.get("advice", []):
+                    tag = str(item).upper()
+                    if any(marker in tag for marker in ["ACTION:", "REMOVE:", "IMPROVE:", "ADD:", "BENCHMARK:"]):
+                        urgent_actions.append(item)
+                urgent_actions = urgent_actions[:3]
+                if urgent_actions:
+                    for idx, item in enumerate(urgent_actions, start=1):
+                        st.warning(f"{idx}. {item}")
+                else:
+                    st.success("No urgent action is currently required.")
+
                 st.markdown("**Advisory Actions for Super Admin**")
                 for tip in intel.get("advice", []):
                     if "ACTION:" in tip:
                         st.warning(tip)
-                    elif "GUIDE:" in tip or "SUPPORT:" in tip:
+                    elif "GUIDE:" in tip or "SUPPORT:" in tip or "BENCHMARK:" in tip or "ADD:" in tip or "REMOVE:" in tip or "IMPROVE:" in tip:
                         st.info(tip)
                     else:
                         st.write(f"- {tip}")
+
+                st.markdown("**Top Root Causes Detected**")
+                for cause in intel.get("root_causes", []):
+                    st.write(f"- {cause}")
+
+                ax1, ax2 = st.columns(2)
+                with ax1:
+                    st.markdown("**What Leading Organizations Are Doing**")
+                    if benchmark_notes:
+                        for note in benchmark_notes:
+                            st.info(note)
+                    else:
+                        st.info("Benchmark guidance will appear as more peer organization data becomes available.")
+                    if not benchmark_examples_df.empty:
+                        st.dataframe(benchmark_examples_df, use_container_width=True)
+
+                with ax2:
+                    st.markdown("**What to Add / Remove / Improve / Research**")
+                    for label, items in [
+                        ("Add", playbook.get("introduce", [])),
+                        ("Remove", playbook.get("remove", [])),
+                        ("Improve", playbook.get("improve", [])),
+                        ("Research", playbook.get("research", [])),
+                    ]:
+                        if items:
+                            st.markdown(f"**{label}**")
+                            for item in items:
+                                st.write(f"- {item}")
+
+                st.markdown("**Live Industry Advisory Feed**")
+                st.caption(
+                    f"Tailored for {intel.get('business_type', 'Office')} organizations using live public management and industry feeds."
+                )
+                if live_data.get("error"):
+                    st.warning(live_data.get("error"))
+                else:
+                    st.success(
+                        f"Live sources responding: {live_data.get('sources_ok', 0)} | Last refresh: {live_data.get('fetched_at', 'recently')}"
+                    )
+                    for article in live_data.get("articles", [])[:5]:
+                        st.markdown(
+                            f"- **{article.get('title', 'Untitled')}** ({article.get('source', 'Source')} - {article.get('category', 'Advice')})"
+                        )
+                        if article.get("summary"):
+                            st.caption(article.get("summary"))
 
     # ==========================================================
     # SETTINGS
