@@ -46,19 +46,15 @@ def clear_kiosk_staff_transient_state():
 
 
 def compact_kiosk_button(label, key, *, use_container_width=True, **kwargs):
-    _, center_col, _ = st.columns([1, 8, 1])
-    with center_col:
-        return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
+    return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
 
 
 def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwargs):
-    _, center_col, _ = st.columns([1, 8, 1])
-    with center_col:
-        return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
+    return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
 
 
 def home_kiosk_button(label, key):
-    return compact_kiosk_button(label, key=key, type="primary")
+    return st.button(label, key=key, use_container_width=True, type="primary")
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
@@ -350,22 +346,8 @@ def kiosk_dashboard():
     # ==============================
     st.markdown("""
         <style>
-        .block-container {
-            max-width: 480px;
-            min-height: calc(100vh - 1.25rem);
-            padding-top: 1rem;
-            padding-bottom: 4.25rem;
-        }
-        .block-container > div[data-testid="stVerticalBlock"] {
-            min-height: calc(100vh - 3.5rem);
-            padding-bottom: 1.75rem;
-            border-radius: 28px;
-            overflow: hidden;
-        }
+        .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
         button {height:58px; font-size:18px; font-weight:bold;}
-        .stButton, .stDownloadButton, .stFormSubmitButton {
-            margin-top: 0.28rem;
-        }
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
             width: min(100%, 320px);
             display: block;
@@ -413,17 +395,7 @@ def kiosk_dashboard():
         }
         
         @media (max-width: 640px) {
-            .block-container {
-                max-width: 100%;
-                min-height: calc(100vh - 0.5rem);
-                padding-left: 0.75rem;
-                padding-right: 0.75rem;
-                padding-bottom: 4.75rem;
-            }
-            .block-container > div[data-testid="stVerticalBlock"] {
-                min-height: calc(100vh - 2.5rem);
-                border-radius: 24px;
-            }
+            .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
             .home-kiosk-title .org-name {font-size: 2.1rem;}
             .home-kiosk-title .branch-name {font-size: 1.6rem;}
@@ -547,13 +519,13 @@ def kiosk_dashboard():
             f"Branch Manager: <b>{manager_name}</b>",
         )
 
-        st.markdown("<div style='height:2.15rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
 
         if home_kiosk_button("Guest Experience", key="home_btn_guest"):
             st.session_state["kiosk_view"] = "guest"
             refresh()
 
-        st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
 
         if home_kiosk_button("Staff Check In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
