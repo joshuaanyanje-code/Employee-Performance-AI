@@ -46,15 +46,19 @@ def clear_kiosk_staff_transient_state():
 
 
 def compact_kiosk_button(label, key, *, use_container_width=True, **kwargs):
-    return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
+    _, center_col, _ = st.columns([1, 8, 1])
+    with center_col:
+        return st.button(label, key=key, use_container_width=use_container_width, **kwargs)
 
 
 def compact_kiosk_form_submit_button(label, *, use_container_width=True, **kwargs):
-    return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
+    _, center_col, _ = st.columns([1, 8, 1])
+    with center_col:
+        return st.form_submit_button(label, use_container_width=use_container_width, **kwargs)
 
 
 def home_kiosk_button(label, key):
-    return st.button(label, key=key, use_container_width=True, type="primary")
+    return compact_kiosk_button(label, key=key, type="primary")
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
@@ -346,7 +350,18 @@ def kiosk_dashboard():
     # ==============================
     st.markdown("""
         <style>
-        .block-container {max-width: 480px; padding-top: 1rem; padding-bottom: 2rem;}
+        .block-container {
+            max-width: 480px;
+            min-height: calc(100vh - 1.25rem);
+            padding-top: 1rem;
+            padding-bottom: 4.25rem;
+        }
+        .block-container > div[data-testid="stVerticalBlock"] {
+            min-height: calc(100vh - 3.5rem);
+            padding-bottom: 1.75rem;
+            border-radius: 28px;
+            overflow: hidden;
+        }
         button {height:58px; font-size:18px; font-weight:bold;}
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
             width: min(100%, 320px);
@@ -395,7 +410,17 @@ def kiosk_dashboard():
         }
         
         @media (max-width: 640px) {
-            .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
+            .block-container {
+                max-width: 100%;
+                min-height: calc(100vh - 0.5rem);
+                padding-left: 0.75rem;
+                padding-right: 0.75rem;
+                padding-bottom: 4.75rem;
+            }
+            .block-container > div[data-testid="stVerticalBlock"] {
+                min-height: calc(100vh - 2.5rem);
+                border-radius: 24px;
+            }
             button {height: 54px; font-size: 17px;}
             .home-kiosk-title .org-name {font-size: 2.1rem;}
             .home-kiosk-title .branch-name {font-size: 1.6rem;}
@@ -541,7 +566,7 @@ def kiosk_dashboard():
             "",
         )
 
-        if st.button("← Back", key="guest_back"):
+        if compact_kiosk_button("← Back", key="guest_back"):
             st.session_state["kiosk_view"] = "home"
             refresh()
 
@@ -623,7 +648,7 @@ def kiosk_dashboard():
         st.divider()
 
         if "kiosk_user" not in st.session_state:
-            if st.button("← Back", key="staff_back"):
+            if compact_kiosk_button("← Back", key="staff_back"):
                 clear_kiosk_photo_state()
                 clear_kiosk_pin_input()
                 clear_kiosk_staff_transient_state()
@@ -942,7 +967,7 @@ def kiosk_dashboard():
                 elif now_time < work_start:
                     st.warning("⚠️ Early clock-in allowed within 30 minutes before shift start.")
 
-                if st.button("🟢 CLOCK IN", use_container_width=True):
+                if compact_kiosk_button("🟢 CLOCK IN", key="kiosk_clock_in"):
                     if now < earliest_clockin_dt:
                         st.error(f"Too early. You can only clock in from {earliest_clockin_dt.strftime('%H:%M')}.")
                         return
@@ -1096,7 +1121,7 @@ def kiosk_dashboard():
                         st.session_state["kiosk_show_early_request"] = False
                     reason = st.text_area("Enter reason for leaving early", key="kiosk_early_clockout_reason")
 
-                if st.button("🔴 CLOCK OUT", use_container_width=True):
+                if compact_kiosk_button("🔴 CLOCK OUT", key="kiosk_clock_out"):
                     if now_time < work_end and not reason.strip():
                         st.error("❌ Reason required")
                         return
