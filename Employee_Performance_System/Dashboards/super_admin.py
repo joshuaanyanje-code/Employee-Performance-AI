@@ -811,7 +811,7 @@ def super_admin_dashboard():
 
                         # Branch-level winners
                         branch_top = badge_holders_df[
-                            badge_holders_df["badge"].astype(str).str.contains("Gold No. 1 \(Branch\)", na=False)
+                            badge_holders_df["badge"].astype(str).str.contains("Gold No. 1 (Branch)", regex=False, na=False)
                         ].copy()
                         if not branch_top.empty:
                             st.markdown("**Top Performers - Branch Level (Gold per Branch)**")
