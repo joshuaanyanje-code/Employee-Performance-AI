@@ -2,8 +2,8 @@ import sqlite3
 import hashlib
 import time
 import random
-import os
 import re
+import os
 from datetime import datetime, timedelta
 
 try:
@@ -16,9 +16,20 @@ try:
 except Exception:
     MongoClient = None
 
-if load_dotenv is not None:
-    load_dotenv()
+MODULE_DIR = os.path.abspath(os.path.dirname(__file__))
+APP_DIR = os.path.abspath(os.path.join(MODULE_DIR, ".."))
+WORKSPACE_DIR = os.path.abspath(os.path.join(APP_DIR, ".."))
 
+if load_dotenv is not None:
+    for env_candidate in (
+        os.path.join(APP_DIR, ".env"),
+        os.path.join(WORKSPACE_DIR, ".env"),
+    ):
+        if os.path.exists(env_candidate):
+            load_dotenv(env_candidate, override=False)
+
+DEFAULT_MONGO_URI = str(os.getenv("MONGO_URI", "mongodb://localhost:27017") or "mongodb://localhost:27017").strip() or "mongodb://localhost:27017"
+DEFAULT_MONGO_DB_NAME = str(os.getenv("MONGO_DB_NAME", "barberboss") or "barberboss").strip() or "barberboss"
 
 def _score_existing_db(path):
     if not path or not os.path.exists(path):
@@ -48,11 +59,9 @@ def _resolve_db_path():
     if env_path:
         return os.path.abspath(env_path)
 
-    package_root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
-    workspace_root = os.path.abspath(os.path.join(package_root, ".."))
     candidates = [
-        os.path.join(package_root, "team_ai.db"),
-        os.path.join(workspace_root, "team_ai.db"),
+        os.path.join(APP_DIR, "team_ai.db"),
+        os.path.join(WORKSPACE_DIR, "team_ai.db"),
     ]
 
     best_path = candidates[0]
@@ -1011,17 +1020,20 @@ def create_tables():
 
 
 def mongo_is_configured():
-    mongo_uri = os.getenv("MONGO_URI", "").strip()
-    mongo_db_name = os.getenv("MONGO_DB_NAME", "employee_performance_system").strip()
+    if MongoClient is None:
+        return False
+
+    mongo_uri = str(os.getenv("MONGO_URI", DEFAULT_MONGO_URI) or DEFAULT_MONGO_URI).strip()
+    mongo_db_name = str(os.getenv("MONGO_DB_NAME", DEFAULT_MONGO_DB_NAME) or DEFAULT_MONGO_DB_NAME).strip()
     return bool(mongo_uri and mongo_db_name)
 
 
 def get_mongo_database():
-    if not mongo_is_configured() or MongoClient is None:
+    if not mongo_is_configured():
         return None
 
-    mongo_uri = os.getenv("MONGO_URI", "").strip()
-    mongo_db_name = os.getenv("MONGO_DB_NAME", "employee_performance_system").strip()
+    mongo_uri = str(os.getenv("MONGO_URI", DEFAULT_MONGO_URI) or DEFAULT_MONGO_URI).strip()
+    mongo_db_name = str(os.getenv("MONGO_DB_NAME", DEFAULT_MONGO_DB_NAME) or DEFAULT_MONGO_DB_NAME).strip()
 
     try:
         client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
@@ -1029,6 +1041,10 @@ def get_mongo_database():
         return client[mongo_db_name]
     except Exception:
         return None
+
+
+def get_mongo_db():
+    return get_mongo_database()
 
 
 def _get_sqlite_tables(conn):

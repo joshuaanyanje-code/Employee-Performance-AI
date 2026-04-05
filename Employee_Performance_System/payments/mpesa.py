@@ -37,11 +37,7 @@ def stk_push(phone, amount):
         "PartyA": phone,
         "PartyB": SHORTCODE,
         "PhoneNumber": phone,
-        "http://YOUR_SERVER_IP:5000/callback",
+        "CallBackURL": "http://YOUR_SERVER_IP:5000/callback",
         "AccountReference": "TeamSystem",
         "TransactionDesc": "Subscription Payment"
-    }
-
-    res = requests.post(url, json=payload, headers=headers)
-
-    return res.json()
+ }
