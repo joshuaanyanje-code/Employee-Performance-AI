@@ -363,6 +363,9 @@ def kiosk_dashboard():
             overflow: hidden;
         }
         button {height:58px; font-size:18px; font-weight:bold;}
+        .stButton, .stDownloadButton, .stFormSubmitButton {
+            margin-top: 0.28rem;
+        }
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
             width: min(100%, 320px);
             display: block;
@@ -544,13 +547,13 @@ def kiosk_dashboard():
             f"Branch Manager: <b>{manager_name}</b>",
         )
 
-        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:2.15rem;'></div>", unsafe_allow_html=True)
 
         if home_kiosk_button("Guest Experience", key="home_btn_guest"):
             st.session_state["kiosk_view"] = "guest"
             refresh()
 
-        st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+        st.markdown("<div style='height:0.9rem;'></div>", unsafe_allow_html=True)
 
         if home_kiosk_button("Staff Check In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
