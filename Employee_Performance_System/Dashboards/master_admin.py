@@ -2,7 +2,7 @@
 import pandas as pd
 import os
 from datetime import datetime, timedelta
-from database.db import get_connection, hash_password, verify_password, execute_write, get_phone_uniqueness_error
+from database.db import get_connection, hash_password, verify_password, execute_write, get_phone_uniqueness_error, DB_PATH as MAIN_DB_PATH
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -139,11 +139,11 @@ def calc_price(branch_count, cfg):
 def reset_database():
     import os
     import time
-    DB_PATH = "team_ai.db"
+    db_file = MAIN_DB_PATH
     try:
         time.sleep(1)
-        if os.path.exists(DB_PATH):
-            os.remove(DB_PATH)
+        if os.path.exists(db_file):
+            os.remove(db_file)
         conn = get_connection()
         conn.close()
         return True

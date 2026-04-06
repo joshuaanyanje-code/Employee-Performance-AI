@@ -1,11 +1,8 @@
 from flask import Flask, request, jsonify
-import sqlite3
 from datetime import datetime, timedelta
+from database.db import get_connection
 
 app = Flask(__name__)
-
-def get_connection():
-    return sqlite3.connect("team_ai.db")
 
 @app.route("/callback", methods=["POST"])
 def mpesa_callback():

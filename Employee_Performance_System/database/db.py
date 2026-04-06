@@ -72,20 +72,21 @@ def _resolve_db_path():
     if env_path:
         return os.path.abspath(env_path)
 
-    candidates = [
-        os.path.join(APP_DIR, "team_ai.db"),
-        os.path.join(WORKSPACE_DIR, "team_ai.db"),
-    ]
+    preferred_path = os.path.abspath(os.path.join(APP_DIR, "team_ai.db"))
+    legacy_path = os.path.abspath(os.path.join(WORKSPACE_DIR, "team_ai.db"))
 
-    best_path = candidates[0]
-    best_score = (-1, -1, -1)
-    for candidate in candidates:
-        score = _score_existing_db(candidate)
-        if score > best_score:
-            best_score = score
-            best_path = candidate
+    preferred_score = _score_existing_db(preferred_path)
+    legacy_score = _score_existing_db(legacy_path)
 
-    return os.path.abspath(best_path)
+    if legacy_score > preferred_score and os.path.exists(legacy_path):
+        try:
+            os.makedirs(os.path.dirname(preferred_path), exist_ok=True)
+            shutil.copy2(legacy_path, preferred_path)
+            preferred_score = _score_existing_db(preferred_path)
+        except Exception:
+            pass
+
+    return preferred_path
 
 
 DB_PATH = _resolve_db_path()
