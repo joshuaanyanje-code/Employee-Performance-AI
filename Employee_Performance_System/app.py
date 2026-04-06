@@ -233,12 +233,7 @@ def render_global_sidebar_toggle_button():
 # IMPORTS (SAFE 🔥)
 # =====================================================
 try:
-    from database.db import (
-        get_connection,
-        create_tables,
-        restore_sqlite_from_mongo_if_empty,
-        backup_sqlite_to_mongo,
-    )
+    from database.db import get_connection, create_tables
 except Exception as e:
     st.error(f"Database import error: {e}")
     st.stop()
@@ -590,15 +585,10 @@ def _ensure_db_schema_ready():
 try:
     _ensure_db_schema_ready()
 
-    if not st.session_state.get("_mongo_restore_checked", False):
-        restore_sqlite_from_mongo_if_empty()
-        st.session_state["_mongo_restore_checked"] = True
-
     conn = get_connection()
     if not st.session_state.get("_startup_maintenance_done", False):
         _cleanup_expired_sessions(conn)
         check_subscriptions(conn)
-        backup_sqlite_to_mongo()
         st.session_state["_startup_maintenance_done"] = True
 except Exception as e:
     st.error(f"Database initialization failed: {e}")

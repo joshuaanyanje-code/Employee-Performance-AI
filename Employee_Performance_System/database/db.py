@@ -12,21 +12,6 @@ try:
 except Exception:
     load_dotenv = None
 
-try:
-    import streamlit as st
-    try:
-        from streamlit.runtime.scriptrunner import get_script_run_ctx
-    except Exception:
-        get_script_run_ctx = None
-except Exception:
-    st = None
-    get_script_run_ctx = None
-
-try:
-    from pymongo import MongoClient
-except Exception:
-    MongoClient = None
-
 MODULE_DIR = os.path.abspath(os.path.dirname(__file__))
 APP_DIR = os.path.abspath(os.path.join(MODULE_DIR, ".."))
 WORKSPACE_DIR = os.path.abspath(os.path.join(APP_DIR, ".."))
@@ -39,80 +24,9 @@ if load_dotenv is not None:
         if os.path.exists(env_candidate):
             load_dotenv(env_candidate, override=False)
 
-def _streamlit_secrets_available():
-    if st is None or get_script_run_ctx is None:
-        return False
-    try:
-        return get_script_run_ctx() is not None
-    except Exception:
-        return False
 
-
-def _get_setting(name, default="", allow_streamlit=True):
-    normalized_names = []
-    for candidate in (name, str(name or "").upper(), str(name or "").lower()):
-        candidate = str(candidate or "").strip()
-        if candidate and candidate not in normalized_names:
-            normalized_names.append(candidate)
-
-    for candidate in normalized_names:
-        env_value = str(os.getenv(candidate, "") or "").strip()
-        if env_value:
-            return env_value
-
-    if not allow_streamlit or not _streamlit_secrets_available():
-        return str(default or "").strip()
-
-    def _read_secret_path(*path_parts):
-        try:
-            current = st.secrets
-            for part in path_parts:
-                if isinstance(current, dict):
-                    current = current.get(part, "")
-                else:
-                    try:
-                        current = current[part]
-                    except Exception:
-                        current = getattr(current, part, "")
-                if current in (None, ""):
-                    return ""
-            return str(current or "").strip()
-        except Exception:
-            return ""
-
-    for candidate in normalized_names:
-        secret_value = _read_secret_path(candidate)
-        if secret_value:
-            return secret_value
-
-    nested_secret_paths = {
-        "MONGO_URI": [("mongo", "uri"), ("mongodb", "uri"), ("database", "mongo_uri")],
-        "MONGO_DB_NAME": [("mongo", "db_name"), ("mongo", "database"), ("mongodb", "db_name"), ("database", "mongo_db_name")],
-        "MONGO_BACKUP_COLLECTION": [("mongo", "backup_collection"), ("mongodb", "backup_collection")],
-        "TEAM_AI_DB_PATH": [("team_ai", "db_path"), ("database", "sqlite_path")],
-        "TEAM_AI_LOCAL_BACKUP_PATH": [("team_ai", "local_backup_path"), ("database", "local_backup_path")],
-        "TEAM_AI_AUTO_BACKUP_INTERVAL": [("team_ai", "auto_backup_interval"), ("database", "auto_backup_interval")],
-    }
-
-    for path_parts in nested_secret_paths.get(str(name or "").upper(), []):
-        secret_value = _read_secret_path(*path_parts)
-        if secret_value:
-            return secret_value
-
-    return str(default or "").strip()
-
-
-DEFAULT_MONGO_URI = _get_setting("MONGO_URI", "mongodb://localhost:27017", allow_streamlit=False) or "mongodb://localhost:27017"
-DEFAULT_MONGO_DB_NAME = _get_setting("MONGO_DB_NAME", "barberboss", allow_streamlit=False) or "barberboss"
-LOCAL_BACKUP_DIR = os.path.join(APP_DIR, "local_backups")
-LOCAL_BACKUP_PATH = _get_setting("TEAM_AI_LOCAL_BACKUP_PATH", os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db"), allow_streamlit=False) or os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db")
-try:
-    AUTO_BACKUP_INTERVAL_SECONDS = max(2.0, float(_get_setting("TEAM_AI_AUTO_BACKUP_INTERVAL", "5", allow_streamlit=False) or "5"))
-except Exception:
-    AUTO_BACKUP_INTERVAL_SECONDS = 5.0
-
-_AUTO_BACKUP_IN_PROGRESS = False
-_LAST_AUTO_BACKUP_TS = 0.0
+def _get_env_setting(name, default=""):
+    return str(os.getenv(name, default) or default or "").strip()
 
 def _score_existing_db(path):
     if not path or not os.path.exists(path):
@@ -138,7 +52,7 @@ def _score_existing_db(path):
 
 
 def _resolve_db_path():
-    env_path = _get_setting("TEAM_AI_DB_PATH", "", allow_streamlit=False)
+    env_path = _get_env_setting("TEAM_AI_DB_PATH", "")
     if env_path:
         return os.path.abspath(env_path)
 
@@ -181,12 +95,7 @@ class SyncedConnection(sqlite3.Connection):
         return super().executemany(_normalize_sqlite_now(sql), seq_of_parameters)
 
     def commit(self):
-        result = super().commit()
-        try:
-            _maybe_auto_backup_after_commit()
-        except Exception:
-            pass
-        return result
+        return super().commit()
 
 
 def get_local_now():
@@ -1112,110 +1021,31 @@ def create_tables():
 
 
 def mongo_is_configured():
-    if MongoClient is None:
-        return False
-
-    mongo_uri = _get_setting("MONGO_URI", DEFAULT_MONGO_URI)
-    mongo_db_name = _get_setting("MONGO_DB_NAME", DEFAULT_MONGO_DB_NAME)
-    return bool(mongo_uri and mongo_db_name)
+    return False
 
 
 def get_mongo_database():
-    if not mongo_is_configured():
-        return None
-
-    mongo_uri = _get_setting("MONGO_URI", DEFAULT_MONGO_URI)
-    mongo_db_name = _get_setting("MONGO_DB_NAME", DEFAULT_MONGO_DB_NAME)
-
-    try:
-        client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
-        client.admin.command("ping")
-        return client[mongo_db_name]
-    except Exception:
-        return None
+    return None
 
 
 def get_mongo_db():
-    return get_mongo_database()
+    return None
 
 
 def backup_sqlite_to_local_snapshot():
-    source_conn = None
-    dest_conn = None
-    try:
-        if not os.path.exists(DB_PATH):
-            return {
-                "ok": False,
-                "status": "sqlite_missing",
-                "path": LOCAL_BACKUP_PATH,
-            }
-
-        if os.path.abspath(DB_PATH) == os.path.abspath(LOCAL_BACKUP_PATH):
-            return {
-                "ok": True,
-                "status": "snapshot_same_as_primary",
-                "path": LOCAL_BACKUP_PATH,
-            }
-
-        source_conn = sqlite3.connect(DB_PATH)
-        if not _sqlite_has_meaningful_data(source_conn):
-            return {
-                "ok": True,
-                "status": "skipped_sqlite_has_no_meaningful_data",
-                "path": LOCAL_BACKUP_PATH,
-                "preserved_existing": os.path.exists(LOCAL_BACKUP_PATH),
-            }
-
-        backup_dir = os.path.dirname(LOCAL_BACKUP_PATH) or APP_DIR
-        os.makedirs(backup_dir, exist_ok=True)
-        dest_conn = sqlite3.connect(LOCAL_BACKUP_PATH)
-        source_conn.backup(dest_conn)
-        dest_conn.commit()
-        return {
-            "ok": True,
-            "status": "local_snapshot_saved",
-            "path": LOCAL_BACKUP_PATH,
-            "size_bytes": os.path.getsize(LOCAL_BACKUP_PATH) if os.path.exists(LOCAL_BACKUP_PATH) else 0,
-        }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "status": "local_snapshot_failed",
-            "path": LOCAL_BACKUP_PATH,
-            "error": str(exc),
-        }
-    finally:
-        try:
-            if dest_conn is not None:
-                dest_conn.close()
-        except Exception:
-            pass
-        try:
-            if source_conn is not None:
-                source_conn.close()
-        except Exception:
-            pass
+    return {
+        "ok": True,
+        "status": "disabled",
+        "message": "Local backup is disabled.",
+    }
 
 
 def _maybe_auto_backup_after_commit():
-    global _AUTO_BACKUP_IN_PROGRESS, _LAST_AUTO_BACKUP_TS
-
-    backup_sqlite_to_local_snapshot()
-
-    now_ts = time.time()
-    if _AUTO_BACKUP_IN_PROGRESS:
-        return
-    if (now_ts - _LAST_AUTO_BACKUP_TS) < AUTO_BACKUP_INTERVAL_SECONDS:
-        return
-    if not mongo_is_configured():
-        return
-
-    _AUTO_BACKUP_IN_PROGRESS = True
-    _LAST_AUTO_BACKUP_TS = now_ts
-    try:
-        backup_sqlite_to_mongo()
-    finally:
-        _AUTO_BACKUP_IN_PROGRESS = False
+    return {
+        "ok": True,
+        "status": "disabled",
+        "message": "Automatic backup is disabled.",
+    }
 
 
 def _get_sqlite_tables(conn):
@@ -1251,171 +1081,16 @@ def _sqlite_has_meaningful_data(conn):
 
 
 def backup_sqlite_to_mongo():
-    local_snapshot_result = backup_sqlite_to_local_snapshot()
-    db = get_mongo_database()
-    if db is None:
-        return {
-            "ok": False,
-            "status": "mongo_not_configured",
-            "message": "MongoDB is not reachable. Local snapshot was attempted instead.",
-            "local_snapshot": local_snapshot_result,
-        }
-
-    try:
-        conn = get_connection()
-        if not _sqlite_has_meaningful_data(conn):
-            conn.close()
-            return {
-                "ok": True,
-                "status": "skipped_sqlite_has_no_meaningful_data",
-                "local_snapshot": local_snapshot_result,
-            }
-
-        tables = _get_sqlite_tables(conn)
-        payload = {}
-        total_rows = 0
-
-        for table in tables:
-            cur = conn.execute(f"SELECT * FROM {table}")
-            columns = [d[0] for d in cur.description or []]
-            rows = [dict(zip(columns, row)) for row in cur.fetchall()]
-            payload[table] = rows
-            total_rows += len(rows)
-
-        backup_doc = {
-            "backup_key": "latest",
-            "db_path": DB_PATH,
-            "created_at": datetime.utcnow().isoformat() + "Z",
-            "tables": payload,
-            "table_count": len(tables),
-            "total_rows": total_rows,
-        }
-
-        collection_name = _get_setting("MONGO_BACKUP_COLLECTION", "sqlite_backups") or "sqlite_backups"
-        db[collection_name].replace_one({"backup_key": "latest"}, backup_doc, upsert=True)
-
-        conn.close()
-        return {
-            "ok": True,
-            "status": "backup_saved",
-            "collection": collection_name,
-            "table_count": len(tables),
-            "total_rows": total_rows,
-            "local_snapshot": local_snapshot_result,
-        }
-    except Exception as exc:
-        try:
-            conn.close()
-        except Exception:
-            pass
-        return {
-            "ok": False,
-            "status": "backup_failed",
-            "error": str(exc),
-        }
+    return {
+        "ok": True,
+        "status": "disabled",
+        "message": "MongoDB backup is disabled.",
+    }
 
 
 def restore_sqlite_from_mongo_if_empty():
-    conn = None
-    try:
-        create_tables()
-        conn = get_connection()
-
-        if _sqlite_has_meaningful_data(conn):
-            conn.close()
-            return {
-                "ok": True,
-                "status": "skipped_sqlite_has_data",
-            }
-        conn.close()
-
-        if os.path.exists(LOCAL_BACKUP_PATH) and os.path.getsize(LOCAL_BACKUP_PATH) > 0:
-            shutil.copy2(LOCAL_BACKUP_PATH, DB_PATH)
-            conn = get_connection()
-            local_has_data = _sqlite_has_meaningful_data(conn)
-            conn.close()
-            if local_has_data:
-                return {
-                    "ok": True,
-                    "status": "restore_completed_local_snapshot",
-                    "path": LOCAL_BACKUP_PATH,
-                }
-
-        db = get_mongo_database()
-        if db is None:
-            return {
-                "ok": False,
-                "status": "mongo_not_configured",
-                "message": "MongoDB is not reachable and no usable local snapshot was restored.",
-            }
-
-        conn = get_connection()
-        collection_name = _get_setting("MONGO_BACKUP_COLLECTION", "sqlite_backups") or "sqlite_backups"
-        doc = db[collection_name].find_one({"backup_key": "latest"})
-        if not doc or not isinstance(doc.get("tables"), dict):
-            conn.close()
-            return {
-                "ok": True,
-                "status": "no_backup_found",
-                "collection": collection_name,
-            }
-
-        sqlite_tables = set(_get_sqlite_tables(conn))
-        restored_rows = 0
-        restored_tables = 0
-
-        for table_name, rows in doc.get("tables", {}).items():
-            if table_name not in sqlite_tables:
-                continue
-
-            conn.execute(f"DELETE FROM {table_name}")
-
-            if not rows:
-                restored_tables += 1
-                continue
-
-            if not isinstance(rows, list):
-                continue
-
-            first = rows[0]
-            if not isinstance(first, dict) or not first:
-                continue
-
-            columns = list(first.keys())
-            placeholders = ",".join(["?"] * len(columns))
-            col_sql = ",".join(columns)
-            insert_sql = f"INSERT INTO {table_name} ({col_sql}) VALUES ({placeholders})"
-
-            values = []
-            for row in rows:
-                if not isinstance(row, dict):
-                    continue
-                values.append(tuple(row.get(col) for col in columns))
-
-            if values:
-                conn.executemany(insert_sql, values)
-                restored_rows += len(values)
-
-            restored_tables += 1
-
-        conn.commit()
-        conn.close()
-
-        return {
-            "ok": True,
-            "status": "restore_completed",
-            "collection": collection_name,
-            "restored_tables": restored_tables,
-            "restored_rows": restored_rows,
-        }
-    except Exception as exc:
-        if conn is not None:
-            try:
-                conn.close()
-            except Exception:
-                pass
-        return {
-            "ok": False,
-            "status": "restore_failed",
-            "error": str(exc),
-        }
+    return {
+        "ok": True,
+        "status": "disabled",
+        "message": "Automatic restore is disabled.",
+    }
