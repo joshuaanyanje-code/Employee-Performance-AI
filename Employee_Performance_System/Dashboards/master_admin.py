@@ -1,6 +1,7 @@
 ﻿import streamlit as st
 import pandas as pd
 import os
+from database.db import backup_mongo, restore_mongo
 from datetime import datetime, timedelta
 from database.db import get_connection, hash_password, verify_password, execute_write, get_phone_uniqueness_error, DB_PATH as MAIN_DB_PATH
 from Dashboards.ui_responsive import apply_responsive_ui
@@ -2730,6 +2731,30 @@ def master_admin_dashboard():
                         st.rerun()
                     except Exception as e:
                         st.error(str(e))
+            
+            st.divider()
+st.subheader("💾 Backup & Restore")
+
+# BACKUP
+if st.button("📦 Backup System"):
+    file = backup_mongo()
+
+    with open(file, "rb") as f:
+        st.download_button(
+            "⬇ Download Backup",
+            f,
+            file_name=file
+        )
+
+# RESTORE
+uploaded = st.file_uploader("Upload Backup File")
+
+if uploaded:
+    if st.button("🔄 Restore System"):
+        restore_mongo(uploaded)
+        st.success("System restored successfully")
+        st.rerun()
+
 #If you later want to disable it again for safety, set:Reset the whole System (All Data)
 #TEAM_AI_ALLOW_FULL_RESET=0 in environment, or
 #revert that fallback line back to "0".

@@ -1018,3 +1018,48 @@ def create_tables():
 
     conn.commit()
     conn.close()
+
+    # =========================
+# 🔥 MONGO BACKUP SYSTEM
+# =========================
+import json
+from datetime import datetime
+from pymongo import MongoClient
+import streamlit as st
+
+
+def get_mongo_db():
+    client = MongoClient(st.secrets["MONGO_URI"])
+    return client[st.secrets["MONGO_DB_NAME"]]
+
+
+def backup_mongo():
+    db = get_mongo_db()
+
+    backup = {}
+
+    for collection_name in db.list_collection_names():
+        collection = db[collection_name]
+        data = list(collection.find({}, {"_id": 0}))
+        backup[collection_name] = data
+
+    filename = f"backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+
+    with open(filename, "w") as f:
+        json.dump(backup, f, indent=4)
+
+    return filename
+
+
+def restore_mongo(uploaded_file):
+    db = get_mongo_db()
+
+    data = json.load(uploaded_file)
+
+    for collection_name, records in data.items():
+        collection = db[collection_name]
+        collection.delete_many({})
+        if records:
+            collection.insert_many(records)
+
+    return True
