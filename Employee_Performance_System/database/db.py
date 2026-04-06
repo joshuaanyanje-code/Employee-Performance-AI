@@ -98,6 +98,32 @@ class SyncedConnection(sqlite3.Connection):
         return super().commit()
 
 
+def _mongo_mirror_enabled():
+    try:
+        from database.mongo_sync import is_mongo_configured
+
+        return is_mongo_configured()
+    except Exception:
+        return False
+
+
+def _after_sqlite_commit_push_mongo():
+    try:
+        from database.mongo_sync import maybe_push_sqlite_to_mongo
+
+        maybe_push_sqlite_to_mongo(DB_PATH)
+    except Exception:
+        pass
+
+
+class MongoMirroredConnection(SyncedConnection):
+    """Same as SyncedConnection but pushes a full DB snapshot to MongoDB after each commit."""
+
+    def commit(self):
+        super().commit()
+        _after_sqlite_commit_push_mongo()
+
+
 def get_local_now():
     return datetime.now().replace(microsecond=0)
 
@@ -164,7 +190,8 @@ def _normalize_sqlite_now(query):
 
 def get_connection():
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
-    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=SyncedConnection)
+    factory = MongoMirroredConnection if _mongo_mirror_enabled() else SyncedConnection
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=factory)
     conn.execute("PRAGMA foreign_keys = ON")
     conn.execute("PRAGMA journal_mode = WAL")
     conn.execute("PRAGMA synchronous = NORMAL")
@@ -354,8 +381,10 @@ def log_action(conn, username, action, role, organization):
 # CREATE TABLES (MASTER 🔥)
 # =========================
 def create_tables():
-
-    conn = get_connection()
+    # Plain SQLite connection: avoid pushing to Mongo mid-schema before initial pull/push runs.
+    os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
+    conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30)
+    conn.execute("PRAGMA foreign_keys = ON")
     c = conn.cursor()
 
     # =========================
@@ -1018,4 +1047,11 @@ def create_tables():
 
     conn.commit()
     conn.close()
+
+    try:
+        from database.mongo_sync import mongo_initial_sync_after_schema
+
+        mongo_initial_sync_after_schema(DB_PATH)
+    except Exception:
+        pass
 
