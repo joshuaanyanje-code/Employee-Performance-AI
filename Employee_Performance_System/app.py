@@ -233,7 +233,7 @@ def render_global_sidebar_toggle_button():
 # IMPORTS (SAFE 🔥)
 # =====================================================
 try:
-    from database.db import get_connection, create_tables
+    from database.db import create_tables, get_connection, refresh_env_from_streamlit_secrets
 except Exception as e:
     st.error(f"Database import error: {e}")
     st.stop()
@@ -578,6 +578,7 @@ for key in ["logged","username","role","organization","branch","auth_token"]:
 # =====================================================
 @st.cache_resource(show_spinner=False)
 def _ensure_db_schema_ready():
+    refresh_env_from_streamlit_secrets()
     create_tables()
     return True
 

@@ -7,10 +7,13 @@ On startup, if Mongo already has business data, we pull it into the local SQLite
 
 from __future__ import annotations
 
+import logging
 import os
 import sqlite3
 import threading
 from datetime import datetime, timezone
+
+logger = logging.getLogger(__name__)
 
 try:
     from pymongo import MongoClient
@@ -238,19 +241,26 @@ def mongo_initial_sync_after_schema(db_path: str) -> None:
     with _initial_sync_lock:
         if _initial_sync_done:
             return
-        _initial_sync_done = True
         try:
             db = get_mongo_db()
             db.client.admin.command("ping")
-        except Exception:
+        except Exception as exc:
+            logger.warning(
+                "team_ai_mongo: cannot reach MongoDB (check MONGO_URI in Streamlit Secrets and Atlas Network Access): %s",
+                exc,
+            )
             return
         try:
             if should_pull_from_mongo(db):
                 pull_mongo_to_sqlite(db_path)
+                logger.info("team_ai_mongo: loaded SQLite from MongoDB snapshot.")
             else:
                 push_sqlite_to_mongo(db_path)
-        except (PyMongoError, OSError, sqlite3.Error):
-            pass
+                logger.info("team_ai_mongo: uploaded SQLite snapshot to MongoDB.")
+        except (PyMongoError, OSError, sqlite3.Error) as exc:
+            logger.warning("team_ai_mongo: initial sync failed: %s", exc)
+            return
+        _initial_sync_done = True
 
 
 def maybe_push_sqlite_to_mongo(db_path: str) -> None:
@@ -259,8 +269,8 @@ def maybe_push_sqlite_to_mongo(db_path: str) -> None:
         return
     try:
         push_sqlite_to_mongo(db_path)
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("team_ai_mongo: push after commit failed: %s", exc)
 
 
 def reset_mongo_sync_state() -> None:

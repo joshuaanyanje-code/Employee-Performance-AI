@@ -25,6 +25,97 @@ if load_dotenv is not None:
             load_dotenv(env_candidate, override=False)
 
 
+def _apply_streamlit_secrets_to_environ():
+    """Streamlit Cloud does not ship .env; set MONGO_URI etc. in App Settings -> Secrets."""
+    try:
+        import streamlit as st
+
+        sec = getattr(st, "secrets", None)
+        if sec is None:
+            return
+
+        def _pick(*keys):
+            for k in keys:
+                try:
+                    v = sec[k]
+                except Exception:
+                    continue
+                if v is not None and str(v).strip():
+                    return str(v).strip()
+            return ""
+
+        def _merge_section(section, mapping):
+            if section is None:
+                return
+            try:
+                items = dict(section)
+            except Exception:
+                return
+            for env_key, alt_keys in mapping:
+                if str(os.getenv(env_key, "") or "").strip():
+                    continue
+                val = ""
+                for ak in alt_keys:
+                    if ak in items and items[ak] is not None and str(items[ak]).strip():
+                        val = str(items[ak]).strip()
+                        break
+                if val:
+                    os.environ[env_key] = val
+
+        uri = _pick("MONGO_URI")
+        if uri:
+            os.environ["MONGO_URI"] = uri
+
+        dbn = _pick("MONGO_DB_NAME")
+        if dbn:
+            os.environ["MONGO_DB_NAME"] = dbn
+
+        skip = _pick("TEAM_AI_SKIP_MONGO_PULL")
+        if skip:
+            os.environ["TEAM_AI_SKIP_MONGO_PULL"] = skip
+
+        db_path_sec = _pick("TEAM_AI_DB_PATH")
+        if db_path_sec:
+            os.environ["TEAM_AI_DB_PATH"] = db_path_sec
+
+        try:
+            mongo_block = sec["mongo"]
+        except Exception:
+            mongo_block = None
+        _merge_section(
+            mongo_block,
+            [
+                ("MONGO_URI", ("MONGO_URI", "uri", "URI", "connection_string")),
+                ("MONGO_DB_NAME", ("MONGO_DB_NAME", "db_name", "database", "name")),
+            ],
+        )
+    except Exception:
+        pass
+
+
+def _warn_streamlit_cloud_without_mongo_uri():
+    try:
+        headless = str(os.getenv("STREAMLIT_SERVER_HEADLESS", "") or "").lower() == "true"
+        sharing = str(os.getenv("STREAMLIT_SHARING_MODE", "") or "").lower() == "true"
+        if not headless and not sharing:
+            return
+        if str(os.getenv("MONGO_URI", "") or "").strip():
+            return
+        import logging
+
+        logging.warning(
+            "team_ai_db: MONGO_URI is not set. Streamlit Cloud discards local files on restart — "
+            "add MONGO_URI and MONGO_DB_NAME under App settings -> Secrets (TOML). "
+            "Allow Atlas Network Access from 0.0.0.0/0 (or Streamlit egress) so sync can reach MongoDB."
+        )
+    except Exception:
+        pass
+
+
+_apply_streamlit_secrets_to_environ()
+_warn_streamlit_cloud_without_mongo_uri()
+
+
 def _get_env_setting(name, default=""):
     return str(os.getenv(name, default) or default or "").strip()
 
@@ -74,6 +165,11 @@ def _resolve_db_path():
 
 
 DB_PATH = _resolve_db_path()
+
+
+def refresh_env_from_streamlit_secrets():
+    """Call after Streamlit runtime is ready if secrets were not available at import time."""
+    _apply_streamlit_secrets_to_environ()
 
 
 class SyncedCursor(sqlite3.Cursor):
@@ -189,6 +285,7 @@ def _normalize_sqlite_now(query):
 
 
 def get_connection():
+    refresh_env_from_streamlit_secrets()
     os.makedirs(os.path.dirname(DB_PATH), exist_ok=True)
     factory = MongoMirroredConnection if _mongo_mirror_enabled() else SyncedConnection
     conn = sqlite3.connect(DB_PATH, check_same_thread=False, timeout=30, factory=factory)
@@ -198,6 +295,12 @@ def get_connection():
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA temp_store = MEMORY")
     conn.execute("PRAGMA cache_size = -20000")
+    try:
+        from database.mongo_sync import mongo_initial_sync_after_schema
+
+        mongo_initial_sync_after_schema(DB_PATH)
+    except Exception:
+        pass
     return conn
 
 
