@@ -2732,28 +2732,7 @@ def master_admin_dashboard():
                     except Exception as e:
                         st.error(str(e))
             
-            st.divider()
-st.subheader("💾 Backup & Restore")
 
-# BACKUP
-if st.button("📦 Backup System"):
-    file = backup_mongo()
-
-    with open(file, "rb") as f:
-        st.download_button(
-            "⬇ Download Backup",
-            f,
-            file_name=file
-        )
-
-# RESTORE
-uploaded = st.file_uploader("Upload Backup File")
-
-if uploaded:
-    if st.button("🔄 Restore System"):
-        restore_mongo(uploaded)
-        st.success("System restored successfully")
-        st.rerun()
 
 #If you later want to disable it again for safety, set:Reset the whole System (All Data)
 #TEAM_AI_ALLOW_FULL_RESET=0 in environment, or
