@@ -14,8 +14,13 @@ except Exception:
 
 try:
     import streamlit as st
+    try:
+        from streamlit.runtime.scriptrunner import get_script_run_ctx
+    except Exception:
+        get_script_run_ctx = None
 except Exception:
     st = None
+    get_script_run_ctx = None
 
 try:
     from pymongo import MongoClient
@@ -34,7 +39,16 @@ if load_dotenv is not None:
         if os.path.exists(env_candidate):
             load_dotenv(env_candidate, override=False)
 
-def _get_setting(name, default=""):
+def _streamlit_secrets_available():
+    if st is None or get_script_run_ctx is None:
+        return False
+    try:
+        return get_script_run_ctx() is not None
+    except Exception:
+        return False
+
+
+def _get_setting(name, default="", allow_streamlit=True):
     normalized_names = []
     for candidate in (name, str(name or "").upper(), str(name or "").lower()):
         candidate = str(candidate or "").strip()
@@ -46,9 +60,10 @@ def _get_setting(name, default=""):
         if env_value:
             return env_value
 
+    if not allow_streamlit or not _streamlit_secrets_available():
+        return str(default or "").strip()
+
     def _read_secret_path(*path_parts):
-        if st is None:
-            return ""
         try:
             current = st.secrets
             for part in path_parts:
@@ -87,12 +102,12 @@ def _get_setting(name, default=""):
     return str(default or "").strip()
 
 
-DEFAULT_MONGO_URI = _get_setting("MONGO_URI", "mongodb://localhost:27017") or "mongodb://localhost:27017"
-DEFAULT_MONGO_DB_NAME = _get_setting("MONGO_DB_NAME", "barberboss") or "barberboss"
+DEFAULT_MONGO_URI = _get_setting("MONGO_URI", "mongodb://localhost:27017", allow_streamlit=False) or "mongodb://localhost:27017"
+DEFAULT_MONGO_DB_NAME = _get_setting("MONGO_DB_NAME", "barberboss", allow_streamlit=False) or "barberboss"
 LOCAL_BACKUP_DIR = os.path.join(APP_DIR, "local_backups")
-LOCAL_BACKUP_PATH = _get_setting("TEAM_AI_LOCAL_BACKUP_PATH", os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db")) or os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db")
+LOCAL_BACKUP_PATH = _get_setting("TEAM_AI_LOCAL_BACKUP_PATH", os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db"), allow_streamlit=False) or os.path.join(LOCAL_BACKUP_DIR, "team_ai.latest.db")
 try:
-    AUTO_BACKUP_INTERVAL_SECONDS = max(2.0, float(_get_setting("TEAM_AI_AUTO_BACKUP_INTERVAL", "5") or "5"))
+    AUTO_BACKUP_INTERVAL_SECONDS = max(2.0, float(_get_setting("TEAM_AI_AUTO_BACKUP_INTERVAL", "5", allow_streamlit=False) or "5"))
 except Exception:
     AUTO_BACKUP_INTERVAL_SECONDS = 5.0
 
@@ -123,7 +138,7 @@ def _score_existing_db(path):
 
 
 def _resolve_db_path():
-    env_path = _get_setting("TEAM_AI_DB_PATH", "")
+    env_path = _get_setting("TEAM_AI_DB_PATH", "", allow_streamlit=False)
     if env_path:
         return os.path.abspath(env_path)
 
