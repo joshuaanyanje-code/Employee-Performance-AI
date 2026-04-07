@@ -1,6 +1,7 @@
 import pandas as pd
 from datetime import datetime, timedelta
 import json
+import re
 
 try:
     from ..database.db import get_connection
@@ -374,6 +375,1014 @@ def _build_branch_action_plan(branch_snapshot):
     }
 
 
+def _text_mentions_employee(text, employee_name):
+    employee_name = str(employee_name or "").strip()
+    if not employee_name:
+        return False
+    try:
+        pattern = rf"(?<!\w){re.escape(employee_name)}(?!\w)"
+        return bool(re.search(pattern, str(text or ""), flags=re.IGNORECASE))
+    except Exception:
+        return employee_name.lower() in str(text or "").lower()
+
+
+
+def _build_hr_ladder(risk_level):
+    ladder = [
+        "Normal Monitoring",
+        "Coaching / Monitoring",
+        "Written Warning / PIP",
+        "Probation / Final Warning",
+        "Termination Recommendation",
+    ]
+    current_map = {
+        "Stable": 0,
+        "Watchlist": 1,
+        "Coaching Needed": 2,
+        "Final Warning": 3,
+        "Termination Review": 4,
+    }
+    current_idx = current_map.get(risk_level, 0)
+    return ladder[current_idx], [
+        {
+            "stage": stage,
+            "status": "current" if idx == current_idx else "done" if idx < current_idx else "pending",
+        }
+        for idx, stage in enumerate(ladder)
+    ]
+
+
+
+def _clamp_score(value, low=0.0, high=100.0):
+    try:
+        return round(max(low, min(high, float(value))), 1)
+    except Exception:
+        return round(float(low), 1)
+
+
+
+def _coerce_date_boundary(value, end_of_day=False):
+    if value is None or str(value).strip() == "":
+        return None
+    try:
+        ts = pd.to_datetime(value, errors="coerce")
+    except Exception:
+        ts = pd.NaT
+    if pd.isna(ts):
+        return None
+    ts = ts.normalize()
+    if end_of_day:
+        ts = ts + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+    return ts.to_pydatetime()
+
+
+
+def _filter_dataframe_by_date_range(df, possible_cols, start_date=None, end_date=None):
+    if df is None or df.empty:
+        return df
+
+    start_dt = _coerce_date_boundary(start_date, end_of_day=False)
+    end_dt = _coerce_date_boundary(end_date, end_of_day=True)
+    if start_dt is None and end_dt is None:
+        return df
+
+    scoped = df.copy()
+    target_col = None
+    for col in possible_cols:
+        if col in scoped.columns:
+            scoped[col] = pd.to_datetime(scoped[col], errors="coerce")
+            target_col = col
+            break
+
+    if target_col is None:
+        return scoped
+
+    mask = scoped[target_col].notna()
+    if start_dt is not None:
+        mask &= scoped[target_col] >= pd.Timestamp(start_dt)
+    if end_dt is not None:
+        mask &= scoped[target_col] <= pd.Timestamp(end_dt)
+    return scoped[mask].copy()
+
+
+
+def _build_employee_scorecard(
+    recent_avg,
+    decline_points,
+    low_score_count,
+    late_days,
+    absence_signals,
+    early_clockouts,
+    warning_count,
+    manager_pattern_count,
+    leave_fairness_count,
+    bad_seed_count,
+    rating_out_pattern_count,
+    negative_group_count,
+):
+    performance_score = _clamp_score(
+        recent_avg - (decline_points * 1.8) - max(low_score_count - 1, 0) * 4
+    )
+    attendance_score = _clamp_score(
+        100 - (absence_signals * 18) - (late_days * 6) - (early_clockouts * 5)
+    )
+    behavior_score = _clamp_score(
+        100 - (warning_count * 12) - (bad_seed_count * 18) - (rating_out_pattern_count * 10) - (negative_group_count * 12)
+    )
+    fairness_score = _clamp_score(
+        100 - (manager_pattern_count * 18) - (leave_fairness_count * 12)
+    )
+
+    overall_score = _clamp_score(
+        (performance_score * 0.40) +
+        (attendance_score * 0.25) +
+        (behavior_score * 0.20) +
+        (fairness_score * 0.15)
+    )
+
+    if overall_score >= 80:
+        score_band = "Strong"
+    elif overall_score >= 65:
+        score_band = "Moderate"
+    elif overall_score >= 50:
+        score_band = "Needs Coaching"
+    elif overall_score >= 35:
+        score_band = "High Risk"
+    else:
+        score_band = "Critical"
+
+    return {
+        "overall": overall_score,
+        "band": score_band,
+        "performance": performance_score,
+        "attendance": attendance_score,
+        "behavior": behavior_score,
+        "fairness": fairness_score,
+    }
+
+
+
+def _classify_employee_risk(
+    recent_avg,
+    decline_points,
+    low_score_count,
+    late_days,
+    absence_signals,
+    early_clockouts,
+    warning_count,
+    signal_count,
+    critical_logic_count,
+):
+    signal_score = 0
+    if recent_avg <= 55:
+        signal_score += 2
+    if recent_avg <= 45:
+        signal_score += 2
+    signal_score += min(int(max(decline_points, 0) // 4), 3)
+    signal_score += min(int(late_days // 2), 2)
+    signal_score += min(int(absence_signals), 2)
+    signal_score += min(int(early_clockouts // 2), 2)
+    signal_score += min(int(warning_count), 2)
+    signal_score += min(int(signal_count), 4)
+    signal_score += int(critical_logic_count)
+
+    if recent_avg <= 42 or signal_score >= 10 or (decline_points >= 10 and critical_logic_count >= 2):
+        return "Termination Review", 4
+    if recent_avg <= 50 or signal_score >= 8 or critical_logic_count >= 2:
+        return "Final Warning", 3
+    if recent_avg <= 55 or signal_score >= 5 or decline_points >= 5:
+        return "Coaching Needed", 2
+    if signal_score >= 2 or decline_points > 0 or low_score_count >= 2:
+        return "Watchlist", 1
+    return "Stable", 0
+
+
+
+def _build_employee_risk_overview(
+    ratings_df,
+    attendance_df=None,
+    warnings_df=None,
+    users_df=None,
+    leaves_df=None,
+    intelligence=None,
+    group_analysis=None,
+):
+    empty_summary = {
+        "total_tracked": 0,
+        "below_55": 0,
+        "needs_attention": 0,
+        "watchlist": 0,
+        "coaching_needed": 0,
+        "final_warning": 0,
+        "termination_review": 0,
+    }
+
+    if ratings_df is None or ratings_df.empty:
+        return {"summary": empty_summary, "cases": []}
+
+    intelligence = intelligence if isinstance(intelligence, dict) else {}
+    group_analysis = group_analysis if isinstance(group_analysis, dict) else {}
+
+    ratings_work = ratings_df.copy()
+    ratings_work["rated"] = ratings_work["rated"].astype(str).str.strip()
+    if "rater" in ratings_work.columns:
+        ratings_work["rater"] = ratings_work["rater"].astype(str).str.strip()
+    ratings_work["score"] = pd.to_numeric(ratings_work.get("score"), errors="coerce")
+    if "created_at" in ratings_work.columns:
+        ratings_work["created_at"] = pd.to_datetime(ratings_work["created_at"], errors="coerce")
+    ratings_work = ratings_work.dropna(subset=["rated", "score"])
+    ratings_work = ratings_work[ratings_work["rated"] != ""]
+
+    if ratings_work.empty:
+        return {"summary": empty_summary, "cases": []}
+
+    attendance_work = pd.DataFrame()
+    if attendance_df is not None and not attendance_df.empty and "username" in attendance_df.columns:
+        attendance_work = attendance_df.copy()
+        attendance_work["username"] = attendance_work["username"].astype(str).str.strip()
+        for col in ["date", "clock_in", "clock_out"]:
+            if col in attendance_work.columns:
+                attendance_work[col] = pd.to_datetime(attendance_work[col], errors="coerce")
+
+    warnings_work = pd.DataFrame()
+    if warnings_df is not None and not warnings_df.empty and "username" in warnings_df.columns:
+        warnings_work = warnings_df.copy()
+        warnings_work["username"] = warnings_work["username"].astype(str).str.strip()
+        if "created_at" in warnings_work.columns:
+            warnings_work["created_at"] = pd.to_datetime(warnings_work["created_at"], errors="coerce")
+
+    users_work = pd.DataFrame()
+    role_lookup = {}
+    if users_df is not None and not users_df.empty and "username" in users_df.columns:
+        users_work = users_df.copy()
+        users_work["username"] = users_work["username"].astype(str).str.strip()
+        if "role" in users_work.columns:
+            role_lookup = dict(
+                zip(
+                    users_work["username"].astype(str),
+                    users_work["role"].fillna("").astype(str).str.lower(),
+                )
+            )
+
+    leaves_work = pd.DataFrame()
+    if leaves_df is not None and not leaves_df.empty and "username" in leaves_df.columns:
+        leaves_work = leaves_df.copy()
+        leaves_work["username"] = leaves_work["username"].astype(str).str.strip()
+        for col in ["start_date", "end_date", "reviewed_at"]:
+            if col in leaves_work.columns:
+                leaves_work[col] = pd.to_datetime(leaves_work[col], errors="coerce")
+
+    now = datetime.now()
+    recent_cutoff = now - timedelta(days=30)
+    baseline_cutoff = now - timedelta(days=120)
+    cases = []
+
+    for employee in sorted(ratings_work["rated"].unique()):
+        emp_scores = ratings_work[ratings_work["rated"] == employee].copy()
+        if emp_scores.empty:
+            continue
+
+        if "created_at" in emp_scores.columns:
+            emp_scores = emp_scores.sort_values("created_at")
+
+        overall_avg = _safe_float(emp_scores["score"].mean())
+        latest_score = _safe_float(emp_scores["score"].iloc[-1]) if not emp_scores.empty else overall_avg
+
+        if "created_at" in emp_scores.columns and emp_scores["created_at"].notna().any():
+            recent_scores = emp_scores[emp_scores["created_at"] >= recent_cutoff]
+            baseline_scores = emp_scores[
+                (emp_scores["created_at"] >= baseline_cutoff) & (emp_scores["created_at"] < recent_cutoff)
+            ]
+        else:
+            recent_scores = emp_scores.tail(min(len(emp_scores), 10))
+            baseline_scores = emp_scores.head(max(len(emp_scores) // 2, 1))
+
+        recent_avg = _safe_float(recent_scores["score"].mean()) if not recent_scores.empty else overall_avg
+        baseline_avg = _safe_float(baseline_scores["score"].mean()) if not baseline_scores.empty else overall_avg
+        decline_points = round(max(baseline_avg - recent_avg, 0.0), 2)
+        low_score_count = int((emp_scores["score"] < 50).sum())
+
+        branch_name = ""
+        role_name = ""
+        if not users_work.empty:
+            user_match = users_work[users_work["username"] == employee]
+            if not user_match.empty:
+                branch_name = str(user_match.iloc[0].get("branch", "") or "")
+                role_name = str(user_match.iloc[0].get("role", "") or "")
+        if not branch_name and "branch" in emp_scores.columns and not emp_scores["branch"].dropna().empty:
+            branch_name = str(emp_scores["branch"].dropna().iloc[-1] or "")
+
+        late_days = 0
+        absence_signals = 0
+        early_clockouts = 0
+        warning_count = 0
+        leave_requests = 0
+        leave_rejections = 0
+
+        score_history = pd.DataFrame()
+        attendance_history = pd.DataFrame()
+        warning_history = pd.DataFrame()
+        leave_history = pd.DataFrame()
+
+        if "created_at" in emp_scores.columns:
+            score_hist_work = emp_scores.dropna(subset=["created_at"]).copy()
+            if not score_hist_work.empty:
+                score_hist_work["period"] = score_hist_work["created_at"].dt.to_period("M").astype(str)
+                score_history = score_hist_work.groupby("period", as_index=False).agg(
+                    avg_score=("score", "mean"),
+                    ratings=("score", "count"),
+                    low_scores=("score", lambda s: int((s < 50).sum())),
+                )
+
+        if not attendance_work.empty:
+            emp_att = attendance_work[attendance_work["username"] == employee].copy()
+            if not emp_att.empty:
+                date_col = "date" if "date" in emp_att.columns else "clock_in" if "clock_in" in emp_att.columns else None
+                if date_col:
+                    recent_att = emp_att[emp_att[date_col] >= recent_cutoff] if emp_att[date_col].notna().any() else emp_att
+                    if "status" in recent_att.columns:
+                        recent_status = recent_att["status"].astype(str).str.upper()
+                        late_days = int((recent_status == "LATE").sum())
+                        absence_signals = int(recent_status.isin(["ABSENT", "NO SHOW", "NO-SHOW", "MISS"]).sum())
+                    if "clock_in" in recent_att.columns:
+                        late_days = max(late_days, int((recent_att["clock_in"].dt.hour > 9).fillna(False).sum()))
+                        absence_signals += int(recent_att["clock_in"].isna().sum())
+                    if "clock_out" in recent_att.columns:
+                        early_clockouts = int((recent_att["clock_out"].dt.hour < 18).fillna(False).sum())
+
+                    att_hist = emp_att.dropna(subset=[date_col]).copy()
+                    if not att_hist.empty:
+                        att_hist["period"] = att_hist[date_col].dt.to_period("M").astype(str)
+                        if "status" in att_hist.columns:
+                            att_status = att_hist["status"].astype(str).str.upper()
+                            att_hist["late_flag"] = att_status.eq("LATE").astype(int)
+                            att_hist["absence_flag"] = att_status.isin(["ABSENT", "NO SHOW", "NO-SHOW", "MISS"]).astype(int)
+                        else:
+                            att_hist["late_flag"] = (att_hist["clock_in"].dt.hour > 9).fillna(False).astype(int)
+                            att_hist["absence_flag"] = 0
+                        if "clock_out" in att_hist.columns:
+                            att_hist["early_flag"] = (att_hist["clock_out"].dt.hour < 18).fillna(False).astype(int)
+                        else:
+                            att_hist["early_flag"] = 0
+                        attendance_history = att_hist.groupby("period", as_index=False).agg(
+                            late_days=("late_flag", "sum"),
+                            absence_signals=("absence_flag", "sum"),
+                            early_clockouts=("early_flag", "sum"),
+                        )
+
+        if not warnings_work.empty:
+            emp_warn = warnings_work[warnings_work["username"] == employee].copy()
+            if not emp_warn.empty:
+                if "created_at" in emp_warn.columns and emp_warn["created_at"].notna().any():
+                    recent_warn = emp_warn[emp_warn["created_at"] >= baseline_cutoff]
+                    warn_hist = emp_warn.dropna(subset=["created_at"]).copy()
+                    if not warn_hist.empty:
+                        warn_hist["period"] = warn_hist["created_at"].dt.to_period("M").astype(str)
+                        warning_history = warn_hist.groupby("period", as_index=False).size().rename(columns={"size": "warnings"})
+                else:
+                    recent_warn = emp_warn
+                warning_count = int(len(recent_warn))
+
+        if not leaves_work.empty:
+            emp_leave = leaves_work[leaves_work["username"] == employee].copy()
+            if not emp_leave.empty:
+                leave_requests = int(len(emp_leave))
+                if "status" in emp_leave.columns:
+                    leave_status = emp_leave["status"].fillna("").astype(str).str.lower()
+                    leave_rejections = int(leave_status.isin(["rejected", "denied"]).sum())
+                leave_date_col = "reviewed_at" if "reviewed_at" in emp_leave.columns else "start_date" if "start_date" in emp_leave.columns else None
+                if leave_date_col:
+                    leave_hist = emp_leave.dropna(subset=[leave_date_col]).copy()
+                    if not leave_hist.empty:
+                        leave_hist["period"] = leave_hist[leave_date_col].dt.to_period("M").astype(str)
+                        if "status" in leave_hist.columns:
+                            leave_hist["rejected_flag"] = leave_hist["status"].fillna("").astype(str).str.lower().isin(["rejected", "denied"]).astype(int)
+                        else:
+                            leave_hist["rejected_flag"] = 0
+                        leave_history = leave_hist.groupby("period", as_index=False).agg(
+                            leave_requests=("username", "count"),
+                            leave_rejections=("rejected_flag", "sum"),
+                        )
+
+        manager_pattern_notes = set()
+        leave_fairness_notes = set()
+        bad_seed_notes = set()
+        negative_group_notes = set()
+        rating_out_notes = set()
+
+        if "rater" in emp_scores.columns and role_lookup:
+            emp_scores["rater_role"] = emp_scores["rater"].map(role_lookup).fillna("")
+            manager_scores = emp_scores[emp_scores["rater_role"].isin(["admin", "manager"])]["score"]
+            peer_scores = emp_scores[~emp_scores["rater_role"].isin(["admin", "manager"])]["score"]
+            if len(manager_scores) >= 2 and int((manager_scores < 50).sum()) >= 2:
+                manager_pattern_notes.add("Managers/admins repeatedly rated this employee below 50%.")
+            if len(manager_scores) >= 2 and not peer_scores.empty and (float(peer_scores.mean()) - float(manager_scores.mean())) >= 12:
+                manager_pattern_notes.add("Manager rating pattern is materially harsher than peer ratings and should be reviewed.")
+
+        given_df = pd.DataFrame()
+        if "rater" in ratings_work.columns:
+            given_df = ratings_work[ratings_work["rater"] == employee].copy()
+        if not given_df.empty:
+            very_low_given = int((given_df["score"] < 45).sum())
+            extreme_high_given = int((given_df["score"] > 85).sum())
+            target_summary = given_df.groupby("rated")["score"].mean() if "rated" in given_df.columns else pd.Series(dtype=float)
+            if very_low_given >= 3:
+                rating_out_notes.add(f"This employee gave {very_low_given} very low ratings to others.")
+            if len(target_summary[target_summary < 45]) >= 2:
+                rating_out_notes.add("This employee consistently rates some coworkers very low.")
+            if extreme_high_given >= 3 and len(target_summary[target_summary > 85]) <= 2:
+                rating_out_notes.add("This employee gives unusually high scores to a small circle of coworkers.")
+            if very_low_given >= 3 and extreme_high_given >= 1:
+                bad_seed_notes.add("Bad-seed pattern detected in how this employee rates others (very low to many, selectively high to a few).")
+
+        if leave_rejections >= 2:
+            leave_fairness_notes.add(f"{leave_rejections} leave request(s) were rejected/denied and may need a fairness review.")
+        elif leave_requests >= 3:
+            leave_fairness_notes.add(f"{leave_requests} leave cases have been logged for this employee and should be reviewed for workload or fairness issues.")
+
+        text_sources = {
+            "favoritism_analysis": intelligence.get("favoritism_analysis", []),
+            "power_abuse_analysis": intelligence.get("power_abuse_analysis", []),
+            "peer_gangup_analysis": intelligence.get("peer_gangup_analysis", []),
+            "isolation_analysis": intelligence.get("isolation_analysis", []),
+            "critical_alerts": intelligence.get("critical_alerts", []),
+            "recommendations": intelligence.get("recommendations", []),
+        }
+        for _, entries in text_sources.items():
+            for entry in entries or []:
+                entry_text = str(entry or "").strip()
+                if not entry_text or not _text_mentions_employee(entry_text, employee):
+                    continue
+                upper = entry_text.upper()
+                if any(token in upper for token in ["ADMIN BIAS", "FAVORITISM", "POWER ABUSE", "RETALIATION", "DISCIPLINE TARGETING"]):
+                    manager_pattern_notes.add(entry_text)
+                if any(token in upper for token in ["LEAVE PRESSURE", "FAVOR PROTECTION", "BOUNDARY RISK"]):
+                    leave_fairness_notes.add(entry_text)
+                if any(token in upper for token in ["BAD SEED", "TOXIC"]):
+                    bad_seed_notes.add(entry_text)
+                if any(token in upper for token in ["PEER GANG-UP", "PEER TARGETING", "CLIQUE", "GROUP", "ISOLATION", "CONFLICT"]):
+                    negative_group_notes.add(entry_text)
+
+        for group in group_analysis.get("group_details", []) or []:
+            members = []
+            raw_members = group.get("members", [])
+            if isinstance(raw_members, list):
+                members.extend([str(m).strip() for m in raw_members if str(m).strip()])
+            elif isinstance(raw_members, str):
+                members.extend([m.strip() for m in raw_members.split(",") if m.strip()])
+            for key in ["member_1", "member_2"]:
+                if str(group.get(key, "") or "").strip():
+                    members.append(str(group.get(key)).strip())
+            if employee not in set(members):
+                continue
+            gtype = str(group.get("group_type", "") or "").lower()
+            group_risk = str(group.get("risk_level", "") or "").lower()
+            description = str(group.get("description", "Group involvement detected") or "Group involvement detected")
+            if gtype in ["conflict_pair", "synchronized"] or group_risk in ["warning", "high", "critical"]:
+                negative_group_notes.add(description)
+
+        manager_pattern_count = len(manager_pattern_notes)
+        leave_fairness_count = len(leave_fairness_notes)
+        bad_seed_count = len(bad_seed_notes)
+        rating_out_pattern_count = len(rating_out_notes)
+        negative_group_count = len(negative_group_notes)
+
+        logic_breakdown = {
+            "Low genuine ratings": int(low_score_count + (1 if recent_avg <= 55 else 0)),
+            "Absenteeism / lateness / early exits": int(late_days + absence_signals + early_clockouts),
+            "Manager rating pattern": int(manager_pattern_count),
+            "Leave fairness / favoritism": int(leave_fairness_count),
+            "How person rates others": int(rating_out_pattern_count),
+            "Bad seed / toxic influence": int(bad_seed_count),
+            "Negative groups / clique signals": int(negative_group_count),
+        }
+        active_logic_count = len([v for v in logic_breakdown.values() if int(v) > 0])
+        critical_logic_count = len([
+            key for key in [
+                "Manager rating pattern",
+                "Leave fairness / favoritism",
+                "Bad seed / toxic influence",
+                "Negative groups / clique signals",
+            ]
+            if int(logic_breakdown.get(key, 0)) > 0
+        ])
+
+        scorecard = _build_employee_scorecard(
+            recent_avg,
+            decline_points,
+            low_score_count,
+            late_days,
+            absence_signals,
+            early_clockouts,
+            warning_count,
+            manager_pattern_count,
+            leave_fairness_count,
+            bad_seed_count,
+            rating_out_pattern_count,
+            negative_group_count,
+        )
+
+        risk_level, risk_rank = _classify_employee_risk(
+            recent_avg,
+            decline_points,
+            low_score_count,
+            late_days,
+            absence_signals,
+            early_clockouts,
+            warning_count,
+            active_logic_count,
+            critical_logic_count,
+        )
+        hr_stage, hr_ladder = _build_hr_ladder(risk_level)
+
+        reasons = []
+        if recent_avg <= 55:
+            reasons.append(f"Low genuine rating average: {recent_avg:.1f}% in the recent review window.")
+        if decline_points > 0:
+            reasons.append(f"Performance dropped by {decline_points:.1f} points from baseline ({baseline_avg:.1f} -> {recent_avg:.1f}).")
+        if late_days or absence_signals or early_clockouts:
+            reasons.append(
+                f"Attendance signals -> absent/missed: {absence_signals}, late: {late_days}, early clock-outs: {early_clockouts}."
+            )
+        if warning_count:
+            reasons.append(f"{warning_count} warning record(s) logged in the last 120 days.")
+        reasons.append(
+            f"Employee score card is {scorecard.get('overall', 0):.1f}/100 ({scorecard.get('band', 'Needs Review')})."
+        )
+        if manager_pattern_notes:
+            reasons.extend(list(manager_pattern_notes)[:2])
+        if leave_fairness_notes:
+            reasons.extend(list(leave_fairness_notes)[:2])
+        if bad_seed_notes:
+            reasons.extend(list(bad_seed_notes)[:2])
+        if rating_out_notes:
+            reasons.extend(list(rating_out_notes)[:2])
+        if negative_group_notes:
+            reasons.extend(list(negative_group_notes)[:2])
+        if not reasons:
+            reasons.append("No strong decline signal found, but the employee remains under normal monitoring.")
+
+        deduped_reasons = []
+        seen_reason_norms = set()
+        for reason in reasons:
+            cleaned = str(reason).strip()
+            if not cleaned:
+                continue
+            norm = cleaned.lower()
+            if norm not in seen_reason_norms:
+                deduped_reasons.append(cleaned)
+                seen_reason_norms.add(norm)
+
+        history_frames = [frame for frame in [score_history, attendance_history, warning_history, leave_history] if not frame.empty]
+        history_df = pd.DataFrame()
+        for frame in history_frames:
+            history_df = frame.copy() if history_df.empty else history_df.merge(frame, on="period", how="outer")
+
+        history_rows = []
+        if not history_df.empty:
+            history_df = history_df.fillna(0).sort_values("period").tail(6)
+            for _, row in history_df.iterrows():
+                history_rows.append({
+                    "Period": str(row.get("period", "")),
+                    "Avg Score": round(_safe_float(row.get("avg_score", 0)), 1),
+                    "Ratings": int(row.get("ratings", 0) or 0),
+                    "Low Scores": int(row.get("low_scores", 0) or 0),
+                    "Late Days": int(row.get("late_days", 0) or 0),
+                    "Absence Signals": int(row.get("absence_signals", 0) or 0),
+                    "Early Clock-Outs": int(row.get("early_clockouts", 0) or 0),
+                    "Warnings": int(row.get("warnings", 0) or 0),
+                    "Leave Requests": int(row.get("leave_requests", 0) or 0),
+                    "Leave Rejections": int(row.get("leave_rejections", 0) or 0),
+                })
+
+        timeline_notes = [
+            f"Baseline performance: {baseline_avg:.1f}",
+            f"Most recent performance window: {recent_avg:.1f}",
+            f"Employee score card: {scorecard.get('overall', 0):.1f}/100 ({scorecard.get('band', 'Needs Review')})",
+            f"Combined logic signals counted: {active_logic_count}",
+            f"Current HR ladder stage: {hr_stage}",
+        ]
+        if warning_count or late_days or absence_signals or early_clockouts:
+            timeline_notes.append(
+                f"Discipline signals -> absent/missed: {absence_signals}, late: {late_days}, early outs: {early_clockouts}, warnings: {warning_count}."
+            )
+        if manager_pattern_count or leave_fairness_count or bad_seed_count or rating_out_pattern_count or negative_group_count:
+            timeline_notes.append(
+                "Expanded logic -> manager pattern: "
+                f"{manager_pattern_count}, leave fairness: {leave_fairness_count}, bad seed: {bad_seed_count}, "
+                f"rates others pattern: {rating_out_pattern_count}, negative groups: {negative_group_count}."
+            )
+
+        cases.append({
+            "employee": employee,
+            "branch": branch_name or "-",
+            "role": role_name or "employee",
+            "risk_level": risk_level,
+            "risk_rank": risk_rank,
+            "hr_stage": hr_stage,
+            "hr_ladder": hr_ladder,
+            "overall_avg": round(overall_avg, 1),
+            "recent_avg": round(recent_avg, 1),
+            "baseline_avg": round(baseline_avg, 1),
+            "decline_points": round(decline_points, 1),
+            "latest_score": round(latest_score, 1),
+            "low_score_count": low_score_count,
+            "late_days": int(late_days),
+            "absence_signals": int(absence_signals),
+            "early_clockouts": int(early_clockouts),
+            "warning_count": int(warning_count),
+            "leave_requests": int(leave_requests),
+            "leave_rejections": int(leave_rejections),
+            "signal_count": int(active_logic_count),
+            "logic_breakdown": logic_breakdown,
+            "scorecard": scorecard,
+            "scorecard_total": float(scorecard.get("overall", 0)),
+            "primary_reason": deduped_reasons[0],
+            "reasons": deduped_reasons[:8],
+            "timeline": history_rows,
+            "timeline_notes": timeline_notes,
+        })
+
+    cases = sorted(
+        cases,
+        key=lambda item: (
+            item.get("risk_rank", 0),
+            item.get("signal_count", 0),
+            item.get("warning_count", 0),
+            item.get("absence_signals", 0),
+            item.get("late_days", 0),
+            item.get("decline_points", 0),
+        ),
+        reverse=True,
+    )
+
+    flagged_cases = [case for case in cases if case.get("risk_rank", 0) > 0]
+    below_55_cases = [
+        case for case in flagged_cases
+        if float(case.get("recent_avg", 0) or 0) <= 55 or float(case.get("overall_avg", 0) or 0) <= 55
+    ]
+    return {
+        "summary": {
+            "total_tracked": len(cases),
+            "below_55": len(below_55_cases),
+            "needs_attention": len(flagged_cases),
+            "watchlist": len([c for c in flagged_cases if c.get("risk_level") == "Watchlist"]),
+            "coaching_needed": len([c for c in flagged_cases if c.get("risk_level") == "Coaching Needed"]),
+            "final_warning": len([c for c in flagged_cases if c.get("risk_level") == "Final Warning"]),
+            "termination_review": len([c for c in flagged_cases if c.get("risk_level") == "Termination Review"]),
+        },
+        "cases": flagged_cases[:12],
+    }
+
+
+
+def _build_workforce_scorecards(
+    ratings_df,
+    attendance_df=None,
+    warnings_df=None,
+    users_df=None,
+    leaves_df=None,
+    intelligence=None,
+    group_analysis=None,
+    analysis_start=None,
+    analysis_end=None,
+):
+    intelligence = intelligence if isinstance(intelligence, dict) else {}
+    group_analysis = group_analysis if isinstance(group_analysis, dict) else {}
+
+    users_work = users_df.copy() if users_df is not None and not users_df.empty else pd.DataFrame(columns=["username", "role", "branch", "created_at"])
+    if not users_work.empty and "username" in users_work.columns:
+        users_work["username"] = users_work["username"].astype(str).str.strip()
+        if "created_at" in users_work.columns:
+            users_work["created_at"] = pd.to_datetime(users_work["created_at"], errors="coerce")
+
+    ratings_work = ratings_df.copy() if ratings_df is not None and not ratings_df.empty else pd.DataFrame(columns=["rater", "rated", "score", "created_at", "branch"])
+    if not ratings_work.empty:
+        for col in ["rater", "rated"]:
+            if col in ratings_work.columns:
+                ratings_work[col] = ratings_work[col].astype(str).str.strip()
+        ratings_work["score"] = pd.to_numeric(ratings_work.get("score"), errors="coerce")
+        if "created_at" in ratings_work.columns:
+            ratings_work["created_at"] = pd.to_datetime(ratings_work["created_at"], errors="coerce")
+
+    attendance_work = attendance_df.copy() if attendance_df is not None and not attendance_df.empty else pd.DataFrame(columns=["username", "date", "clock_in", "clock_out", "status"])
+    if not attendance_work.empty:
+        attendance_work["username"] = attendance_work["username"].astype(str).str.strip()
+        for col in ["date", "clock_in", "clock_out"]:
+            if col in attendance_work.columns:
+                attendance_work[col] = pd.to_datetime(attendance_work[col], errors="coerce")
+
+    warnings_work = warnings_df.copy() if warnings_df is not None and not warnings_df.empty else pd.DataFrame(columns=["username", "created_at"])
+    if not warnings_work.empty:
+        warnings_work["username"] = warnings_work["username"].astype(str).str.strip()
+        if "created_at" in warnings_work.columns:
+            warnings_work["created_at"] = pd.to_datetime(warnings_work["created_at"], errors="coerce")
+
+    leaves_work = leaves_df.copy() if leaves_df is not None and not leaves_df.empty else pd.DataFrame(columns=["username", "status", "reviewed_at", "start_date"])
+    if not leaves_work.empty:
+        leaves_work["username"] = leaves_work["username"].astype(str).str.strip()
+        for col in ["reviewed_at", "start_date", "end_date"]:
+            if col in leaves_work.columns:
+                leaves_work[col] = pd.to_datetime(leaves_work[col], errors="coerce")
+
+    people = set()
+    if not users_work.empty and "username" in users_work.columns:
+        people.update(users_work["username"].dropna().astype(str).tolist())
+    if not ratings_work.empty:
+        if "rated" in ratings_work.columns:
+            people.update(ratings_work["rated"].dropna().astype(str).tolist())
+        if "rater" in ratings_work.columns:
+            people.update(ratings_work["rater"].dropna().astype(str).tolist())
+    if not attendance_work.empty and "username" in attendance_work.columns:
+        people.update(attendance_work["username"].dropna().astype(str).tolist())
+
+    people = sorted([p for p in people if str(p).strip()])
+    if not people:
+        return {"summary": {}, "rows": [], "monthly_summary": [], "date_scope": {}}
+
+    role_lookup = {}
+    branch_lookup = {}
+    if not users_work.empty:
+        if "role" in users_work.columns:
+            role_lookup = dict(zip(users_work["username"].astype(str), users_work["role"].fillna("").astype(str).str.lower()))
+        if "branch" in users_work.columns:
+            branch_lookup = dict(zip(users_work["username"].astype(str), users_work["branch"].fillna("").astype(str)))
+
+    group_counts = {person: 0 for person in people}
+    for group in group_analysis.get("group_details", []) or []:
+        members = []
+        raw_members = group.get("members", [])
+        if isinstance(raw_members, list):
+            members.extend([str(m).strip() for m in raw_members if str(m).strip()])
+        elif isinstance(raw_members, str):
+            members.extend([m.strip() for m in raw_members.split(",") if m.strip()])
+        for key in ["member_1", "member_2"]:
+            value = str(group.get(key, "") or "").strip()
+            if value:
+                members.append(value)
+        if not members:
+            continue
+        gtype = str(group.get("group_type", "") or "").lower()
+        risk_level = str(group.get("risk_level", "") or "").lower()
+        if gtype in ["conflict_pair", "synchronized", "dating"] or risk_level in ["warning", "high", "critical"]:
+            for member in set(members):
+                if member in group_counts:
+                    group_counts[member] += 1
+
+    text_counts = {
+        person: {"manager": 0, "fairness": 0, "bad_seed": 0, "negativity": 0}
+        for person in people
+    }
+    text_sources = {
+        "favoritism_analysis": intelligence.get("favoritism_analysis", []),
+        "power_abuse_analysis": intelligence.get("power_abuse_analysis", []),
+        "peer_gangup_analysis": intelligence.get("peer_gangup_analysis", []),
+        "isolation_analysis": intelligence.get("isolation_analysis", []),
+        "critical_alerts": intelligence.get("critical_alerts", []),
+        "recommendations": intelligence.get("recommendations", []),
+    }
+    for _, entries in text_sources.items():
+        for entry in entries or []:
+            entry_text = str(entry or "").strip()
+            if not entry_text:
+                continue
+            upper = entry_text.upper()
+            for person in people:
+                if not _text_mentions_employee(entry_text, person):
+                    continue
+                if any(token in upper for token in ["ADMIN BIAS", "FAVORITISM", "POWER ABUSE", "RETALIATION", "DISCIPLINE TARGETING"]):
+                    text_counts[person]["manager"] += 1
+                if any(token in upper for token in ["LEAVE PRESSURE", "FAVOR PROTECTION", "BOUNDARY RISK"]):
+                    text_counts[person]["fairness"] += 1
+                if any(token in upper for token in ["BAD SEED", "TOXIC"]):
+                    text_counts[person]["bad_seed"] += 1
+                if any(token in upper for token in ["PEER GANG-UP", "PEER TARGETING", "CLIQUE", "GROUP", "ISOLATION", "CONFLICT"]):
+                    text_counts[person]["negativity"] += 1
+
+    range_start = _coerce_date_boundary(analysis_start, end_of_day=False)
+    range_end = _coerce_date_boundary(analysis_end, end_of_day=True) or datetime.now()
+    selected_days = max((range_end.date() - range_start.date()).days + 1, 1) if range_start else 90
+
+    def _window_mask(df, date_col, start=None, end=None):
+        if df is None or df.empty or date_col not in df.columns:
+            return pd.DataFrame()
+        work = df[df[date_col].notna()].copy()
+        if work.empty:
+            return work
+        if start is not None:
+            work = work[work[date_col] >= pd.Timestamp(start)]
+        if end is not None:
+            work = work[work[date_col] <= pd.Timestamp(end)]
+        return work
+
+    def _score_person_for_period(person, start=None, end=None, days=None):
+        end = end or range_end
+        if start is None and days is not None:
+            start = end - timedelta(days=int(max(days, 1)))
+        if start is None:
+            start = end - timedelta(days=90)
+        previous_start = start - (end - start)
+
+        received_all = ratings_work[ratings_work["rated"] == person].copy() if not ratings_work.empty and "rated" in ratings_work.columns else pd.DataFrame()
+        received_recent = _window_mask(received_all, "created_at", start, end) if not received_all.empty and "created_at" in received_all.columns else received_all.copy()
+        received_previous = _window_mask(received_all, "created_at", previous_start, start - timedelta(seconds=1)) if not received_all.empty and "created_at" in received_all.columns else pd.DataFrame()
+
+        if not received_recent.empty:
+            recent_avg = _safe_float(received_recent["score"].mean(), 100.0)
+        elif not received_all.empty:
+            recent_avg = _safe_float(received_all["score"].mean(), 100.0)
+        else:
+            recent_avg = 100.0
+
+        if not received_previous.empty:
+            baseline_avg = _safe_float(received_previous["score"].mean(), recent_avg)
+        elif not received_all.empty:
+            baseline_avg = _safe_float(received_all["score"].mean(), recent_avg)
+        else:
+            baseline_avg = recent_avg
+
+        decline_points = round(max(baseline_avg - recent_avg, 0.0), 2)
+        low_score_count = int((received_recent["score"] < 50).sum()) if not received_recent.empty else 0
+
+        late_days = 0
+        absence_signals = 0
+        early_clockouts = 0
+        if not attendance_work.empty:
+            emp_att = attendance_work[attendance_work["username"] == person].copy()
+            date_col = "date" if "date" in emp_att.columns else "clock_in" if "clock_in" in emp_att.columns else None
+            recent_att = _window_mask(emp_att, date_col, start, end) if date_col else emp_att
+            if not recent_att.empty:
+                if "status" in recent_att.columns:
+                    recent_status = recent_att["status"].astype(str).str.upper()
+                    late_days = int((recent_status == "LATE").sum())
+                    absence_signals = int(recent_status.isin(["ABSENT", "NO SHOW", "NO-SHOW", "MISS"]).sum())
+                if "clock_in" in recent_att.columns:
+                    late_days = max(late_days, int((recent_att["clock_in"].dt.hour > 9).fillna(False).sum()))
+                    absence_signals += int(recent_att["clock_in"].isna().sum())
+                if "clock_out" in recent_att.columns:
+                    early_clockouts = int((recent_att["clock_out"].dt.hour < 18).fillna(False).sum())
+
+        warning_count = 0
+        if not warnings_work.empty:
+            emp_warn = warnings_work[warnings_work["username"] == person].copy()
+            recent_warn = _window_mask(emp_warn, "created_at", start, end) if "created_at" in emp_warn.columns else emp_warn
+            warning_count = int(len(recent_warn))
+
+        leave_requests = 0
+        leave_rejections = 0
+        if not leaves_work.empty:
+            emp_leave = leaves_work[leaves_work["username"] == person].copy()
+            leave_date_col = "reviewed_at" if "reviewed_at" in emp_leave.columns else "start_date" if "start_date" in emp_leave.columns else None
+            recent_leave = _window_mask(emp_leave, leave_date_col, start, end) if leave_date_col else emp_leave
+            leave_requests = int(len(recent_leave))
+            if not recent_leave.empty and "status" in recent_leave.columns:
+                leave_rejections = int(recent_leave["status"].fillna("").astype(str).str.lower().isin(["rejected", "denied"]).sum())
+
+        manager_pattern_count = int(text_counts.get(person, {}).get("manager", 0))
+        if not received_recent.empty and "rater" in received_recent.columns:
+            manager_work = received_recent.copy()
+            manager_work["rater_role"] = manager_work["rater"].map(role_lookup).fillna("")
+            manager_scores = manager_work[manager_work["rater_role"].isin(["admin", "manager"])]["score"]
+            peer_scores = manager_work[~manager_work["rater_role"].isin(["admin", "manager"])]["score"]
+            if len(manager_scores) >= 2 and int((manager_scores < 50).sum()) >= 2:
+                manager_pattern_count += 1
+            if len(manager_scores) >= 2 and not peer_scores.empty and (float(peer_scores.mean()) - float(manager_scores.mean())) >= 12:
+                manager_pattern_count += 1
+
+        leave_fairness_count = int(text_counts.get(person, {}).get("fairness", 0))
+        if leave_rejections >= 1:
+            leave_fairness_count += 1
+
+        rating_out_pattern_count = 0
+        bad_seed_count = int(text_counts.get(person, {}).get("bad_seed", 0))
+        if not ratings_work.empty and "rater" in ratings_work.columns:
+            given_all = ratings_work[ratings_work["rater"] == person].copy()
+            given_recent = _window_mask(given_all, "created_at", start, end) if not given_all.empty and "created_at" in given_all.columns else given_all
+            if not given_recent.empty:
+                very_low_given = int((given_recent["score"] < 45).sum())
+                extreme_high_given = int((given_recent["score"] > 85).sum())
+                target_summary = given_recent.groupby("rated")["score"].mean() if "rated" in given_recent.columns else pd.Series(dtype=float)
+                if very_low_given >= 3:
+                    rating_out_pattern_count += 1
+                if len(target_summary[target_summary < 45]) >= 2:
+                    rating_out_pattern_count += 1
+                if extreme_high_given >= 3 and len(target_summary[target_summary > 85]) <= 2:
+                    rating_out_pattern_count += 1
+                if very_low_given >= 3 and extreme_high_given >= 1:
+                    bad_seed_count += 1
+
+        negative_group_count = int(group_counts.get(person, 0)) + int(text_counts.get(person, {}).get("negativity", 0))
+
+        scorecard = _build_employee_scorecard(
+            recent_avg,
+            decline_points,
+            low_score_count,
+            late_days,
+            absence_signals,
+            early_clockouts,
+            warning_count,
+            manager_pattern_count,
+            leave_fairness_count,
+            bad_seed_count,
+            rating_out_pattern_count,
+            negative_group_count,
+        )
+        return {
+            "scorecard": scorecard,
+            "recent_avg": round(recent_avg, 1),
+            "baseline_avg": round(baseline_avg, 1),
+        }
+
+    rows = []
+    for person in people:
+        selected = _score_person_for_period(person, start=range_start, end=range_end, days=selected_days)
+        previous_selected = _score_person_for_period(
+            person,
+            start=(range_start - timedelta(days=selected_days)) if range_start else (range_end - timedelta(days=selected_days * 2)),
+            end=(range_start - timedelta(seconds=1)) if range_start else (range_end - timedelta(days=selected_days)),
+        )
+        weekly = _score_person_for_period(person, days=7, end=range_end)
+        monthly = _score_person_for_period(person, days=30, end=range_end)
+        two_month = _score_person_for_period(person, days=60, end=range_end)
+        three_month = _score_person_for_period(person, days=90, end=range_end)
+
+        role_name = str(role_lookup.get(person, "employee") or "employee").title()
+        branch_name = str(branch_lookup.get(person, "-") or "-")
+        selected_score = float(selected["scorecard"].get("overall", 100.0))
+        current_score = float(monthly["scorecard"].get("overall", 100.0))
+        range_delta = round(selected_score - float(previous_selected["scorecard"].get("overall", 100.0)), 1)
+        trend_delta = round(current_score - float(three_month["scorecard"].get("overall", 100.0)), 1)
+        if trend_delta >= 2:
+            trend_label = "Improving"
+        elif trend_delta <= -2:
+            trend_label = "Declining"
+        else:
+            trend_label = "Stable"
+
+        rows.append({
+            "Name": person,
+            "Role": role_name,
+            "Branch": branch_name,
+            "Selected Range": round(selected_score, 1),
+            "Weekly": round(float(weekly["scorecard"].get("overall", 100.0)), 1),
+            "Monthly": round(current_score, 1),
+            "2 Months": round(float(two_month["scorecard"].get("overall", 100.0)), 1),
+            "3 Months": round(float(three_month["scorecard"].get("overall", 100.0)), 1),
+            "Current Band": str(selected["scorecard"].get("band", monthly["scorecard"].get("band", "Strong"))),
+            "Trend": trend_label,
+            "Range Δ vs Previous": range_delta,
+            "Delta 30d vs 90d": trend_delta,
+            "Current Avg Rating": selected.get("recent_avg", 100.0),
+        })
+
+    rows = sorted(rows, key=lambda row: (row.get("Selected Range", 100.0), row.get("Monthly", 100.0), row.get("Weekly", 100.0)))
+
+    workforce_df = pd.DataFrame(rows)
+    employee_df = workforce_df[workforce_df["Role"].str.lower() == "employee"] if not workforce_df.empty else pd.DataFrame()
+    manager_df = workforce_df[workforce_df["Role"].str.lower().isin(["admin", "manager"])] if not workforce_df.empty else pd.DataFrame()
+
+    avg_selected = round(float(workforce_df["Selected Range"].mean()), 1) if not workforce_df.empty else 100.0
+    avg_employees = round(float(employee_df["Selected Range"].mean()), 1) if not employee_df.empty else avg_selected
+    avg_managers = round(float(manager_df["Selected Range"].mean()), 1) if not manager_df.empty else avg_selected
+    below_60 = int((workforce_df["Selected Range"] < 60).sum()) if not workforce_df.empty else 0
+
+    scope_label = (
+        f"{range_start.strftime('%Y-%m-%d')} to {range_end.strftime('%Y-%m-%d')}"
+        if range_start else f"up to {range_end.strftime('%Y-%m-%d')}"
+    )
+    monthly_summary = [
+        f"Average workforce score for {scope_label} is {avg_selected:.1f}/100.",
+        f"Employees average {avg_employees:.1f}/100 while managers average {avg_managers:.1f}/100.",
+        f"{below_60} user(s) are below 60/100 and may require super admin review.",
+    ]
+    if not workforce_df.empty:
+        best_improver = workforce_df.sort_values("Range Δ vs Previous", ascending=False).iloc[0]
+        biggest_drop = workforce_df.sort_values("Range Δ vs Previous", ascending=True).iloc[0]
+        monthly_summary.append(
+            f"Best improvement in selected range: {best_improver['Name']} ({best_improver['Range Δ vs Previous']:+.1f} points vs previous range)."
+        )
+        monthly_summary.append(
+            f"Biggest decline in selected range: {biggest_drop['Name']} ({biggest_drop['Range Δ vs Previous']:+.1f} points vs previous range)."
+        )
+
+    return {
+        "summary": {
+            "average_monthly": avg_selected,
+            "employees_average": avg_employees,
+            "managers_average": avg_managers,
+            "below_60": below_60,
+            "total_people": int(len(workforce_df)),
+        },
+        "rows": rows,
+        "monthly_summary": monthly_summary,
+        "date_scope": {
+            "start": range_start.strftime('%Y-%m-%d') if range_start else "All available",
+            "end": range_end.strftime('%Y-%m-%d'),
+            "days": selected_days,
+        },
+    }
+
+
 def _build_adaptive_recommendations(
     ratings_df,
     attendance_df,
@@ -549,7 +1558,7 @@ def _build_adaptive_recommendations(
 # =====================================================
 # SUPER ADMIN DASHBOARD - INTELLIGENT VIEW
 # =====================================================
-def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
+def get_super_admin_dashboard(organization, branch=None, super_admin_user=None, start_date=None, end_date=None):
     """
     Generates comprehensive super admin dashboard with intelligence, alerts, metrics.
     Filters out super_admin, master_admin from all analytics.
@@ -570,6 +1579,12 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
         "business_intelligence": {},
         "monthly_trends": {},
         "branch_action_plan": {},
+        "employee_risk_overview": {},
+        "workforce_scorecards": {},
+        "date_range": {
+            "start": str(start_date) if start_date else "All available",
+            "end": str(end_date) if end_date else datetime.now().strftime("%Y-%m-%d"),
+        },
     }
     
     conn = get_connection()
@@ -717,6 +1732,18 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
     messages_data = cursor.fetchall()
     messages_cols = ["id", "from_user", "to_user", "organization", "branch", "message_type", "subject", "body", "priority", "read_at", "created_at"]
     messages_df = pd.DataFrame(messages_data, columns=messages_cols) if messages_data else pd.DataFrame()
+
+    ratings_full_df = ratings_df.copy() if not ratings_df.empty else pd.DataFrame(columns=ratings_cols)
+    attendance_full_df = attendance_df.copy() if not attendance_df.empty else pd.DataFrame(columns=attendance_cols)
+    warnings_full_df = warnings_df.copy() if not warnings_df.empty else pd.DataFrame(columns=warnings_cols)
+    leaves_full_df = leaves_df.copy() if not leaves_df.empty else pd.DataFrame(columns=leaves_cols)
+
+    ratings_df = _filter_dataframe_by_date_range(ratings_full_df, ["created_at"], start_date, end_date)
+    attendance_df = _filter_dataframe_by_date_range(attendance_full_df, ["date", "clock_in"], start_date, end_date)
+    warnings_df = _filter_dataframe_by_date_range(warnings_full_df, ["created_at"], start_date, end_date)
+    leaves_df = _filter_dataframe_by_date_range(leaves_full_df, ["reviewed_at", "start_date", "end_date"], start_date, end_date)
+    payments_df = _filter_dataframe_by_date_range(payments_df, ["created_at"], start_date, end_date)
+    messages_df = _filter_dataframe_by_date_range(messages_df, ["created_at"], start_date, end_date)
     
     conn.close()
     
@@ -784,6 +1811,26 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None):
     # INDIVIDUAL FOCUS
     # =========================
     dashboard["individual_focus"] = intelligence.get("individuals_of_focus", {})
+    dashboard["employee_risk_overview"] = _build_employee_risk_overview(
+        ratings_df,
+        attendance_df if not attendance_df.empty else None,
+        warnings_df if not warnings_df.empty else None,
+        users_df if not users_df.empty else None,
+        leaves_df if not leaves_df.empty else None,
+        intelligence,
+        group_data,
+    )
+    dashboard["workforce_scorecards"] = _build_workforce_scorecards(
+        ratings_full_df,
+        attendance_full_df if not attendance_full_df.empty else None,
+        warnings_full_df if not warnings_full_df.empty else None,
+        users_df if not users_df.empty else None,
+        leaves_full_df if not leaves_full_df.empty else None,
+        intelligence,
+        group_data,
+        analysis_start=start_date,
+        analysis_end=end_date,
+    )
     
     # =========================
     # PERFORMANCE TRENDS (7-day if created_at available)

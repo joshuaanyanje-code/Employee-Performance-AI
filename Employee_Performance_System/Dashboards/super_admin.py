@@ -415,12 +415,245 @@ def calc_plan_price(branch_count, cfg_row):
     return int(branch_count) * per_branch_price
 
 
+
+def render_workforce_scorecards(intel):
+    st.divider()
+    st.markdown("### Workforce Score Cards")
+
+    workforce = intel.get("workforce_scorecards", {}) if isinstance(intel, dict) else {}
+    summary = workforce.get("summary", {}) if isinstance(workforce, dict) else {}
+    rows = workforce.get("rows", []) if isinstance(workforce, dict) else []
+    monthly_summary = workforce.get("monthly_summary", []) if isinstance(workforce, dict) else []
+    date_scope = workforce.get("date_scope", {}) if isinstance(workforce, dict) else {}
+
+    st.caption(
+        "Each employee and manager starts at 100% by default when added. "
+        "The score then moves up or down based on performance, attendance, conduct, fairness, and team-pattern signals."
+    )
+    if date_scope:
+        st.caption(
+            f"Selected range: {clean_display_text(date_scope.get('start', 'All available'))} to "
+            f"{clean_display_text(date_scope.get('end', 'today'))} "
+            f"({int(date_scope.get('days', 0) or 0)} day window)."
+        )
+
+    if not rows:
+        st.info("No workforce score card data is available yet.")
+        return
+
+    w1, w2, w3, w4 = st.columns(4)
+    w1.metric("Monthly Avg", f"{float(summary.get('average_monthly', 100) or 100):.1f}/100")
+    w2.metric("Employees Avg", f"{float(summary.get('employees_average', 100) or 100):.1f}/100")
+    w3.metric("Managers Avg", f"{float(summary.get('managers_average', 100) or 100):.1f}/100")
+    w4.metric("Below 60", int(summary.get("below_60", 0) or 0))
+
+    compare_role = st.selectbox(
+        "Show score cards for",
+        ["All", "Employees", "Managers"],
+        key="sa_workforce_role_filter",
+    )
+
+    workforce_df = pd.DataFrame(rows)
+    if compare_role == "Employees":
+        workforce_df = workforce_df[workforce_df["Role"].astype(str).str.lower() == "employee"]
+    elif compare_role == "Managers":
+        workforce_df = workforce_df[workforce_df["Role"].astype(str).str.lower().isin(["admin", "manager"])]
+
+    if workforce_df.empty:
+        st.info("No users match the selected score-card filter.")
+    else:
+        st.dataframe(
+            workforce_df[
+                [
+                    "Name", "Role", "Branch", "Selected Range", "Weekly", "Monthly", "2 Months",
+                    "3 Months", "Current Band", "Trend", "Range Δ vs Previous", "Delta 30d vs 90d"
+                ]
+            ],
+            use_container_width=True,
+            hide_index=True,
+        )
+
+    st.markdown("**End-of-month summary for super admin**")
+    for item in monthly_summary:
+        st.info(clean_display_text(item))
+
+
+
+def render_employee_risk_snapshot(intel):
+    st.divider()
+    st.markdown("### Employee Risk Snapshot")
+
+    risk_overview = intel.get("employee_risk_overview", {}) if isinstance(intel, dict) else {}
+    summary = risk_overview.get("summary", {}) if isinstance(risk_overview, dict) else {}
+    cases = risk_overview.get("cases", []) if isinstance(risk_overview, dict) else []
+
+    def _render_case_detail(item):
+        risk_level = clean_display_text(item.get("risk_level", "Review"))
+        overall_avg = float(item.get("overall_avg", 0) or 0)
+        baseline_avg = float(item.get("baseline_avg", 0) or 0)
+        recent_avg = float(item.get("recent_avg", 0) or 0)
+
+        scorecard = item.get("scorecard", {}) or {}
+
+        d1, d2, d3, d4, d5 = st.columns(5)
+        d1.metric("Score Card", f"{float(item.get('scorecard_total', 0) or 0):.1f}/100")
+        d2.metric("Overall Avg", f"{overall_avg:.1f}")
+        d3.metric("Recent Avg", f"{recent_avg:.1f}", delta=f"{recent_avg - baseline_avg:+.1f} vs baseline")
+        d4.metric(
+            "Late / Absence",
+            f"{int(item.get('late_days', 0) or 0)} / {int(item.get('absence_signals', 0) or 0)}",
+        )
+        d5.metric("HR Stage", clean_display_text(item.get("hr_stage", "Normal Monitoring")))
+
+        if scorecard:
+            st.markdown("**Employee score card (out of 100%)**")
+            s1, s2, s3, s4, s5 = st.columns(5)
+            s1.metric("Overall", f"{float(scorecard.get('overall', 0) or 0):.1f}")
+            s2.metric("Performance", f"{float(scorecard.get('performance', 0) or 0):.1f}")
+            s3.metric("Attendance", f"{float(scorecard.get('attendance', 0) or 0):.1f}")
+            s4.metric("Behavior", f"{float(scorecard.get('behavior', 0) or 0):.1f}")
+            s5.metric("Fairness", f"{float(scorecard.get('fairness', 0) or 0):.1f}")
+            st.caption(f"Band: {clean_display_text(scorecard.get('band', 'Needs Review'))}")
+
+        extra_counts = f"{int(item.get('early_clockouts', 0) or 0)} / {int(item.get('warning_count', 0) or 0)}"
+        st.caption(f"Early clock-outs / warnings: {extra_counts}")
+
+        logic_breakdown = item.get("logic_breakdown", {}) or {}
+        if logic_breakdown:
+            logic_rows = [
+                {"Logic Used": clean_display_text(k), "Count": int(v or 0)}
+                for k, v in logic_breakdown.items()
+                if int(v or 0) > 0
+            ]
+            if logic_rows:
+                st.markdown("**Combined logic counted for this employee**")
+                st.dataframe(pd.DataFrame(logic_rows), use_container_width=True, hide_index=True)
+
+        reasons = item.get("reasons", []) or []
+        st.markdown("**Why the system flagged this employee**")
+        for reason in reasons:
+            clean_reason = clean_display_text(reason)
+            if risk_level == "Termination Review":
+                st.error(clean_reason)
+            elif risk_level == "Final Warning":
+                st.warning(clean_reason)
+            else:
+                st.info(clean_reason)
+
+        timeline_rows = item.get("timeline", []) or []
+        if timeline_rows:
+            st.markdown("**Systematic decline history**")
+            st.dataframe(pd.DataFrame(timeline_rows), use_container_width=True, hide_index=True)
+
+        hr_ladder = item.get("hr_ladder", []) or []
+        if hr_ladder:
+            st.markdown("**HR ladder**")
+            current_risk = str(item.get("risk_level", "")).strip().lower()
+            current_color = "#dc2626" if current_risk in ["termination review", "final warning"] else "#d97706"
+            status_colors = {
+                "done": "#16a34a",
+                "current": current_color,
+                "pending": "#94a3b8",
+            }
+            ladder_parts = []
+            for step in hr_ladder:
+                status = str(step.get("status", "pending"))
+                stage = clean_display_text(step.get("stage", ""))
+                bg = status_colors.get(status, "#94a3b8")
+                fg = "white" if status in ["done", "current"] else "#111827"
+                border = "none" if status in ["done", "current"] else "1px solid #cbd5e1"
+                ladder_parts.append(
+                    f"<span style='display:inline-block;padding:6px 10px;margin:2px 4px 2px 0;"
+                    f"border-radius:999px;background:{bg};color:{fg};border:{border};font-size:0.85rem;'>"
+                    f"{stage}</span>"
+                )
+            st.markdown("<div style='line-height:2.2;'>" + "<span style='color:#64748b;'>→</span> ".join(ladder_parts) + "</div>", unsafe_allow_html=True)
+            st.caption("Green = completed stage, amber/red = current stage, grey = upcoming stage.")
+
+        timeline_notes = item.get("timeline_notes", []) or []
+        if timeline_notes:
+            st.markdown("**Evidence trail**")
+            for note in timeline_notes:
+                st.caption(clean_display_text(note))
+
+    r1, r2, r3, r4, r5 = st.columns(5)
+    r1.metric("Tracked", int(summary.get("total_tracked", 0) or 0))
+    r2.metric("Below 55%", int(summary.get("below_55", 0) or 0))
+    r3.metric("Need Attention", int(summary.get("needs_attention", 0) or 0))
+    r4.metric("Final Warning", int(summary.get("final_warning", 0) or 0))
+    r5.metric("Termination Review", int(summary.get("termination_review", 0) or 0))
+
+    st.caption(
+        "Yes — the employee score card is now shown out of 100%. "
+        "Low performers at or below 55% are included here, and you can click one person to open the full decline history and evidence trail."
+    )
+
+    if not cases:
+        st.success("No employee currently shows a decline pattern strong enough for escalation.")
+        return
+
+    summary_rows = []
+    for item in cases[:8]:
+        baseline_avg = float(item.get("baseline_avg", 0) or 0)
+        recent_avg = float(item.get("recent_avg", 0) or 0)
+        decline_points = float(item.get("decline_points", 0) or 0)
+        summary_rows.append({
+            "Employee": clean_display_text(item.get("employee", "")),
+            "Branch": clean_display_text(item.get("branch", "")),
+            "Score Card": f"{float(item.get('scorecard_total', 0) or 0):.1f}/100",
+            "Risk": clean_display_text(item.get("risk_level", "Review")),
+            "HR Stage": clean_display_text(item.get("hr_stage", "Normal Monitoring")),
+            "Signals": int(item.get("signal_count", 0) or 0),
+            "Recent Avg": f"{recent_avg:.1f}%",
+            "Trend": f"{baseline_avg:.1f} → {recent_avg:.1f}",
+            "Decline": f"-{decline_points:.1f}",
+            "Main Reason": clean_display_text(item.get("primary_reason", "")),
+        })
+
+    st.dataframe(pd.DataFrame(summary_rows), use_container_width=True, hide_index=True)
+
+    under_55_cases = [item for item in cases if float(item.get("recent_avg", 0) or 0) <= 55]
+    if under_55_cases:
+        low_rows = []
+        for item in under_55_cases[:6]:
+            low_rows.append({
+                "Employee": clean_display_text(item.get("employee", "")),
+                "Branch": clean_display_text(item.get("branch", "")),
+                "Recent Avg": f"{float(item.get('recent_avg', 0) or 0):.1f}%",
+                "Risk": clean_display_text(item.get("risk_level", "Review")),
+            })
+        st.markdown("**Lowest performers at or below 55%**")
+        st.dataframe(pd.DataFrame(low_rows), use_container_width=True, hide_index=True)
+
+    focus_labels = [f"{clean_display_text(item.get('employee', 'Unknown'))} — {clean_display_text(item.get('risk_level', 'Review'))}" for item in cases]
+    selected_focus = st.selectbox(
+        "Deep dive into one employee",
+        ["None"] + focus_labels,
+        key="sa_employee_deep_dive",
+        help="Use this when the super admin wants one person’s full decline story without opening every section.",
+    )
+
+    if selected_focus != "None":
+        focus_index = focus_labels.index(selected_focus)
+        st.markdown(f"#### Focused Deep Dive: {selected_focus}")
+        _render_case_detail(cases[focus_index])
+
+    for item in cases[:6]:
+        risk_level = clean_display_text(item.get("risk_level", "Review"))
+        employee_name = clean_display_text(item.get("employee", "Unknown"))
+        with st.expander(f"{employee_name} — {risk_level}", expanded=risk_level == "Termination Review"):
+            _render_case_detail(item)
+
+
+
 def build_executive_bi_report(intel):
     meta = intel.get("executive_summary", {})
     biz = intel.get("business_intelligence", {})
     pay = biz.get("payment_trend", {})
     plan = intel.get("branch_action_plan", {})
     monthly = intel.get("monthly_trends", {})
+    risk = intel.get("employee_risk_overview", {})
+    risk_summary = risk.get("summary", {}) if isinstance(risk, dict) else {}
 
     lines = [
         "EXECUTIVE BUSINESS INTELLIGENCE REPORT",
@@ -435,9 +668,22 @@ def build_executive_bi_report(intel):
         f"Active Branches: {biz.get('active_branches', 0)}",
         f"Collections Last 30 Days: KES {pay.get('last_30_days', 0):,.2f}",
         f"Collections Trend: {pay.get('trend_direction', 'Stable')} ({pay.get('trend_delta', 0):,.2f})",
+        f"Employees Needing Attention: {risk_summary.get('needs_attention', 0)}",
+        f"Final Warning Cases: {risk_summary.get('final_warning', 0)}",
+        f"Termination Review Cases: {risk_summary.get('termination_review', 0)}",
+        "",
+        "TOP EMPLOYEE RISK CASES",
+    ]
+
+    for case in risk.get("cases", [])[:5]:
+        lines.append(
+            f"- {case.get('employee', '')} [{case.get('risk_level', 'Review')}]: {case.get('primary_reason', '')}"
+        )
+
+    lines.extend([
         "",
         "PRIORITIES",
-    ]
+    ])
 
     for item in biz.get("priorities", []):
         lines.append(f"- {item}")
@@ -715,14 +961,46 @@ def super_admin_dashboard():
             intel_default_idx = intel_options.index(branch_scope) if branch_scope in intel_options else 0
             sel_branch = nav_selectbox("Filter by Branch (optional)", intel_options, key="intel_branch", index=intel_default_idx)
             branch_filter = None if sel_branch == "All Branches" else sel_branch
-            
+
+            preset_options = [
+                "Custom",
+                "Last 7 days",
+                "Last 30 days",
+                "Last 90 days",
+                "Last 6 months",
+                "This year",
+            ]
+            preset_choice = nav_selectbox("Quick Date Preset", preset_options, key="sa_intel_preset")
+            today_val = date.today()
+            preset_start = today_val - timedelta(days=90)
+            if preset_choice == "Last 7 days":
+                preset_start = today_val - timedelta(days=7)
+            elif preset_choice == "Last 30 days":
+                preset_start = today_val - timedelta(days=30)
+            elif preset_choice == "Last 90 days":
+                preset_start = today_val - timedelta(days=90)
+            elif preset_choice == "Last 6 months":
+                preset_start = today_val - timedelta(days=180)
+            elif preset_choice == "This year":
+                preset_start = date(today_val.year, 1, 1)
+
+            default_from = preset_start if preset_choice != "Custom" else (date.today() - timedelta(days=90))
+            intel_from = nav_date_input("Summary From", value=default_from, key="sa_intel_from")
+            intel_to = nav_date_input("Summary To", value=today_val, key="sa_intel_to")
+            if preset_choice != "Custom":
+                intel_from = preset_start
+                intel_to = today_val
+
             if st.button("Run Intelligence Analysis", type="primary"):
-                with st.spinner("Analyzing..."):
-                    try:
-                        intelligence = get_super_admin_dashboard(org, branch_filter, user)
-                        st.session_state["sa_intelligence"] = intelligence
-                    except Exception as e:
-                        st.error(f"Analysis error: {e}")
+                if intel_from > intel_to:
+                    st.error("Summary date range is invalid: 'From' must be before 'To'.")
+                else:
+                    with st.spinner("Analyzing..."):
+                        try:
+                            intelligence = get_super_admin_dashboard(org, branch_filter, user, intel_from, intel_to)
+                            st.session_state["sa_intelligence"] = intelligence
+                        except Exception as e:
+                            st.error(f"Analysis error: {e}")
             
             intel = st.session_state.get("sa_intelligence")
             
@@ -736,6 +1014,12 @@ def super_admin_dashboard():
                 total_emp = meta.get("total_employees", 0)
                 health_score = meta.get("team_health_score", 0)
                 health_status = meta.get("team_health_status", "Unknown")
+                range_meta = intel.get("date_range", {}) if isinstance(intel, dict) else {}
+                if range_meta:
+                    st.caption(
+                        f"Analysis range: {clean_display_text(range_meta.get('start', 'All available'))} to "
+                        f"{clean_display_text(range_meta.get('end', date.today().strftime('%Y-%m-%d')))}"
+                    )
                 
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Employees", total_emp)
@@ -745,6 +1029,23 @@ def super_admin_dashboard():
                 
                 for point in meta.get("summary_points", []):
                     st.info(clean_display_text(point))
+
+                render_workforce_scorecards(intel)
+                render_employee_risk_snapshot(intel)
+
+                show_detail_panels = st.toggle(
+                    "Show detailed drill-down analytics",
+                    value=False,
+                    key="sa_show_detail_panels",
+                    help="Keep the main dashboard compact and only open the full investigation panels when needed.",
+                )
+                if not show_detail_panels:
+                    st.info("Compact mode is on. Turn on detailed drill-down analytics whenever you want the full investigation view.")
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+                    return
 
                 # --- BUSINESS INTELLIGENCE ---
                 st.divider()
