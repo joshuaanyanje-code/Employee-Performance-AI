@@ -250,9 +250,6 @@ def employee_dashboard():
         if "organization" in df.columns:
             df = df[df["organization"] == org]
 
-        if "branch" in df.columns:
-            df = df[df["branch"] == branch]
-
         if "date" in df.columns:
             df["date"] = pd.to_datetime(df["date"], errors="coerce")
             df = df[
@@ -330,14 +327,14 @@ def employee_dashboard():
 
         leave_notice = pd.read_sql(
             """
-            SELECT start_date, end_date, status, approved_by, admin_note
+            SELECT start_date, end_date, status, approved_by, admin_note, branch
             FROM leaves
-            WHERE username=? AND branch=? AND organization=?
+            WHERE username=? AND organization=?
             ORDER BY id DESC
             LIMIT 1
             """,
             conn,
-            params=(username, branch, org)
+            params=(username, org)
         )
 
         if not leave_notice.empty:
@@ -358,8 +355,8 @@ def employee_dashboard():
     elif page == "Attendance":
 
         df = pd.read_sql(
-            "SELECT * FROM attendance WHERE username=? AND branch=?",
-            conn, params=(username, branch)
+            "SELECT * FROM attendance WHERE username=? AND organization=?",
+            conn, params=(username, org)
         )
 
         if df.empty:
@@ -395,10 +392,10 @@ def employee_dashboard():
                     """
                     SELECT username, approved_for_date, reason, approved_by, status, actual_reason, used_at
                     FROM lateness_approvals
-                    WHERE organization=? AND branch=? AND username=?
+                    WHERE organization=? AND username=?
                     ORDER BY approved_for_date DESC, id DESC
                     """,
-                    params=(org, branch, username),
+                    params=(org, username),
                 )
                 df = _annotate_attendance_with_lateness(df, lateness_df)
                 status_text = df["status"].astype(str).str.lower() if "status" in df.columns else pd.Series([], dtype=str)
@@ -448,7 +445,7 @@ def employee_dashboard():
                 st.dataframe(
                     df[[
                         c for c in [
-                            "date", "clock_in", "clock_out", "status_label",
+                            "branch", "date", "clock_in", "clock_out", "status_label",
                             "lateness_request_status", "lateness_reason",
                             "lateness_admin_note", "lateness_approved_by"
                         ] if c in df.columns
@@ -492,13 +489,13 @@ def employee_dashboard():
                         """
                         SELECT id
                         FROM leaves
-                        WHERE username=? AND branch=? AND organization=?
+                        WHERE username=? AND organization=?
                           AND start_date=? AND end_date=? AND reason=?
                           AND lower(coalesce(status, 'pending')) IN ('pending', 'approved', 'reapply')
                         ORDER BY id DESC
                         LIMIT 1
                         """,
-                        params=(username, branch, org, str(start), str(end), clean_reason),
+                        params=(username, org, str(start), str(end), clean_reason),
                     )
                     if not duplicate_leave.empty:
                         refresh_with_message("Duplicate leave request blocked. The same leave request already exists.", level="warning")
@@ -512,13 +509,13 @@ def employee_dashboard():
                         refresh_with_message("Leave request submitted. Form is reset and ready for a new application.")
 
         df = pd.read_sql(
-            "SELECT * FROM leaves WHERE username=? AND branch=? AND organization=? ORDER BY id DESC",
-            conn, params=(username, branch, org)
+            "SELECT * FROM leaves WHERE username=? AND organization=? ORDER BY id DESC",
+            conn, params=(username, org)
         )
         if not df.empty:
             show_cols = [
                 c for c in [
-                    "start_date", "end_date", "reason", "status",
+                    "branch", "start_date", "end_date", "reason", "status",
                     "approved_by", "admin_note", "reviewed_at"
                 ] if c in df.columns
             ]
@@ -532,25 +529,25 @@ def employee_dashboard():
     elif page == "Notifications":
 
         msgs = pd.read_sql(
-            "SELECT * FROM messages WHERE receiver=? AND branch=? AND organization=? ORDER BY id DESC",
-            conn, params=(username, branch, org)
+            "SELECT * FROM messages WHERE receiver=? AND organization=? ORDER BY id DESC",
+            conn, params=(username, org)
         )
 
         warns = pd.read_sql(
-            "SELECT * FROM warnings WHERE username=?",
-            conn, params=(username,)
+            "SELECT * FROM warnings WHERE username=? AND organization=?",
+            conn, params=(username, org)
         )
 
         leaves = pd.read_sql(
             """
             SELECT start_date, end_date, reason, status, approved_by, admin_note, reviewed_at
             FROM leaves
-            WHERE username=? AND branch=? AND organization=?
+            WHERE username=? AND organization=?
             ORDER BY id DESC
             LIMIT 10
             """,
             conn,
-            params=(username, branch, org)
+            params=(username, org)
         )
 
         if msgs.empty and warns.empty and leaves.empty:
@@ -559,7 +556,9 @@ def employee_dashboard():
         for _, r in msgs.iterrows():
             sender_name = str(r.get("sender", "Management") or "Management")
             created_at = str(r.get("created_at", ""))[:16]
-            st.info(f"From {sender_name} | {created_at} | {r['message']}")
+            branch_name = str(r.get("branch", "") or "").strip()
+            branch_label = f" | Branch: {branch_name}" if branch_name else ""
+            st.info(f"From {sender_name}{branch_label} | {created_at} | {r['message']}")
 
         for _, r in warns.iterrows():
             warn_type = r["type"] if "type" in r else "Warning"
@@ -663,8 +662,8 @@ def employee_dashboard():
     elif page == "My Score":
 
         df = pd.read_sql(
-            "SELECT * FROM ratings WHERE rated=? AND branch=?",
-            conn, params=(username, branch)
+            "SELECT * FROM ratings WHERE rated=? AND organization=?",
+            conn, params=(username, org)
         )
 
         df = filter_df(df)
@@ -683,8 +682,8 @@ def employee_dashboard():
     elif page == "Analytics":
 
         df = pd.read_sql(
-            "SELECT * FROM ratings WHERE rated=? AND branch=?",
-            conn, params=(username, branch)
+            "SELECT * FROM ratings WHERE rated=? AND organization=?",
+            conn, params=(username, org)
         )
 
         if df.empty:

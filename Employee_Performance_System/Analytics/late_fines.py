@@ -195,9 +195,6 @@ def compute_lateness_fines(conn, organization, branch=None, username=None, start
         WHERE organization=?
     """
     attendance_params = [organization]
-    if branch:
-        attendance_query += " AND branch=?"
-        attendance_params.append(branch)
     if username:
         attendance_query += " AND username=?"
         attendance_params.append(username)
@@ -238,9 +235,6 @@ def compute_lateness_fines(conn, organization, branch=None, username=None, start
         WHERE organization=?
     """
     approval_params = [organization]
-    if branch:
-        approvals_query += " AND branch=?"
-        approval_params.append(branch)
     if username:
         approvals_query += " AND username=?"
         approval_params.append(username)

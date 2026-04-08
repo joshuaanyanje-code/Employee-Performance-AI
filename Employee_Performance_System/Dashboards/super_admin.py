@@ -537,45 +537,30 @@ def transfer_staff_member(conn, organization, username, to_branch, transferred_b
         (to_branch, username, organization),
     )
 
-    for table_name in [
-        "attendance",
-        "early_clockout_approvals",
-        "lateness_approvals",
-        "schedules",
-        "leaves",
-        "warnings",
-    ]:
-        try:
-            conn.execute(
-                f"UPDATE {table_name} SET branch=? WHERE username=? AND organization=?",
-                (to_branch, username, organization),
-            )
-        except Exception:
-            pass
-
     try:
         conn.execute(
-            "UPDATE ratings SET branch=? WHERE organization=? AND (rater=? OR rated=?)",
-            (to_branch, organization, username, username),
+            "UPDATE schedules SET branch=? WHERE username=? AND organization=?",
+            (to_branch, username, organization),
         )
     except Exception:
         pass
 
+    today_tag = date.today().strftime("%Y-%m-%d")
     for sql, params in [
         (
-            "UPDATE messages SET branch=? WHERE organization=? AND (sender=? OR receiver=?)",
+            "UPDATE early_clockout_approvals SET branch=? WHERE username=? AND organization=? AND (lower(coalesce(status,'pending'))='pending' OR approved_for_date>=?)",
+            (to_branch, username, organization, today_tag),
+        ),
+        (
+            "UPDATE lateness_approvals SET branch=? WHERE username=? AND organization=? AND (lower(coalesce(status,'pending'))='pending' OR approved_for_date>=?)",
+            (to_branch, username, organization, today_tag),
+        ),
+        (
+            "UPDATE admin_action_requests SET branch=? WHERE organization=? AND (target_username=? OR requested_by=?) AND lower(coalesce(status,'pending'))='pending'",
             (to_branch, organization, username, username),
         ),
         (
-            "UPDATE system_messages SET branch=? WHERE organization=? AND (from_user=? OR to_user=?)",
-            (to_branch, organization, username, username),
-        ),
-        (
-            "UPDATE admin_action_requests SET branch=? WHERE organization=? AND (target_username=? OR requested_by=?)",
-            (to_branch, organization, username, username),
-        ),
-        (
-            "UPDATE lateness_fine_requests SET branch=? WHERE organization=? AND requested_by=?",
+            "UPDATE lateness_fine_requests SET branch=? WHERE organization=? AND requested_by=? AND lower(coalesce(status,'pending'))='pending'",
             (to_branch, organization, username),
         ),
     ]:
@@ -597,7 +582,7 @@ def transfer_staff_member(conn, organization, username, to_branch, transferred_b
 
     _send_branch_transfer_notifications(conn, organization, username, role, from_branch, to_branch, transferred_by, note)
     conn.commit()
-    return True, f"{username} moved from {from_branch or 'Unassigned'} to {to_branch}. Their branch-linked data now follows them, and the new manager/kiosk view will update on refresh."
+    return True, f"{username} moved from {from_branch or 'Unassigned'} to {to_branch}. Their current assignment, manager, and kiosk update on refresh, while older records keep their original branch history."
 
 
 def inject_super_admin_apple_theme():
@@ -2333,8 +2318,8 @@ def super_admin_dashboard():
                 st.markdown("### Transfer Staff To Another Branch")
                 st.caption(
                     "Employees and admins can be moved to a different branch inside the same organization. "
-                    "Their branch-linked operational data follows them, they will see the new manager and kiosk after refresh, "
-                    "and super admin remains the same boss across the organization."
+                    "Their current assignment switches to the new manager and kiosk after refresh, while older records keep the original branch label for clean history. "
+                    "The super admin remains the same boss across the organization."
                 )
 
                 role_lower = str(row.get("role", "") or "").strip().lower()
