@@ -165,7 +165,6 @@ def apply_responsive_ui(mode="default"):
 
         .stTextInput > div > div > input,
         .stTextArea textarea,
-        .stSelectbox > div,
         .stDateInput > div,
         .stNumberInput input {{
             min-height: 42px;
@@ -173,6 +172,52 @@ def apply_responsive_ui(mode="default"):
             border: 1px solid var(--surface-border);
             background: rgba(255, 255, 255, 0.96);
             color: var(--text-main);
+        }}
+
+        .stSelectbox div[data-baseweb="select"] > div,
+        .stMultiSelect div[data-baseweb="select"] > div {{
+            min-height: 42px;
+            border-radius: 14px;
+            border: 1px solid var(--surface-border) !important;
+            background: rgba(255, 255, 255, 0.98) !important;
+            color: var(--text-main) !important;
+        }}
+
+        .stSelectbox div[data-baseweb="select"] input,
+        .stMultiSelect div[data-baseweb="select"] input,
+        .stSelectbox div[data-baseweb="select"] span,
+        .stMultiSelect div[data-baseweb="select"] span {{
+            color: var(--text-main) !important;
+            -webkit-text-fill-color: var(--text-main) !important;
+        }}
+
+        .stSelectbox svg,
+        .stMultiSelect svg {{
+            fill: var(--text-main) !important;
+            color: var(--text-main) !important;
+        }}
+
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] ul,
+        div[role="listbox"] {{
+            background: #ffffff !important;
+            color: var(--text-main) !important;
+            border: 1px solid var(--surface-border) !important;
+            box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10) !important;
+        }}
+
+        div[role="option"] {{
+            background: #ffffff !important;
+            color: var(--text-main) !important;
+        }}
+
+        div[role="option"]:hover {{
+            background: rgba(0, 113, 227, 0.08) !important;
+        }}
+
+        div[role="option"][aria-selected="true"] {{
+            background: rgba(0, 113, 227, 0.14) !important;
+            color: #005bb5 !important;
         }}
 
         [data-testid="stExpander"] {{

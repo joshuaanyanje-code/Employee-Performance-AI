@@ -180,13 +180,57 @@ small, .stCaption {
 
 .stTextInput input,
 .stTextArea textarea,
-.stSelectbox [data-baseweb="select"],
 .stDateInput > div,
 .stNumberInput input {
     background: rgba(255, 255, 255, 0.95) !important;
     border: 1px solid rgba(15, 23, 42, 0.08) !important;
     border-radius: 14px !important;
     color: var(--text) !important;
+}
+
+.stSelectbox div[data-baseweb="select"] > div,
+.stMultiSelect div[data-baseweb="select"] > div {
+    background: #ffffff !important;
+    border: 1px solid rgba(15, 23, 42, 0.10) !important;
+    border-radius: 14px !important;
+    color: var(--text) !important;
+}
+
+.stSelectbox div[data-baseweb="select"] input,
+.stMultiSelect div[data-baseweb="select"] input,
+.stSelectbox div[data-baseweb="select"] span,
+.stMultiSelect div[data-baseweb="select"] span {
+    color: var(--text) !important;
+    -webkit-text-fill-color: var(--text) !important;
+}
+
+.stSelectbox svg,
+.stMultiSelect svg {
+    fill: var(--text) !important;
+    color: var(--text) !important;
+}
+
+div[data-baseweb="popover"],
+div[data-baseweb="popover"] ul,
+div[role="listbox"] {
+    background: #ffffff !important;
+    color: var(--text) !important;
+    border: 1px solid rgba(15, 23, 42, 0.10) !important;
+    box-shadow: 0 12px 28px rgba(15, 23, 42, 0.10) !important;
+}
+
+div[role="option"] {
+    background: #ffffff !important;
+    color: var(--text) !important;
+}
+
+div[role="option"]:hover {
+    background: rgba(0, 113, 227, 0.08) !important;
+}
+
+div[role="option"][aria-selected="true"] {
+    background: rgba(0, 113, 227, 0.14) !important;
+    color: #005bb5 !important;
 }
 
 [data-testid="stExpander"] {
