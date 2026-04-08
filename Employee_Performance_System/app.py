@@ -133,7 +133,7 @@ button:hover,
     left: 12px;
     top: 12px;
     z-index: 100000;
-    min-width: 220px;
+    min-width: 180px;
     min-height: 60px;
     border-radius: 999px;
     border: 1px solid rgba(0, 113, 227, 0.16);
