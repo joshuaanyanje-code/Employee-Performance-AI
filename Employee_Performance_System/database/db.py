@@ -971,6 +971,24 @@ def create_tables():
     """)
 
     # =========================
+    # STAFF TRANSFERS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS staff_transfers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        username TEXT,
+        role TEXT,
+        from_branch TEXT,
+        to_branch TEXT,
+        transferred_by TEXT,
+        note TEXT DEFAULT '',
+        effective_date TEXT,
+        created_at TEXT
+    )
+    """)
+
+    # =========================
     # PERSISTENT USER SESSIONS
     # =========================
     c.execute("""

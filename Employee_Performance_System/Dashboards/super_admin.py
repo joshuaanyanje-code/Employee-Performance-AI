@@ -428,6 +428,178 @@ def calc_plan_price(branch_count, cfg_row):
     return int(branch_count) * per_branch_price
 
 
+def ensure_staff_transfer_table(conn):
+    try:
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS staff_transfers(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                organization TEXT,
+                username TEXT,
+                role TEXT,
+                from_branch TEXT,
+                to_branch TEXT,
+                transferred_by TEXT,
+                note TEXT DEFAULT '',
+                effective_date TEXT,
+                created_at TEXT
+            )
+            """
+        )
+        conn.commit()
+    except Exception:
+        pass
+
+
+def _send_branch_transfer_notifications(conn, organization, username, role, from_branch, to_branch, transferred_by, note=""):
+    message = (
+        f"Branch transfer notice: you have moved from {from_branch or 'Unassigned'} to {to_branch}. "
+        f"Refresh the app to see your new manager, kiosk, and branch workspace."
+    )
+    if note:
+        message = f"{message} Note: {note.strip()}"
+
+    try:
+        if not is_recent_duplicate_message(conn, transferred_by, username, organization, to_branch, message, within_seconds=15):
+            conn.execute(
+                """
+                INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                VALUES(?,?,?,?,?,datetime('now'))
+                """,
+                (transferred_by, username, to_branch, organization, message),
+            )
+    except Exception:
+        pass
+
+    if str(role or "").strip().lower() == "employee":
+        try:
+            manager_df = safe_read(
+                "SELECT username FROM users WHERE organization=? AND branch=? AND role='admin' AND status='active' ORDER BY username",
+                conn,
+                params=(organization, to_branch),
+            )
+            for _, row in manager_df.iterrows():
+                manager_name = str(row.get("username", "") or "").strip()
+                if not manager_name:
+                    continue
+                manager_msg = (
+                    f"Staff transfer update: {username} is now assigned to {to_branch}. "
+                    f"Their branch-linked operational history now follows them in your view."
+                )
+                if not is_recent_duplicate_message(conn, transferred_by, manager_name, organization, to_branch, manager_msg, within_seconds=15):
+                    conn.execute(
+                        """
+                        INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                        VALUES(?,?,?,?,?,datetime('now'))
+                        """,
+                        (transferred_by, manager_name, to_branch, organization, manager_msg),
+                    )
+        except Exception:
+            pass
+
+
+def transfer_staff_member(conn, organization, username, to_branch, transferred_by, note=""):
+    ensure_staff_transfer_table(conn)
+
+    person_df = safe_read(
+        "SELECT username, role, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
+        conn,
+        params=(username, organization),
+    )
+    if person_df.empty:
+        return False, "User was not found."
+
+    person = person_df.iloc[0]
+    role = str(person.get("role", "") or "").strip().lower()
+    from_branch = str(person.get("branch", "") or "").strip()
+
+    if role not in {"employee", "admin"}:
+        return False, "Only employees and admins can be transferred between branches here."
+    if not str(to_branch or "").strip():
+        return False, "Choose the destination branch first."
+    if str(to_branch).strip() == from_branch:
+        return False, f"{username} is already assigned to {to_branch}."
+
+    target_branch_df = safe_read(
+        "SELECT name, status FROM branches WHERE organization=? AND name=? LIMIT 1",
+        conn,
+        params=(organization, to_branch),
+    )
+    if target_branch_df.empty:
+        return False, "The destination branch does not exist in this organization."
+
+    target_state = str(target_branch_df.iloc[0].get("status", "active") or "active").strip().lower()
+    if target_state in {"inactive", "disabled", "suspended", "blocked", "locked"}:
+        return False, f"The destination branch is currently {target_state}. Activate it before transferring staff."
+
+    conn.execute(
+        "UPDATE users SET branch=? WHERE username=? AND organization=?",
+        (to_branch, username, organization),
+    )
+
+    for table_name in [
+        "attendance",
+        "early_clockout_approvals",
+        "lateness_approvals",
+        "schedules",
+        "leaves",
+        "warnings",
+    ]:
+        try:
+            conn.execute(
+                f"UPDATE {table_name} SET branch=? WHERE username=? AND organization=?",
+                (to_branch, username, organization),
+            )
+        except Exception:
+            pass
+
+    try:
+        conn.execute(
+            "UPDATE ratings SET branch=? WHERE organization=? AND (rater=? OR rated=?)",
+            (to_branch, organization, username, username),
+        )
+    except Exception:
+        pass
+
+    for sql, params in [
+        (
+            "UPDATE messages SET branch=? WHERE organization=? AND (sender=? OR receiver=?)",
+            (to_branch, organization, username, username),
+        ),
+        (
+            "UPDATE system_messages SET branch=? WHERE organization=? AND (from_user=? OR to_user=?)",
+            (to_branch, organization, username, username),
+        ),
+        (
+            "UPDATE admin_action_requests SET branch=? WHERE organization=? AND (target_username=? OR requested_by=?)",
+            (to_branch, organization, username, username),
+        ),
+        (
+            "UPDATE lateness_fine_requests SET branch=? WHERE organization=? AND requested_by=?",
+            (to_branch, organization, username),
+        ),
+    ]:
+        try:
+            conn.execute(sql, params)
+        except Exception:
+            pass
+
+    conn.execute(
+        """
+        INSERT INTO staff_transfers(
+            organization, username, role, from_branch, to_branch,
+            transferred_by, note, effective_date, created_at
+        )
+        VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+        """,
+        (organization, username, role, from_branch, to_branch, transferred_by, str(note or "").strip(), date.today().strftime("%Y-%m-%d")),
+    )
+
+    _send_branch_transfer_notifications(conn, organization, username, role, from_branch, to_branch, transferred_by, note)
+    conn.commit()
+    return True, f"{username} moved from {from_branch or 'Unassigned'} to {to_branch}. Their branch-linked data now follows them, and the new manager/kiosk view will update on refresh."
+
+
 def inject_super_admin_apple_theme():
     if st.session_state.get("_sa_apple_theme_loaded"):
         return
@@ -2156,6 +2328,61 @@ def super_admin_dashboard():
                             log_action(conn, user, "RESET PASSWORD", sel_user, org)
                             set_flash_message("super_admin_user_flash", "success", f"Password for '{sel_user}' reset.")
                             st.rerun()
+
+                st.divider()
+                st.markdown("### Transfer Staff To Another Branch")
+                st.caption(
+                    "Employees and admins can be moved to a different branch inside the same organization. "
+                    "Their branch-linked operational data follows them, they will see the new manager and kiosk after refresh, "
+                    "and super admin remains the same boss across the organization."
+                )
+
+                role_lower = str(row.get("role", "") or "").strip().lower()
+                if role_lower not in {"employee", "admin"}:
+                    st.info("This transfer tool is only for employees and admins.")
+                else:
+                    available_transfer_branches = [b for b in branches if str(b) != str(row.get("branch", ""))]
+                    if not available_transfer_branches:
+                        st.info("Create another branch first before transferring this staff member.")
+                    else:
+                        with st.form("transfer_user_form", clear_on_submit=False):
+                            new_branch = st.selectbox("Move to branch", available_transfer_branches, key="transfer_user_target_branch")
+                            transfer_note = st.text_area(
+                                "Transfer note (optional)",
+                                placeholder="Example: Reassigned to support the new branch launch.",
+                                key="transfer_user_note",
+                            )
+                            transfer_sub = st.form_submit_button("Transfer Staff")
+                            if transfer_sub:
+                                ok, message = transfer_staff_member(
+                                    conn,
+                                    org,
+                                    sel_user,
+                                    new_branch,
+                                    user,
+                                    transfer_note,
+                                )
+                                if ok:
+                                    log_action(conn, user, "TRANSFER STAFF", f"{sel_user} -> {new_branch}", org)
+                                    set_flash_message("super_admin_user_flash", "success", message)
+                                    st.rerun()
+                                else:
+                                    st.error(message)
+
+                ensure_staff_transfer_table(conn)
+                transfer_history_df = safe_read(
+                    """
+                    SELECT created_at, username, role, from_branch, to_branch, transferred_by, note, effective_date
+                    FROM staff_transfers
+                    WHERE organization=? AND username=?
+                    ORDER BY id DESC
+                    """,
+                    conn,
+                    params=(org, sel_user),
+                )
+                if not transfer_history_df.empty:
+                    st.markdown("#### Transfer history")
+                    st.dataframe(transfer_history_df, use_container_width=True, hide_index=True)
 
         with tab_requests:
             req_df = apply_branch_scope(
