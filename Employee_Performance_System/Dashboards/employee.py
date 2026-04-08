@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 from database.db import get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
-from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default
+from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
 
@@ -151,8 +151,13 @@ def employee_dashboard():
 
     branch = user_data.iloc[0]["branch"]
 
-    st.title("👨‍💼 Employee Dashboard")
-    st.success(f"Welcome {username} | {branch}")
+    st.title("Employee Dashboard")
+    render_dashboard_banner(
+        "Employee workspace",
+        f"Welcome, {username}",
+        "Track your schedule, attendance, leave, ratings, and growth in one calm place.",
+        pills=[f"Branch {branch}", f"Organization {org}"],
+    )
     show_flash_message()
 
     # ==============================

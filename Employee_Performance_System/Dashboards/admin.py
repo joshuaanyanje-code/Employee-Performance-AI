@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
-from Dashboards.ui_responsive import apply_responsive_ui
+from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -157,6 +157,12 @@ def admin_dashboard():
     ensure_poll_tables(conn)
 
     st.title("Admin Dashboard")
+    render_dashboard_banner(
+        "Branch leadership",
+        f"{admin_branch} management dashboard",
+        "Monitor staff, attendance, leaves, alerts, ratings, and branch operations from one clean workspace.",
+        pills=[f"Manager {username}", f"Organization {org}"],
+    )
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
     show_flash_message()
 

@@ -25,49 +25,65 @@ st.set_page_config(
 # =====================================================
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&family=Plus+Jakarta+Sans:wght@500;600;700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700&display=swap');
 
 :root {
-    --bg: #0b1220;
-    --bg-soft: #111a2e;
-    --card: linear-gradient(160deg, rgba(20, 30, 52, 0.92), rgba(12, 20, 36, 0.92));
-    --line: rgba(148, 163, 184, 0.24);
-    --text: #e7edf8;
-    --muted: #9fb0cc;
-    --accent-a: #1f6feb;
-    --accent-b: #3aa0ff;
+    --bg: #f5f5f7;
+    --bg-soft: #fbfbfd;
+    --card: rgba(255, 255, 255, 0.88);
+    --line: rgba(15, 23, 42, 0.08);
+    --text: #1d1d1f;
+    --muted: #6e6e73;
+    --accent-a: #0071e3;
+    --accent-b: #2d8cff;
+    --shadow: 0 14px 40px rgba(15, 23, 42, 0.07);
 }
 
-html, body, [class*="css"]  {
-    font-family: 'Manrope', sans-serif;
+html, body, [class*="css"] {
+    font-family: 'Roboto', 'Roboto Flex', 'Segoe UI', sans-serif;
+    color: var(--text);
 }
 
 .block-container {
-    max-width: 1200px;
+    max-width: 1240px;
     margin: auto;
     padding-top: 0.9rem;
     padding-bottom: calc(1rem + env(safe-area-inset-bottom));
 }
 
 .login-container {
-    max-width: 420px;
+    max-width: 440px;
     margin: auto;
 }
 
 body {
     background:
-        radial-gradient(1200px 700px at 12% -10%, rgba(58, 160, 255, 0.22), transparent 62%),
-        radial-gradient(1000px 560px at 90% 0%, rgba(32, 95, 201, 0.16), transparent 58%),
-        var(--bg);
+        radial-gradient(900px 520px at 12% -10%, rgba(0, 113, 227, 0.07), transparent 60%),
+        radial-gradient(820px 420px at 90% 0%, rgba(45, 140, 255, 0.05), transparent 55%),
+        linear-gradient(180deg, #fbfbfd 0%, #f5f5f7 100%);
     color: var(--text);
+}
+
+[data-testid="stAppViewContainer"],
+[data-testid="stMain"] {
+    background: transparent;
 }
 
 [data-testid="stMain"] div[data-testid="stVerticalBlock"] {
     background: var(--card);
-    padding: 25px;
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    padding: 22px;
     border: 1px solid var(--line);
-    border-radius: 14px;
-    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.28);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
+}
+
+[data-testid="stSidebar"] {
+    background: rgba(255, 255, 255, 0.78);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    border-right: 1px solid rgba(15, 23, 42, 0.06);
 }
 
 @media (min-width: 761px) {
@@ -90,14 +106,26 @@ body {
     }
 }
 
-button {
+button,
+.stButton > button,
+.stDownloadButton > button,
+.stFormSubmitButton > button {
     background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
-    color: white !important;
-    border-radius: 10px;
-    border: 1px solid rgba(160, 204, 255, 0.28);
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    font-weight: 600;
-    letter-spacing: 0.2px;
+    color: #ffffff !important;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 113, 227, 0.14);
+    font-family: 'Roboto', 'Roboto Flex', sans-serif;
+    font-weight: 500;
+    letter-spacing: 0;
+    box-shadow: 0 8px 18px rgba(0, 113, 227, 0.18);
+}
+
+button:hover,
+.stButton > button:hover,
+.stDownloadButton > button:hover,
+.stFormSubmitButton > button:hover {
+    border-color: rgba(0, 113, 227, 0.18);
+    filter: brightness(1.02);
 }
 
 .global-sidebar-toggle {
@@ -105,22 +133,22 @@ button {
     left: 12px;
     top: 12px;
     z-index: 100000;
-    min-width: 230px;
-    min-height: 66px;
-    border-radius: 16px;
-    border: 1px solid rgba(160, 204, 255, 0.34);
-    background: linear-gradient(135deg, var(--accent-a), var(--accent-b));
-    color: #fff;
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    font-size: 1.14rem;
-    font-weight: 800;
-    letter-spacing: 0.2px;
-    box-shadow: 0 14px 30px rgba(11, 25, 49, 0.45);
+    min-width: 220px;
+    min-height: 60px;
+    border-radius: 999px;
+    border: 1px solid rgba(0, 113, 227, 0.16);
+    background: rgba(255, 255, 255, 0.92);
+    color: var(--text);
+    font-family: 'Roboto', 'Roboto Flex', sans-serif;
+    font-size: 1.02rem;
+    font-weight: 600;
+    letter-spacing: 0;
+    box-shadow: var(--shadow);
     cursor: pointer;
 }
 
 .global-sidebar-toggle:hover {
-    filter: brightness(1.04);
+    background: #ffffff;
 }
 
 .global-sidebar-toggle:active {
@@ -128,12 +156,50 @@ button {
 }
 
 h1, h2, h3 {
-    font-family: 'Plus Jakarta Sans', sans-serif;
-    letter-spacing: 0.2px;
+    font-family: 'Roboto', 'Roboto Flex', sans-serif;
+    font-weight: 700;
+    letter-spacing: -0.02em;
+    color: var(--text);
 }
 
 p, label, span, div {
     color: var(--text);
+}
+
+small, .stCaption {
+    color: var(--muted) !important;
+}
+
+[data-testid="stMetric"] {
+    background: rgba(255, 255, 255, 0.94);
+    border: 1px solid rgba(15, 23, 42, 0.06);
+    border-radius: 18px;
+    padding: 0.45rem 0.65rem;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.04);
+}
+
+.stTextInput input,
+.stTextArea textarea,
+.stSelectbox [data-baseweb="select"],
+.stDateInput > div,
+.stNumberInput input {
+    background: rgba(255, 255, 255, 0.95) !important;
+    border: 1px solid rgba(15, 23, 42, 0.08) !important;
+    border-radius: 14px !important;
+    color: var(--text) !important;
+}
+
+[data-testid="stExpander"] {
+    border: 1px solid rgba(15, 23, 42, 0.08);
+    border-radius: 18px;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.95);
+}
+
+[data-testid="stExpander"] summary {
+    font-weight: 600;
+    color: var(--text);
+    background: linear-gradient(90deg, rgba(0, 113, 227, 0.07), rgba(255, 255, 255, 0.96));
 }
 
 @media (max-width: 760px) {
@@ -149,10 +215,13 @@ p, label, span, div {
 
     div[data-testid="stVerticalBlock"] {
         padding: 14px;
-        border-radius: 10px;
+        border-radius: 16px;
     }
 
-    button {
+    button,
+    .stButton > button,
+    .stDownloadButton > button,
+    .stFormSubmitButton > button {
         min-height: 44px;
         width: 100%;
     }
@@ -162,9 +231,9 @@ p, label, span, div {
         right: 10px;
         top: 10px;
         width: auto;
-        min-height: 58px;
+        min-height: 56px;
         min-width: 0;
-        font-size: 1.06rem;
+        font-size: 1rem;
     }
 }
 </style>

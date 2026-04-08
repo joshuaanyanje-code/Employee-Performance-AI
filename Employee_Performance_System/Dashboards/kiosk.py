@@ -62,10 +62,13 @@ def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
     tertiary_html = f"<div class='manager-name'>{tertiary_title}</div>" if tertiary_title else ""
     st.markdown(
         f"""
-        <div class='home-kiosk-title'>
-            <div class='org-name'>{primary_title}</div>
-            {secondary_html}
-            {tertiary_html}
+        <div class='home-kiosk-hero'>
+            <div class='home-kiosk-kicker'>Workplace kiosk</div>
+            <div class='home-kiosk-title'>
+                <div class='org-name'>{primary_title}</div>
+                {secondary_html}
+                {tertiary_html}
+            </div>
         </div>
         """,
         unsafe_allow_html=True,
@@ -346,60 +349,79 @@ def kiosk_dashboard():
     # ==============================
     st.markdown("""
         <style>
-        .block-container {max-width: 450px; padding-top: 1rem; padding-bottom: 2rem;}
-        button {height:58px; font-size:20px; font-weight:bold;}
+        .block-container {max-width: 520px; padding-top: 0.9rem; padding-bottom: 2rem;}
+        button {height:58px; font-size:20px; font-weight:600;}
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
-            width: min(100%, 320px);
+            width: min(100%, 340px);
             display: block;
             margin: 0 auto;
             box-sizing: border-box;
-            background: linear-gradient(90deg, #2f7de1 0%, #46a0ff 100%) !important;
+            background: linear-gradient(135deg, #0071e3 0%, #2d8cff 100%) !important;
             color: #ffffff !important;
-            border: 1px solid rgba(255, 255, 255, 0.18) !important;
-            border-radius: 14px;
-            box-shadow: none !important;
+            border: 1px solid rgba(0, 113, 227, 0.14) !important;
+            border-radius: 999px;
+            box-shadow: 0 10px 20px rgba(0, 113, 227, 0.16) !important;
         }
         .stButton > button:hover, .stDownloadButton > button:hover, .stFormSubmitButton > button:hover {
             filter: brightness(1.03);
         }
-        .home-kiosk-title {
+        .home-kiosk-hero {
             text-align: center;
-            padding: 0.5rem 0 0.4rem;
+            padding: 0.9rem 1rem 0.8rem;
+            margin: 0.2rem 0 1rem;
+            border-radius: 28px;
+            border: 1px solid rgba(15, 23, 42, 0.07);
+            background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(244,248,255,0.96));
+            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
         }
-        .home-kiosk-title .org-name {
-            font-size: 2.45rem;
-            font-weight: 900;
-            letter-spacing: -0.7px;
-            line-height: 1.05;
+        .home-kiosk-kicker {
+            font-size: 0.72rem;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.12em;
+            color: #0071e3;
             margin-bottom: 0.35rem;
         }
+        .home-kiosk-title {
+            text-align: center;
+            padding: 0.2rem 0 0.1rem;
+        }
+        .home-kiosk-title .org-name {
+            font-size: 2.25rem;
+            font-weight: 900;
+            letter-spacing: -0.04em;
+            line-height: 1.05;
+            margin-bottom: 0.3rem;
+            color: #1d1d1f;
+        }
         .home-kiosk-title .branch-name {
-            font-size: 1.8rem;
-            font-weight: 800;
-            letter-spacing: -0.3px;
+            font-size: 1.5rem;
+            font-weight: 700;
+            letter-spacing: -0.02em;
             line-height: 1.1;
+            color: #1d1d1f;
         }
         .home-kiosk-title .manager-name {
-            font-size: 1.15rem;
-            font-weight: 700;
-            color: #c7d2e5;
+            font-size: 1rem;
+            font-weight: 500;
+            color: #6e6e73;
             margin-top: 0.45rem;
         }
-        .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 70%;}
-        
-        /* Camera Widget Styling */
+        .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
+
         [data-testid="stImage"] {
-            border-radius: 10px;
+            border-radius: 14px;
             overflow: hidden;
             margin: 1rem 0;
+            border: 1px solid rgba(15, 23, 42, 0.08);
         }
-        
+
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
-            .home-kiosk-title .org-name {font-size: 2.4rem;}
-            .home-kiosk-title .branch-name {font-size: 1.8rem;}
-            .home-kiosk-title .manager-name {font-size: 1.15rem;}
+            .home-kiosk-title .org-name {font-size: 2rem;}
+            .home-kiosk-title .branch-name {font-size: 1.35rem;}
+            .home-kiosk-title .manager-name {font-size: 0.98rem;}
         }
         </style>
     """, unsafe_allow_html=True)

@@ -2,6 +2,7 @@
 import pandas as pd
 import json
 import re
+from html import escape
 from datetime import date, datetime, timedelta, time
 from urllib.parse import quote
 import importlib
@@ -415,10 +416,99 @@ def calc_plan_price(branch_count, cfg_row):
     return int(branch_count) * per_branch_price
 
 
+def inject_super_admin_apple_theme():
+    if st.session_state.get("_sa_apple_theme_loaded"):
+        return
+
+    st.markdown(
+        """
+        <style>
+        .sa-apple-hero {
+            margin: 0.25rem 0 1rem 0;
+            padding: 1.25rem 1.35rem;
+            border-radius: 28px;
+            border: 1px solid rgba(15, 23, 42, 0.07);
+            background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(244,248,255,0.96));
+            box-shadow: 0 16px 36px rgba(15, 23, 42, 0.06);
+        }
+        .sa-apple-eyebrow {
+            font-size: 0.74rem;
+            letter-spacing: 0.12em;
+            font-weight: 700;
+            text-transform: uppercase;
+            color: #0071e3;
+            margin-bottom: 0.35rem;
+        }
+        .sa-apple-title {
+            font-size: clamp(1.35rem, 2vw, 2rem);
+            line-height: 1.15;
+            font-weight: 700;
+            color: #1d1d1f;
+        }
+        .sa-apple-subtitle {
+            margin-top: 0.35rem;
+            max-width: 900px;
+            color: #6e6e73;
+            font-size: 0.98rem;
+            line-height: 1.55;
+        }
+        .sa-apple-chip-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 0.45rem;
+            margin-top: 0.85rem;
+        }
+        .sa-apple-chip {
+            display: inline-flex;
+            align-items: center;
+            padding: 0.38rem 0.72rem;
+            border-radius: 999px;
+            background: rgba(0, 113, 227, 0.08);
+            border: 1px solid rgba(0, 113, 227, 0.10);
+            color: #1d1d1f;
+            font-size: 0.88rem;
+            font-weight: 500;
+        }
+        .sa-apple-note {
+            margin: 0.4rem 0;
+            padding: 0.7rem 0.85rem;
+            border-radius: 16px;
+            background: rgba(255, 255, 255, 0.93);
+            border: 1px solid rgba(15, 23, 42, 0.06);
+            color: #3a3a3c;
+            box-shadow: 0 8px 18px rgba(15, 23, 42, 0.03);
+        }
+        .sa-apple-table-label {
+            margin: 0.65rem 0 0.35rem 0;
+            font-weight: 600;
+            color: #1d1d1f;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    st.session_state["_sa_apple_theme_loaded"] = True
+
+
+def render_apple_hero(eyebrow, title, subtitle="", chips=None):
+    inject_super_admin_apple_theme()
+    chips = [clean_display_text(item) for item in (chips or []) if str(item).strip()]
+    chips_html = "".join(f"<span class='sa-apple-chip'>{escape(item)}</span>" for item in chips)
+    st.markdown(
+        f"""
+        <section class="sa-apple-hero">
+            <div class="sa-apple-eyebrow">{escape(clean_display_text(eyebrow))}</div>
+            <div class="sa-apple-title">{escape(clean_display_text(title))}</div>
+            <div class="sa-apple-subtitle">{escape(clean_display_text(subtitle))}</div>
+            {f'<div class="sa-apple-chip-row">{chips_html}</div>' if chips_html else ''}
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
 
 def render_workforce_scorecards(intel):
     st.divider()
-    st.markdown("### Workforce Score Cards")
 
     workforce = intel.get("workforce_scorecards", {}) if isinstance(intel, dict) else {}
     summary = workforce.get("summary", {}) if isinstance(workforce, dict) else {}
@@ -426,16 +516,24 @@ def render_workforce_scorecards(intel):
     monthly_summary = workforce.get("monthly_summary", []) if isinstance(workforce, dict) else []
     date_scope = workforce.get("date_scope", {}) if isinstance(workforce, dict) else {}
 
-    st.caption(
-        "Each employee and manager starts at 100% by default when added. "
-        "The score then moves up or down based on performance, attendance, conduct, fairness, and team-pattern signals."
-    )
+    scope_chip = "All available data"
     if date_scope:
-        st.caption(
-            f"Selected range: {clean_display_text(date_scope.get('start', 'All available'))} to "
-            f"{clean_display_text(date_scope.get('end', 'today'))} "
-            f"({int(date_scope.get('days', 0) or 0)} day window)."
+        scope_chip = (
+            f"{clean_display_text(date_scope.get('start', 'All available'))} → "
+            f"{clean_display_text(date_scope.get('end', 'today'))}"
         )
+
+    render_apple_hero(
+        "Workforce score cards",
+        "A calm view of employees and managers at a glance.",
+        "Everyone begins at 100, then moves with performance, attendance, conduct, fairness, and team-pattern signals.",
+        chips=[
+            f"Monthly avg {float(summary.get('average_monthly', 100) or 100):.1f}/100",
+            f"Employees {float(summary.get('employees_average', 100) or 100):.1f}/100",
+            f"Managers {float(summary.get('managers_average', 100) or 100):.1f}/100",
+            f"Range {scope_chip}",
+        ],
+    )
 
     if not rows:
         st.info("No workforce score card data is available yet.")
@@ -473,19 +571,34 @@ def render_workforce_scorecards(intel):
             hide_index=True,
         )
 
-    st.markdown("**End-of-month summary for super admin**")
-    for item in monthly_summary:
-        st.info(clean_display_text(item))
+    if monthly_summary:
+        st.markdown("<div class='sa-apple-table-label'>End-of-month summary for super admin</div>", unsafe_allow_html=True)
+        for item in monthly_summary:
+            st.markdown(
+                f"<div class='sa-apple-note'>{escape(clean_display_text(item))}</div>",
+                unsafe_allow_html=True,
+            )
 
 
 
 def render_employee_risk_snapshot(intel):
     st.divider()
-    st.markdown("### Employee Risk Snapshot")
 
     risk_overview = intel.get("employee_risk_overview", {}) if isinstance(intel, dict) else {}
     summary = risk_overview.get("summary", {}) if isinstance(risk_overview, dict) else {}
     cases = risk_overview.get("cases", []) if isinstance(risk_overview, dict) else []
+
+    render_apple_hero(
+        "Employee risk snapshot",
+        "The people who need attention first.",
+        "This section keeps the dashboard compact, then opens a deeper story only when the super admin wants to inspect one employee.",
+        chips=[
+            f"Tracked {int(summary.get('total_tracked', 0) or 0)}",
+            f"Below 55% {int(summary.get('below_55', 0) or 0)}",
+            f"Final warning {int(summary.get('final_warning', 0) or 0)}",
+            f"Termination review {int(summary.get('termination_review', 0) or 0)}",
+        ],
+    )
 
     def _render_case_detail(item):
         risk_level = clean_display_text(item.get("risk_level", "Review"))
@@ -583,9 +696,9 @@ def render_employee_risk_snapshot(intel):
     r4.metric("Final Warning", int(summary.get("final_warning", 0) or 0))
     r5.metric("Termination Review", int(summary.get("termination_review", 0) or 0))
 
-    st.caption(
-        "Yes — the employee score card is now shown out of 100%. "
-        "Low performers at or below 55% are included here, and you can click one person to open the full decline history and evidence trail."
+    st.markdown(
+        "<div class='sa-apple-note'>Yes — the employee score card is shown out of 100%. Low performers at or below 55% are included here, and one click opens the full decline history and evidence trail.</div>",
+        unsafe_allow_html=True,
     )
 
     if not cases:
@@ -1009,26 +1122,43 @@ def super_admin_dashboard():
                 # --- EXECUTIVE SUMMARY ---
                 st.divider()
                 st.markdown("### Executive Summary")
-                
+
                 meta = intel.get("executive_summary", {})
                 total_emp = meta.get("total_employees", 0)
                 health_score = meta.get("team_health_score", 0)
                 health_status = meta.get("team_health_status", "Unknown")
                 range_meta = intel.get("date_range", {}) if isinstance(intel, dict) else {}
+                range_chip = "All available data"
                 if range_meta:
-                    st.caption(
-                        f"Analysis range: {clean_display_text(range_meta.get('start', 'All available'))} to "
+                    range_chip = (
+                        f"{clean_display_text(range_meta.get('start', 'All available'))} → "
                         f"{clean_display_text(range_meta.get('end', date.today().strftime('%Y-%m-%d')))}"
                     )
-                
+
+                render_apple_hero(
+                    "Executive summary",
+                    "A cleaner organization snapshot for faster decisions.",
+                    "The super admin sees the most important movement first, then can drill deeper only where attention is needed.",
+                    chips=[
+                        f"Employees {int(total_emp or 0)}",
+                        f"Team health {float(health_score or 0):.0f}%",
+                        f"Status {clean_display_text(health_status)}",
+                        f"Critical alerts {len(intel.get('critical_alerts', []))}",
+                        f"Range {range_chip}",
+                    ],
+                )
+
                 c1, c2, c3, c4 = st.columns(4)
                 c1.metric("Employees", total_emp)
                 c2.metric("Team Health", f"{health_score:.0f}%")
                 c3.metric("Status", health_status)
                 c4.metric("Critical Alerts", len(intel.get("critical_alerts", [])))
-                
+
                 for point in meta.get("summary_points", []):
-                    st.info(clean_display_text(point))
+                    st.markdown(
+                        f"<div class='sa-apple-note'>{escape(clean_display_text(point))}</div>",
+                        unsafe_allow_html=True,
+                    )
 
                 render_workforce_scorecards(intel)
                 render_employee_risk_snapshot(intel)

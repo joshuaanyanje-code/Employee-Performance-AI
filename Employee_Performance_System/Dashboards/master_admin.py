@@ -11,7 +11,7 @@ from database.db import (
     get_phone_uniqueness_error,
     DB_PATH as MAIN_DB_PATH,
 )
-from Dashboards.ui_responsive import apply_responsive_ui
+from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -1214,7 +1214,13 @@ def master_admin_dashboard():
     conn = get_connection()
     run_migration(conn)
 
-    st.title("🔐 Chief Administrator Control Panel")
+    st.title("Chief Administrator Control Panel")
+    render_dashboard_banner(
+        "System oversight",
+        "Multi-organization control in one clean view.",
+        "Manage organizations, branches, payments, people, and settings with a lighter executive layout.",
+        pills=["Master access", "Cross-organization analytics"],
+    )
 
     is_mobile = is_mobile_device()
 
