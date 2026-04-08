@@ -5,6 +5,17 @@ from database.db import get_connection, verify_password, hash_password, execute_
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
+try:
+    from Analytics.late_fines import compute_lateness_fines, compute_lateness_fine_history, get_lateness_policy
+except Exception:
+    def compute_lateness_fines(*args, **kwargs):
+        return pd.DataFrame(columns=["Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def compute_lateness_fine_history(*args, **kwargs):
+        return pd.DataFrame(columns=["Month", "Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def get_lateness_policy(*args, **kwargs):
+        return {"amount_per_hour": 0.0, "currency": "KES", "pending_request": None}
 
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -150,13 +161,22 @@ def employee_dashboard():
         st.warning("⚠ Your account is on probation and under management review.")
 
     branch = user_data.iloc[0]["branch"]
+    fine_policy = get_lateness_policy(conn, org)
+    employee_fine_df = compute_lateness_fines(conn, org, username=username)
+    employee_fine_history_df = compute_lateness_fine_history(conn, org, username=username, months=6)
+    employee_fine_row = employee_fine_df.iloc[0].to_dict() if not employee_fine_df.empty else {}
+    employee_fine_amount = float(employee_fine_row.get("Fine Amount", 0) or 0)
 
     st.title("Employee Dashboard")
     render_dashboard_banner(
         "Employee workspace",
         f"Welcome, {username}",
         "Track your schedule, attendance, leave, ratings, and growth in one calm place.",
-        pills=[f"Branch {branch}", f"Organization {org}"],
+        pills=[
+            f"Branch {branch}",
+            f"Organization {org}",
+            f"Late fine KES {employee_fine_amount:,.0f}",
+        ],
     )
     show_flash_message()
 
@@ -396,6 +416,34 @@ def employee_dashboard():
                 a2.metric("Clock In & Out Complete", complete_days)
                 a3.metric("True Late Flags", flagged)
                 a4.metric("Approved Late", approved_late_count)
+
+                fine_amount = float(employee_fine_row.get("Fine Amount", 0) or 0)
+                chargeable_minutes = int(employee_fine_row.get("Chargeable Late Minutes", 0) or 0)
+                chargeable_hours = int(employee_fine_row.get("Chargeable Hours", 0) or 0)
+                next_fine_gap = int(employee_fine_row.get("Pending Minutes to Next Fine", 60) or 60)
+
+                f1, f2, f3, f4 = st.columns(4)
+                f1.metric("Late Fine Due", f"KES {fine_amount:,.0f}")
+                f2.metric("Chargeable Late Min", chargeable_minutes)
+                f3.metric("Chargeable Hours", chargeable_hours)
+                f4.metric("Minutes to Next Fine", next_fine_gap)
+
+                if float(fine_policy.get("amount_per_hour", 0) or 0) <= 0:
+                    st.info("No approved lateness deduction amount is active yet, so your current month fine remains KES 0.")
+                else:
+                    st.caption(
+                        f"Approved fine rate: KES {float(fine_policy.get('amount_per_hour', 0) or 0):,.0f} for each full accumulated hour of unapproved lateness. This due resets for the new month, while history stays available below."
+                    )
+
+                st.markdown("**Monthly lateness fine history**")
+                if employee_fine_history_df.empty:
+                    st.info("No lateness fine history yet.")
+                else:
+                    st.dataframe(
+                        employee_fine_history_df[["Month", "Chargeable Late Minutes", "Chargeable Hours", "Fine Amount"]],
+                        use_container_width=True,
+                        hide_index=True,
+                    )
 
                 st.dataframe(
                     df[[

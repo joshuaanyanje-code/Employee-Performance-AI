@@ -52,6 +52,18 @@ try:
 except Exception:
     PLOTLY_OK = False
 
+try:
+    from Analytics.late_fines import compute_lateness_fines, compute_lateness_fine_history, get_lateness_policy
+except Exception:
+    def compute_lateness_fines(*args, **kwargs):
+        return pd.DataFrame(columns=["Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def compute_lateness_fine_history(*args, **kwargs):
+        return pd.DataFrame(columns=["Month", "Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def get_lateness_policy(*args, **kwargs):
+        return {"amount_per_hour": 0.0, "currency": "KES", "pending_request": None}
+
 
 # ==============================
 # HELPERS
@@ -3899,6 +3911,50 @@ def super_admin_dashboard():
             params=(org,),
         ))
 
+        late_fine_policy = get_lateness_policy(conn, org)
+        scope_branch_for_fines = None if not branch_scope else branch_scope
+        org_fines_df = compute_lateness_fines(conn, org, branch=scope_branch_for_fines)
+        org_fine_history_df = compute_lateness_fine_history(conn, org, branch=scope_branch_for_fines, months=6)
+        total_fine_due = float(org_fines_df["Fine Amount"].sum()) if not org_fines_df.empty else 0.0
+        fined_people_count = int((org_fines_df["Fine Amount"] > 0).sum()) if not org_fines_df.empty else 0
+        total_chargeable_hours = int(org_fines_df["Chargeable Hours"].sum()) if not org_fines_df.empty else 0
+
+        lf1, lf2, lf3, lf4 = st.columns(4)
+        lf1.metric("Approved Fine Rate", f"KES {float(late_fine_policy.get('amount_per_hour', 0) or 0):,.0f}/hr")
+        lf2.metric("People With Fines", fined_people_count)
+        lf3.metric("Total To Deduct", f"KES {total_fine_due:,.0f}")
+        lf4.metric("Chargeable Late Hours", total_chargeable_hours)
+
+        if float(late_fine_policy.get("amount_per_hour", 0) or 0) <= 0:
+            st.info("No approved lateness deduction amount is active yet. Approve one in Settings to turn accumulated late hours into payroll deductions.")
+        else:
+            st.caption(
+                f"Each full accumulated hour of unapproved lateness is charged KES {float(late_fine_policy.get('amount_per_hour', 0) or 0):,.0f} for employees only. Admins and managers stay under attendance oversight and warnings instead. These totals are for the current payroll month and reset at month end, while history remains available below."
+            )
+
+        st.markdown("**Lateness fine totals to deduct from pay**")
+        if org_fines_df.empty:
+            st.info("No fine totals are available yet for this scope.")
+        else:
+            st.dataframe(
+                org_fines_df[[
+                    "Username", "Role", "Branch", "Chargeable Late Minutes",
+                    "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"
+                ]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        st.markdown("**Monthly fine history pull**")
+        if org_fine_history_df.empty:
+            st.info("No lateness fine history yet for this scope.")
+        else:
+            st.dataframe(
+                org_fine_history_df[["Month", "Username", "Role", "Branch", "Chargeable Late Minutes", "Chargeable Hours", "Fine Amount"]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
         att_ind, att_br, att_all, att_adm = st.tabs([
             "Individual", "Per Branch", "All Branches", "Admins"
         ])
@@ -4228,6 +4284,122 @@ def super_admin_dashboard():
             st.error("Settings row not found. Run db.create_tables() to initialize.")
         else:
             s = settings.iloc[0]
+            fine_policy = get_lateness_policy(conn, org)
+            pending_fine_requests = safe_read(
+                """
+                SELECT id, branch, requested_by, requested_amount, currency, reason, status, created_at
+                FROM lateness_fine_requests
+                WHERE organization=? AND status='pending'
+                ORDER BY id DESC
+                """,
+                conn,
+                params=(org,),
+            )
+            settings_fines_df = compute_lateness_fines(conn, org)
+            settings_total_due = float(settings_fines_df["Fine Amount"].sum()) if not settings_fines_df.empty else 0.0
+
+            st.markdown("### Employee Lateness Fine Policy")
+            st.caption("Admin can request or change the employee-only deduction amount. Super admin approves it here, and the fine is then charged for every full accumulated hour of unapproved lateness. Admin and manager lateness should be handled through attendance review and warnings. Current dues reset each month, but monthly history remains pullable in Attendance.")
+
+            fp1, fp2, fp3, fp4 = st.columns(4)
+            fp1.metric("Approved Rate", f"KES {float(fine_policy.get('amount_per_hour', 0) or 0):,.0f}/hr")
+            fp2.metric("Late Grace", f"{int(s.get('late_minutes', 15) or 15)} min")
+            fp3.metric("Pending Requests", len(pending_fine_requests))
+            fp4.metric("Current Total Due", f"KES {settings_total_due:,.0f}")
+
+            if str(fine_policy.get("note", "") or "").strip():
+                st.caption(f"Policy note: {clean_display_text(fine_policy.get('note', ''))}")
+
+            with st.form("superadmin_direct_late_fine_form", clear_on_submit=False):
+                direct_amount = st.number_input(
+                    "Approved amount per accumulated late hour (KES)",
+                    min_value=0.0,
+                    value=float(fine_policy.get("amount_per_hour", 0) or 0),
+                    step=50.0,
+                )
+                direct_note = st.text_area(
+                    "Policy note / payroll note",
+                    value=str(fine_policy.get("note", "") or ""),
+                )
+                if st.form_submit_button("Save Approved Fine Amount"):
+                    conn.execute(
+                        """
+                        INSERT INTO lateness_fine_settings(
+                            organization, amount_per_hour, currency, status, updated_by, approved_by, note, updated_at, approved_at
+                        )
+                        VALUES(?,?, 'KES', 'approved', ?, ?, ?, datetime('now'), datetime('now'))
+                        ON CONFLICT(organization) DO UPDATE SET
+                            amount_per_hour=excluded.amount_per_hour,
+                            currency='KES',
+                            status='approved',
+                            updated_by=excluded.updated_by,
+                            approved_by=excluded.approved_by,
+                            note=excluded.note,
+                            updated_at=datetime('now'),
+                            approved_at=datetime('now')
+                        """,
+                        (org, float(direct_amount), user, user, direct_note.strip()),
+                    )
+                    conn.commit()
+                    log_action(conn, user, "APPROVE LATENESS FINE POLICY", f"KES {float(direct_amount):,.0f}/hour", org)
+                    st.success("Approved lateness fine amount saved.")
+                    st.rerun()
+
+            st.markdown("#### Pending amount requests from admin")
+            if pending_fine_requests.empty:
+                st.info("No pending lateness fine amount requests.")
+            else:
+                for _, req in pending_fine_requests.iterrows():
+                    req_id = int(req.get("id", 0) or 0)
+                    req_amount = float(req.get("requested_amount", 0) or 0)
+                    req_user = clean_display_text(req.get("requested_by", "admin"))
+                    req_branch = clean_display_text(req.get("branch", "All Branches"))
+                    req_reason = clean_display_text(req.get("reason", ""))
+                    req_created = clean_display_text(str(req.get("created_at", ""))[:16])
+
+                    with st.expander(f"{req_user} requests KES {req_amount:,.0f}/hr for {req_branch} — {req_created}"):
+                        st.write(req_reason or "No reason provided.")
+                        review_note = st.text_area(
+                            "Approval note (optional)",
+                            key=f"sa_late_fine_review_{req_id}",
+                        )
+                        rf1, rf2 = st.columns(2)
+                        if rf1.button("Approve Amount", key=f"approve_late_fine_request_{req_id}"):
+                            conn.execute(
+                                """
+                                INSERT INTO lateness_fine_settings(
+                                    organization, amount_per_hour, currency, status, updated_by, approved_by, note, updated_at, approved_at
+                                )
+                                VALUES(?,?, 'KES', 'approved', ?, ?, ?, datetime('now'), datetime('now'))
+                                ON CONFLICT(organization) DO UPDATE SET
+                                    amount_per_hour=excluded.amount_per_hour,
+                                    currency='KES',
+                                    status='approved',
+                                    updated_by=excluded.updated_by,
+                                    approved_by=excluded.approved_by,
+                                    note=excluded.note,
+                                    updated_at=datetime('now'),
+                                    approved_at=datetime('now')
+                                """,
+                                (org, req_amount, req_user, user, review_note.strip() or req_reason),
+                            )
+                            conn.execute(
+                                "UPDATE lateness_fine_requests SET status='approved', reviewed_by=?, review_note=?, reviewed_at=datetime('now') WHERE id=?",
+                                (user, review_note.strip(), req_id),
+                            )
+                            conn.commit()
+                            log_action(conn, user, "APPROVE LATENESS FINE REQUEST", f"KES {req_amount:,.0f}/hour", org)
+                            st.success("Lateness fine request approved.")
+                            st.rerun()
+                        if rf2.button("Reject Amount", key=f"reject_late_fine_request_{req_id}"):
+                            conn.execute(
+                                "UPDATE lateness_fine_requests SET status='rejected', reviewed_by=?, review_note=?, reviewed_at=datetime('now') WHERE id=?",
+                                (user, review_note.strip(), req_id),
+                            )
+                            conn.commit()
+                            log_action(conn, user, "REJECT LATENESS FINE REQUEST", f"KES {req_amount:,.0f}/hour", org)
+                            st.warning("Lateness fine request rejected.")
+                            st.rerun()
 
             st.markdown("### Branch Working Hours")
             st.caption("Kiosk uses this order: holiday rule, branch day-hours, personal staff schedule, then global default.")

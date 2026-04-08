@@ -698,6 +698,40 @@ def create_tables():
     """)
 
     # =========================
+    # LATENESS FINE POLICY
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS lateness_fine_settings(
+        organization TEXT PRIMARY KEY,
+        amount_per_hour REAL DEFAULT 0,
+        currency TEXT DEFAULT 'KES',
+        status TEXT DEFAULT 'approved',
+        updated_by TEXT DEFAULT '',
+        approved_by TEXT DEFAULT '',
+        note TEXT DEFAULT '',
+        updated_at TEXT DEFAULT '',
+        approved_at TEXT DEFAULT ''
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS lateness_fine_requests(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT,
+        requested_by TEXT,
+        requested_amount REAL DEFAULT 0,
+        currency TEXT DEFAULT 'KES',
+        reason TEXT DEFAULT '',
+        status TEXT DEFAULT 'pending',
+        reviewed_by TEXT DEFAULT '',
+        review_note TEXT DEFAULT '',
+        created_at TEXT,
+        reviewed_at TEXT
+    )
+    """)
+
+    # =========================
     # SCHEDULES (FIXED 🔥)
     # =========================
     c.execute("""

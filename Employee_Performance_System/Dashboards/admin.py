@@ -9,6 +9,17 @@ try:
 except Exception:
     def is_mobile_device():
         return False
+try:
+    from Analytics.late_fines import compute_lateness_fines, compute_lateness_fine_history, get_lateness_policy
+except Exception:
+    def compute_lateness_fines(*args, **kwargs):
+        return pd.DataFrame(columns=["Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def compute_lateness_fine_history(*args, **kwargs):
+        return pd.DataFrame(columns=["Month", "Username", "Role", "Branch", "Chargeable Late Minutes", "Approved Late Minutes", "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"])
+
+    def get_lateness_policy(*args, **kwargs):
+        return {"amount_per_hour": 0.0, "currency": "KES", "pending_request": None}
 from Analytics.badges import compute_badges_for_organization, get_badge_icon
 from Analytics.polls import (
     create_poll_batch,
@@ -155,13 +166,21 @@ def admin_dashboard():
     work_start = parse_hhmm(settings.get("work_start", "09:00"), "09:00")
     work_end = parse_hhmm(settings.get("work_end", "18:00"), "18:00")
     ensure_poll_tables(conn)
+    fine_policy = get_lateness_policy(conn, org)
+    my_admin_fine_df = compute_lateness_fines(conn, org, username=username)
+    my_admin_fine_row = my_admin_fine_df.iloc[0].to_dict() if not my_admin_fine_df.empty else {}
+    my_admin_fine_amount = float(my_admin_fine_row.get("Fine Amount", 0) or 0)
 
     st.title("Admin Dashboard")
     render_dashboard_banner(
         "Branch leadership",
         f"{admin_branch} management dashboard",
         "Monitor staff, attendance, leaves, alerts, ratings, and branch operations from one clean workspace.",
-        pills=[f"Manager {username}", f"Organization {org}"],
+        pills=[
+            f"Manager {username}",
+            f"Organization {org}",
+            f"Late fine KES {my_admin_fine_amount:,.0f}",
+        ],
     )
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
     show_flash_message()
@@ -762,6 +781,49 @@ def admin_dashboard():
             pcol3, pcol4 = st.columns(2)
             pcol3.metric("Early Approvals Logged", len(approvals_df) if not approvals_df.empty else 0)
             pcol4.metric("Lateness Approvals Logged", len(lateness_approvals_df) if not lateness_approvals_df.empty else 0)
+
+            branch_fines_df = compute_lateness_fines(conn, org, branch=admin_branch)
+            branch_fine_history_df = compute_lateness_fine_history(conn, org, branch=admin_branch, months=6)
+            branch_total_fines = float(branch_fines_df["Fine Amount"].sum()) if not branch_fines_df.empty else 0.0
+            fined_people = int((branch_fines_df["Fine Amount"] > 0).sum()) if not branch_fines_df.empty else 0
+            my_branch_fine_amount = float(my_admin_fine_row.get("Fine Amount", 0) or 0)
+            my_branch_chargeable_hours = int(my_admin_fine_row.get("Chargeable Hours", 0) or 0)
+
+            fcol1, fcol2, fcol3, fcol4 = st.columns(4)
+            fcol1.metric("My Fine Due", f"KES {my_branch_fine_amount:,.0f}")
+            fcol2.metric("My Chargeable Hours", my_branch_chargeable_hours)
+            fcol3.metric("Branch Fine Total", f"KES {branch_total_fines:,.0f}")
+            fcol4.metric("People With Fine", fined_people)
+
+            if float(fine_policy.get("amount_per_hour", 0) or 0) <= 0:
+                st.info("No approved lateness deduction amount is active yet. Use Settings to submit one for super admin approval.")
+            else:
+                st.caption(
+                    f"Fine rule: each full accumulated hour of unapproved lateness is charged KES {float(fine_policy.get('amount_per_hour', 0) or 0):,.0f} for employees only. The branch due shown here is for the current payroll month and resets at month end."
+                )
+
+            st.markdown("### Lateness Fine Ledger")
+            if branch_fines_df.empty:
+                st.info("No staff fine records yet for this branch.")
+            else:
+                st.dataframe(
+                    branch_fines_df[[
+                        "Username", "Role", "Branch", "Chargeable Late Minutes",
+                        "Chargeable Hours", "Pending Minutes to Next Fine", "Fine Amount"
+                    ]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+            st.markdown("### Monthly Fine History Pull")
+            if branch_fine_history_df.empty:
+                st.info("No lateness fine history yet for this branch.")
+            else:
+                st.dataframe(
+                    branch_fine_history_df[["Month", "Username", "Role", "Chargeable Late Minutes", "Chargeable Hours", "Fine Amount"]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             st.dataframe(
                 filtered[[
@@ -1964,6 +2026,61 @@ def admin_dashboard():
                 conn.commit()
                 log_action(conn, username, "UPDATE RATING LOCK", f"rating_open={int(rating_open)}", org)
                 refresh_with_message("Rating setting updated.")
+
+        st.markdown("### Employee Lateness Fine Deduction")
+        st.caption("Admin can set or change the employee-only deduction amount here, and super admin must approve it before it becomes active. Admin and manager lateness should be handled by warnings and oversight instead of fines.")
+        pending_request = fine_policy.get("pending_request") if isinstance(fine_policy, dict) else None
+        current_amount = float(fine_policy.get("amount_per_hour", 0) or 0)
+        if pending_request:
+            st.warning(
+                f"Pending request: KES {float(pending_request.get('requested_amount', 0) or 0):,.0f}/hour from {pending_request.get('requested_by', username)} on {str(pending_request.get('created_at', ''))[:16]}"
+            )
+        else:
+            st.info(f"Current approved late fine amount: KES {current_amount:,.0f} per accumulated hour.")
+
+        with st.form("admin_late_fine_request_form", clear_on_submit=False):
+            proposed_amount = st.number_input(
+                "Amount to deduct for each accumulated late hour (KES)",
+                min_value=0.0,
+                value=float(pending_request.get('requested_amount', current_amount) if pending_request else current_amount),
+                step=50.0,
+            )
+            request_reason = st.text_area(
+                "Reason / note for super admin approval",
+                value=str(pending_request.get('reason', '') if pending_request else ''),
+            )
+            submit_fine_request = st.form_submit_button("Submit Fine Amount For Approval")
+            if submit_fine_request:
+                if not request_reason.strip():
+                    st.error("Reason is required before sending a deduction amount for approval.")
+                else:
+                    existing_pending = safe_read(
+                        "SELECT id FROM lateness_fine_requests WHERE organization=? AND status='pending' ORDER BY id DESC LIMIT 1",
+                        conn,
+                        params=(org,),
+                    )
+                    if existing_pending.empty:
+                        conn.execute(
+                            """
+                            INSERT INTO lateness_fine_requests(
+                                organization, branch, requested_by, requested_amount, currency, reason, status, created_at
+                            )
+                            VALUES(?,?,?,?,?,?, 'pending', datetime('now'))
+                            """,
+                            (org, admin_branch, username, float(proposed_amount), 'KES', request_reason.strip()),
+                        )
+                    else:
+                        conn.execute(
+                            """
+                            UPDATE lateness_fine_requests
+                            SET branch=?, requested_by=?, requested_amount=?, currency='KES', reason=?, status='pending', created_at=datetime('now'), reviewed_by='', review_note='', reviewed_at=''
+                            WHERE id=?
+                            """,
+                            (admin_branch, username, float(proposed_amount), request_reason.strip(), int(existing_pending.iloc[0]['id'])),
+                        )
+                    conn.commit()
+                    log_action(conn, username, "REQUEST LATENESS FINE AMOUNT", f"KES {float(proposed_amount):,.0f}/hour", org)
+                    refresh_with_message("Lateness fine amount sent to super admin for approval.")
 
         st.divider()
         st.markdown("### Change Password")
