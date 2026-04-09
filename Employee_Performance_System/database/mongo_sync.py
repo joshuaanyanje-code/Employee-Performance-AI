@@ -11,6 +11,7 @@ import logging
 import os
 import sqlite3
 import threading
+import time
 from datetime import datetime, timezone
 
 logger = logging.getLogger(__name__)
@@ -65,6 +66,26 @@ _mongo_client_lock = threading.Lock()
 _mongo_client = None
 _initial_sync_lock = threading.Lock()
 _initial_sync_done = False
+_initial_sync_retry_after = 0.0
+_push_lock = threading.Lock()
+_push_in_progress = False
+_push_retry_after = 0.0
+
+
+def _mongo_timeout_ms() -> int:
+    try:
+        return max(500, int(str(os.getenv("TEAM_AI_MONGO_TIMEOUT_MS", "1500") or "1500").strip()))
+    except Exception:
+        return 1500
+
+
+def _mongo_retry_cooldown_seconds() -> float:
+    try:
+        return max(15.0, float(str(os.getenv("TEAM_AI_MONGO_RETRY_COOLDOWN_SEC", "120") or "120").strip()))
+    except Exception:
+        return 120.0
+
+
 def is_mongo_configured() -> bool:
     uri = str(os.getenv("MONGO_URI", "") or "").strip()
     return bool(uri) and MongoClient is not None
@@ -81,9 +102,15 @@ def get_mongo_db():
     if not is_mongo_configured():
         raise RuntimeError("MongoDB is not configured (set MONGO_URI and install pymongo).")
     uri = str(os.getenv("MONGO_URI", "") or "").strip()
+    timeout_ms = _mongo_timeout_ms()
     with _mongo_client_lock:
         if _mongo_client is None:
-            _mongo_client = MongoClient(uri, serverSelectionTimeoutMS=8000)
+            _mongo_client = MongoClient(
+                uri,
+                serverSelectionTimeoutMS=timeout_ms,
+                connectTimeoutMS=timeout_ms,
+                socketTimeoutMS=timeout_ms,
+            )
         return _mongo_client[_mongo_db_name()]
 
 
@@ -238,16 +265,23 @@ def should_pull_from_mongo(db) -> bool:
 
 def mongo_initial_sync_after_schema(db_path: str) -> None:
     """Once per process: either hydrate SQLite from Mongo or upload SQLite to Mongo."""
-    global _initial_sync_done
+    global _initial_sync_done, _initial_sync_retry_after
     if not is_mongo_configured():
         return
+
+    now = time.monotonic()
+    if _initial_sync_done or now < _initial_sync_retry_after:
+        return
+
     with _initial_sync_lock:
-        if _initial_sync_done:
+        now = time.monotonic()
+        if _initial_sync_done or now < _initial_sync_retry_after:
             return
         try:
             db = get_mongo_db()
             db.client.admin.command("ping")
         except Exception as exc:
+            _initial_sync_retry_after = time.monotonic() + _mongo_retry_cooldown_seconds()
             logger.warning(
                 "team_ai_mongo: cannot reach MongoDB (check MONGO_URI in Streamlit Secrets and Atlas Network Access): %s",
                 exc,
@@ -261,26 +295,55 @@ def mongo_initial_sync_after_schema(db_path: str) -> None:
                 push_sqlite_to_mongo(db_path)
                 logger.info("team_ai_mongo: uploaded SQLite snapshot to MongoDB.")
         except (PyMongoError, OSError, sqlite3.Error) as exc:
+            _initial_sync_retry_after = time.monotonic() + _mongo_retry_cooldown_seconds()
             logger.warning("team_ai_mongo: initial sync failed: %s", exc)
             return
         _initial_sync_done = True
+        _initial_sync_retry_after = 0.0
+
+
+def _push_sqlite_snapshot_worker(db_path: str) -> None:
+    global _push_in_progress, _push_retry_after
+    try:
+        push_sqlite_to_mongo(db_path)
+        _push_retry_after = 0.0
+    except Exception as exc:
+        _push_retry_after = time.monotonic() + _mongo_retry_cooldown_seconds()
+        logger.warning("team_ai_mongo: push after commit failed: %s", exc)
+    finally:
+        with _push_lock:
+            _push_in_progress = False
 
 
 def maybe_push_sqlite_to_mongo(db_path: str) -> None:
-    """Full push after SQLite commit (best-effort)."""
+    """Queue a best-effort Mongo snapshot push without blocking the UI thread."""
+    global _push_in_progress
     if not is_mongo_configured():
         return
-    try:
-        push_sqlite_to_mongo(db_path)
-    except Exception as exc:
-        logger.warning("team_ai_mongo: push after commit failed: %s", exc)
+    if not _initial_sync_done and str(os.getenv("TEAM_AI_SKIP_MONGO_PULL", "") or "").strip() != "1":
+        return
+    if time.monotonic() < _push_retry_after:
+        return
+    with _push_lock:
+        if _push_in_progress:
+            return
+        _push_in_progress = True
+    threading.Thread(
+        target=_push_sqlite_snapshot_worker,
+        args=(db_path,),
+        name="team-ai-mongo-push",
+        daemon=True,
+    ).start()
 
 
 def reset_mongo_sync_state() -> None:
     """Allow initial sync to run again (e.g. after full DB reset)."""
-    global _initial_sync_done
+    global _initial_sync_done, _initial_sync_retry_after, _push_retry_after
     with _initial_sync_lock:
         _initial_sync_done = False
+        _initial_sync_retry_after = 0.0
+    with _push_lock:
+        _push_retry_after = 0.0
 
 
 def clear_mongodb_mirror() -> None:

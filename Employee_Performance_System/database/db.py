@@ -5,6 +5,7 @@ import random
 import re
 import os
 import shutil
+import threading
 from datetime import datetime, timedelta
 
 try:
@@ -220,6 +221,38 @@ class MongoMirroredConnection(SyncedConnection):
         _after_sqlite_commit_push_mongo()
 
 
+_mongo_initial_sync_thread_lock = threading.Lock()
+_mongo_initial_sync_running = False
+
+
+def _schedule_mongo_initial_sync():
+    global _mongo_initial_sync_running
+    if not _mongo_mirror_enabled():
+        return
+    with _mongo_initial_sync_thread_lock:
+        if _mongo_initial_sync_running:
+            return
+        _mongo_initial_sync_running = True
+
+    def _runner():
+        global _mongo_initial_sync_running
+        try:
+            from database.mongo_sync import mongo_initial_sync_after_schema
+
+            mongo_initial_sync_after_schema(DB_PATH)
+        except Exception:
+            pass
+        finally:
+            with _mongo_initial_sync_thread_lock:
+                _mongo_initial_sync_running = False
+
+    try:
+        threading.Thread(target=_runner, name="team-ai-mongo-initial-sync", daemon=True).start()
+    except Exception:
+        with _mongo_initial_sync_thread_lock:
+            _mongo_initial_sync_running = False
+
+
 def get_local_now():
     return datetime.now().replace(microsecond=0)
 
@@ -295,12 +328,7 @@ def get_connection():
     conn.execute("PRAGMA busy_timeout = 30000")
     conn.execute("PRAGMA temp_store = MEMORY")
     conn.execute("PRAGMA cache_size = -20000")
-    try:
-        from database.mongo_sync import mongo_initial_sync_after_schema
-
-        mongo_initial_sync_after_schema(DB_PATH)
-    except Exception:
-        pass
+    _schedule_mongo_initial_sync()
     return conn
 
 
