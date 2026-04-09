@@ -1,7 +1,7 @@
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from database.db import get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
+from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
@@ -57,6 +57,10 @@ def show_flash_message():
 
 def _safe_read(conn, query, params=None):
     try:
+        normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
+        query_text = str(query or "").strip()
+        if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
+            return cached_read_sql(query_text, normalized_params)
         if params is None:
             return pd.read_sql(query, conn)
         return pd.read_sql(query, conn, params=params)
@@ -161,11 +165,6 @@ def employee_dashboard():
         st.warning("⚠ Your account is on probation and under management review.")
 
     branch = user_data.iloc[0]["branch"]
-    fine_policy = get_lateness_policy(conn, org)
-    employee_fine_df = compute_lateness_fines(conn, org, username=username)
-    employee_fine_history_df = compute_lateness_fine_history(conn, org, username=username, months=6)
-    employee_fine_row = employee_fine_df.iloc[0].to_dict() if not employee_fine_df.empty else {}
-    employee_fine_amount = float(employee_fine_row.get("Fine Amount", 0) or 0)
 
     st.title("Employee Dashboard")
     render_dashboard_banner(
@@ -175,7 +174,7 @@ def employee_dashboard():
         pills=[
             f"Branch {branch}",
             f"Organization {org}",
-            f"Late fine KES {employee_fine_amount:,.0f}",
+            "Attendance and growth",
         ],
     )
     show_flash_message()
@@ -413,6 +412,11 @@ def employee_dashboard():
                 a2.metric("Clock In & Out Complete", complete_days)
                 a3.metric("True Late Flags", flagged)
                 a4.metric("Approved Late", approved_late_count)
+
+                fine_policy = get_lateness_policy(conn, org)
+                employee_fine_df = compute_lateness_fines(conn, org, username=username)
+                employee_fine_history_df = compute_lateness_fine_history(conn, org, username=username, months=6)
+                employee_fine_row = employee_fine_df.iloc[0].to_dict() if not employee_fine_df.empty else {}
 
                 fine_amount = float(employee_fine_row.get("Fine Amount", 0) or 0)
                 chargeable_minutes = int(employee_fine_row.get("Chargeable Late Minutes", 0) or 0)

@@ -647,6 +647,14 @@ def load_dashboard(name):
         return None
 
 
+def log_navigation_once(conn, menu_label):
+    marker = f"{str(st.session_state.get('role', '')).lower()}::{str(menu_label or '').strip()}"
+    if st.session_state.get("_last_nav_marker") == marker:
+        return
+    st.session_state["_last_nav_marker"] = marker
+    log_action(conn, st.session_state.username, "NAVIGATE", menu_label, st.session_state.organization)
+
+
 # =====================================================
 # SUBSCRIPTION CHECK
 # =====================================================
@@ -883,7 +891,7 @@ elif role == "superadmin":
     else:
         menu = st.sidebar.radio("Navigate", superadmin_nav_items, key="superadmin_nav")
 
-    log_action(conn, st.session_state.username, "NAVIGATE", menu, st.session_state.organization)
+    log_navigation_once(conn, menu)
 
     if menu == "Super Admin":
         super_admin_dashboard = load_dashboard("super_admin")

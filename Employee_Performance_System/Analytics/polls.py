@@ -1,12 +1,29 @@
 import pandas as pd
 from datetime import datetime
 
+from database.db import cached_read_sql
+
 
 ALLOWED_POLL_CHOICES = ["Yes", "No", "Custom"]
+_SCHEMA_READY_KEYS = set()
+
+
+def _schema_cache_key(conn):
+    try:
+        row = conn.execute("PRAGMA database_list").fetchone()
+        if row and len(row) >= 3 and row[2]:
+            return str(row[2])
+    except Exception:
+        pass
+    return f"conn:{id(conn)}"
 
 
 def safe_read(conn, query, params=None):
     try:
+        normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
+        query_text = str(query or "").strip()
+        if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
+            return cached_read_sql(query_text, normalized_params)
         if params is None:
             return pd.read_sql(query, conn)
         return pd.read_sql(query, conn, params=params)
@@ -15,6 +32,10 @@ def safe_read(conn, query, params=None):
 
 
 def ensure_poll_tables(conn):
+    schema_key = _schema_cache_key(conn)
+    if schema_key in _SCHEMA_READY_KEYS:
+        return
+
     try:
         conn.execute(
             """
@@ -62,6 +83,7 @@ def ensure_poll_tables(conn):
         conn.execute("CREATE INDEX IF NOT EXISTS idx_polls_org_branch_status ON polls(organization, branch, status)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_poll_responses_poll_org ON poll_responses(poll_id, organization)")
         conn.commit()
+        _SCHEMA_READY_KEYS.add(schema_key)
     except Exception:
         pass
 

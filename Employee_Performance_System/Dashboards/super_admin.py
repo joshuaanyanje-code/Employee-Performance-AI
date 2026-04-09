@@ -14,7 +14,7 @@ except Exception:
     holiday_lib = None
     HOLIDAYS_OK = False
 
-from database.db import get_connection, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
+from database.db import cached_read_sql, get_connection, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
@@ -78,6 +78,10 @@ def valid_pass(p):
 
 def safe_read(query, conn, params=None):
     try:
+        normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
+        query_text = str(query or "").strip()
+        if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
+            return cached_read_sql(query_text, normalized_params)
         return pd.read_sql(query, conn, params=params) if params else pd.read_sql(query, conn)
     except Exception:
         return pd.DataFrame()

@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
-from database.db import get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
+from database.db import cached_read_sql, get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -67,6 +67,10 @@ def show_flash_message():
 
 def safe_read(query, conn, params=None):
     try:
+        normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
+        query_text = str(query or "").strip()
+        if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
+            return cached_read_sql(query_text, normalized_params)
         if params is None:
             return pd.read_sql(query, conn)
         return pd.read_sql(query, conn, params=params)
@@ -166,10 +170,6 @@ def admin_dashboard():
     work_start = parse_hhmm(settings.get("work_start", "09:00"), "09:00")
     work_end = parse_hhmm(settings.get("work_end", "18:00"), "18:00")
     ensure_poll_tables(conn)
-    fine_policy = get_lateness_policy(conn, org)
-    my_admin_fine_df = compute_lateness_fines(conn, org, username=username)
-    my_admin_fine_row = my_admin_fine_df.iloc[0].to_dict() if not my_admin_fine_df.empty else {}
-    my_admin_fine_amount = float(my_admin_fine_row.get("Fine Amount", 0) or 0)
 
     st.title("Admin Dashboard")
     render_dashboard_banner(
@@ -179,7 +179,7 @@ def admin_dashboard():
         pills=[
             f"Manager {username}",
             f"Organization {org}",
-            f"Late fine KES {my_admin_fine_amount:,.0f}",
+            f"Hours {work_start.strftime('%H:%M')} - {work_end.strftime('%H:%M')}",
         ],
     )
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
@@ -250,6 +250,12 @@ def admin_dashboard():
         start_date, end_date = date_range
     else:
         start_date = end_date = date_range
+
+    fine_policy = get_lateness_policy(conn, org) if menu in {"Attendance", "Settings"} else {
+        "amount_per_hour": 0.0,
+        "currency": "KES",
+        "pending_request": None,
+    }
 
     # =====================================================
     # PROFILE
@@ -786,14 +792,14 @@ def admin_dashboard():
             branch_fine_history_df = compute_lateness_fine_history(conn, org, branch=admin_branch, months=6)
             branch_total_fines = float(branch_fines_df["Fine Amount"].sum()) if not branch_fines_df.empty else 0.0
             fined_people = int((branch_fines_df["Fine Amount"] > 0).sum()) if not branch_fines_df.empty else 0
-            my_branch_fine_amount = float(my_admin_fine_row.get("Fine Amount", 0) or 0)
-            my_branch_chargeable_hours = int(my_admin_fine_row.get("Chargeable Hours", 0) or 0)
+            branch_chargeable_hours = int(branch_fines_df["Chargeable Hours"].sum()) if not branch_fines_df.empty else 0
+            fine_rate = float(fine_policy.get("amount_per_hour", 0) or 0)
 
             fcol1, fcol2, fcol3, fcol4 = st.columns(4)
-            fcol1.metric("My Fine Due", f"KES {my_branch_fine_amount:,.0f}")
-            fcol2.metric("My Chargeable Hours", my_branch_chargeable_hours)
-            fcol3.metric("Branch Fine Total", f"KES {branch_total_fines:,.0f}")
-            fcol4.metric("People With Fine", fined_people)
+            fcol1.metric("Fine Rate", f"KES {fine_rate:,.0f}/hr")
+            fcol2.metric("Branch Fine Total", f"KES {branch_total_fines:,.0f}")
+            fcol3.metric("Employees With Fine", fined_people)
+            fcol4.metric("Chargeable Hours", branch_chargeable_hours)
 
             if float(fine_policy.get("amount_per_hour", 0) or 0) <= 0:
                 st.info("No approved lateness deduction amount is active yet. Use Settings to submit one for super admin approval.")

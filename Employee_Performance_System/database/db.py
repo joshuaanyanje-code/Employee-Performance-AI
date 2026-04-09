@@ -8,10 +8,17 @@ import shutil
 import threading
 from datetime import datetime, timedelta
 
+import pandas as pd
+
 try:
     from dotenv import load_dotenv
 except Exception:
     load_dotenv = None
+
+try:
+    import streamlit as st
+except Exception:
+    st = None
 
 MODULE_DIR = os.path.abspath(os.path.dirname(__file__))
 APP_DIR = os.path.abspath(os.path.join(MODULE_DIR, ".."))
@@ -173,6 +180,57 @@ def refresh_env_from_streamlit_secrets():
     _apply_streamlit_secrets_to_environ()
 
 
+def _clear_streamlit_data_cache():
+    try:
+        if st is not None:
+            st.cache_data.clear()
+    except Exception:
+        pass
+
+
+def _normalize_cache_params(params):
+    if params is None:
+        return ()
+    if isinstance(params, tuple):
+        return params
+    if isinstance(params, list):
+        return tuple(params)
+    return (params,)
+
+
+if st is not None:
+    @st.cache_data(show_spinner=False, ttl=15)
+    def cached_read_sql(query, params=(), db_path=DB_PATH):
+        conn = get_connection()
+        try:
+            normalized_query = _normalize_sqlite_now(query)
+            if params:
+                return pd.read_sql(normalized_query, conn, params=params)
+            return pd.read_sql(normalized_query, conn)
+        except Exception:
+            return pd.DataFrame()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+else:
+    def cached_read_sql(query, params=(), db_path=DB_PATH):
+        conn = get_connection()
+        try:
+            normalized_query = _normalize_sqlite_now(query)
+            if params:
+                return pd.read_sql(normalized_query, conn, params=params)
+            return pd.read_sql(normalized_query, conn)
+        except Exception:
+            return pd.DataFrame()
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 class SyncedCursor(sqlite3.Cursor):
     def execute(self, sql, parameters=()):
         return super().execute(_normalize_sqlite_now(sql), parameters)
@@ -192,7 +250,9 @@ class SyncedConnection(sqlite3.Connection):
         return super().executemany(_normalize_sqlite_now(sql), seq_of_parameters)
 
     def commit(self):
-        return super().commit()
+        result = super().commit()
+        _clear_streamlit_data_cache()
+        return result
 
 
 def _mongo_mirror_enabled():
