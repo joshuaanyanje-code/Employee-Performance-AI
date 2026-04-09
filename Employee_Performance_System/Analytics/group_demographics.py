@@ -13,6 +13,15 @@ except ImportError:
     from Analytics.powermap import detect_synchronized_groups
 
 
+def _filter_by_branch_scope(df, branch, branch_col="branch"):
+    if df is None or getattr(df, "empty", True) or not branch:
+        return df
+    if branch_col not in df.columns:
+        return df
+    scope = str(branch or "").strip()
+    return df[df[branch_col].fillna("").astype(str).str.strip() == scope].copy()
+
+
 # =====================================================
 # GROUP DEMOGRAPHICS & ANALYSIS
 # =====================================================
@@ -35,6 +44,10 @@ def analyze_group_demographics(ratings_df, attendance_df=None, users_df=None, or
         "high_risk_groups": [],
     }
     
+    ratings_df = _filter_by_branch_scope(ratings_df, branch, "branch")
+    attendance_df = _filter_by_branch_scope(attendance_df, branch, "branch")
+    users_df = _filter_by_branch_scope(users_df, branch, "branch")
+
     if ratings_df is None or ratings_df.empty:
         return analysis
     
@@ -140,8 +153,17 @@ def analyze_group_demographics(ratings_df, attendance_df=None, users_df=None, or
 def save_group_demographics_to_db(organization, branch, demographics_data):
     """Saves group demographics findings to database for tracking."""
     
+    scope_branch = str(branch or "").strip()
+    if scope_branch.lower() in {"all", "all branches"}:
+        scope_branch = ""
+
     conn = get_connection()
     cursor = conn.cursor()
+
+    cursor.execute(
+        "DELETE FROM group_demographics WHERE organization=? AND COALESCE(branch, '')=?",
+        (organization, scope_branch),
+    )
     
     for group in demographics_data.get("group_details", []):
         notes = json.dumps(
@@ -170,7 +192,7 @@ def save_group_demographics_to_db(organization, branch, demographics_data):
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """, (
             organization,
-            branch,
+            scope_branch,
             group["group_id"],
             group["group_type"],
             ",".join(group["members"]),

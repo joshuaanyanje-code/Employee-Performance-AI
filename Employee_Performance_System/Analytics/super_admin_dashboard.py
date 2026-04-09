@@ -25,6 +25,51 @@ def _safe_float(value, default=0.0):
         return default
 
 
+def _normalize_role_name(value):
+    role = str(value or "").strip().lower()
+    if role in {"super_admin", "superadmin"}:
+        return "super_admin"
+    if role in {"master", "master_admin", "owner", "overall"}:
+        return "master"
+    if role in {"admin", "manager"}:
+        return "admin"
+    return role
+
+
+def _filter_scope_frame(df, branch=None, branch_columns=None):
+    if df is None or getattr(df, "empty", True) or not branch:
+        return df
+
+    branch_value = str(branch or "").strip()
+    columns = list(branch_columns or ["branch"])
+    out = df.copy()
+    matched = False
+    for col in columns:
+        if col in out.columns:
+            out = out[out[col].fillna("").astype(str).str.strip() == branch_value].copy()
+            matched = True
+            break
+    return out if matched else df
+
+
+def _filter_user_scoped_frame(df, allowed_usernames, user_columns):
+    if df is None or getattr(df, "empty", True):
+        return df
+
+    columns = [col for col in (user_columns or []) if col in df.columns]
+    if not columns:
+        return df
+
+    if not allowed_usernames:
+        return df.iloc[0:0].copy()
+
+    out = df.copy()
+    allowed = {str(name).strip() for name in allowed_usernames if str(name).strip()}
+    for col in columns:
+        out = out[out[col].fillna("").astype(str).str.strip().isin(allowed)]
+    return out.copy()
+
+
 def _calculate_payment_trend(payments_df):
     if payments_df is None or payments_df.empty or "created_at" not in payments_df.columns:
         return {
@@ -1744,6 +1789,42 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None, 
     leaves_df = _filter_dataframe_by_date_range(leaves_full_df, ["reviewed_at", "start_date", "end_date"], start_date, end_date)
     payments_df = _filter_dataframe_by_date_range(payments_df, ["created_at"], start_date, end_date)
     messages_df = _filter_dataframe_by_date_range(messages_df, ["created_at"], start_date, end_date)
+
+    if users_df is not None and not users_df.empty and "role" in users_df.columns:
+        users_df = users_df.copy()
+        users_df["role_norm"] = users_df["role"].map(_normalize_role_name)
+        users_df = users_df[~users_df["role_norm"].isin({"super_admin", "master"})].copy()
+    if branch:
+        users_df = _filter_scope_frame(users_df, branch, ["branch"])
+        branches_df = _filter_scope_frame(branches_df, branch, ["name", "branch"])
+
+    allowed_usernames = set()
+    if users_df is not None and not users_df.empty and "username" in users_df.columns:
+        allowed_usernames = {
+            str(name).strip()
+            for name in users_df["username"].dropna().astype(str).tolist()
+            if str(name).strip()
+        }
+
+    ratings_full_df = _filter_scope_frame(ratings_full_df, branch, ["branch"])
+    ratings_df = _filter_scope_frame(ratings_df, branch, ["branch"])
+    attendance_full_df = _filter_scope_frame(attendance_full_df, branch, ["branch"])
+    attendance_df = _filter_scope_frame(attendance_df, branch, ["branch"])
+    warnings_full_df = _filter_scope_frame(warnings_full_df, branch, ["branch"])
+    warnings_df = _filter_scope_frame(warnings_df, branch, ["branch"])
+    leaves_full_df = _filter_scope_frame(leaves_full_df, branch, ["branch"])
+    leaves_df = _filter_scope_frame(leaves_df, branch, ["branch"])
+    messages_df = _filter_scope_frame(messages_df, branch, ["branch"])
+
+    ratings_full_df = _filter_user_scoped_frame(ratings_full_df, allowed_usernames, ["rater", "rated"])
+    ratings_df = _filter_user_scoped_frame(ratings_df, allowed_usernames, ["rater", "rated"])
+    attendance_full_df = _filter_user_scoped_frame(attendance_full_df, allowed_usernames, ["username"])
+    attendance_df = _filter_user_scoped_frame(attendance_df, allowed_usernames, ["username"])
+    warnings_full_df = _filter_user_scoped_frame(warnings_full_df, allowed_usernames, ["username"])
+    warnings_df = _filter_user_scoped_frame(warnings_df, allowed_usernames, ["username"])
+    leaves_full_df = _filter_user_scoped_frame(leaves_full_df, allowed_usernames, ["username"])
+    leaves_df = _filter_user_scoped_frame(leaves_df, allowed_usernames, ["username"])
+    messages_df = _filter_user_scoped_frame(messages_df, allowed_usernames, ["from_user", "to_user"])
     
     conn.close()
     
@@ -1762,10 +1843,17 @@ def get_super_admin_dashboard(organization, branch=None, super_admin_user=None, 
     # =========================
     # EXECUTIVE SUMMARY
     # =========================
+    admin_count = 0
+    if users_df is not None and not users_df.empty:
+        if "role_norm" in users_df.columns:
+            admin_count = int((users_df["role_norm"] == "admin").sum())
+        elif "role" in users_df.columns:
+            admin_count = int(users_df["role"].astype(str).str.lower().isin(["admin", "manager"]).sum())
+
     dashboard["executive_summary"] = {
         "summary_points": intelligence.get("executive_summary", []),
         "total_employees": len(users_df),
-        "admins_count": len(users_df[users_df["role"] == "admin"]),
+        "admins_count": admin_count,
         "team_health_score": intelligence.get("team_health", {}).get("overall_score", 0),
         "team_health_status": intelligence.get("team_health", {}).get("status", "Unknown"),
     }

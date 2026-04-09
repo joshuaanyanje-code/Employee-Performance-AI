@@ -3339,19 +3339,23 @@ def super_admin_dashboard():
                 # Run and save fresh data
                 with st.spinner("Analyzing demographics..."):
                     try:
-                        from Analytics.group_demographics import analyze_group_demographics, save_group_demographics_to_db
+                        from Analytics.group_demographics import analyze_group_demographics
                         users_df_d   = safe_read("SELECT * FROM users WHERE organization=?", conn, params=(org,))
                         ratings_df_d = safe_read("SELECT * FROM ratings WHERE organization=?", conn, params=(org,))
                         att_df_d     = safe_read("SELECT * FROM attendance WHERE organization=?", conn, params=(org,))
-                        # Apply role filter
-                        if ANALYTICS_OK and not users_df_d.empty and "role" in users_df_d.columns:
-                            excluded = ["master", "super_admin"]
-                            users_df_d = users_df_d[~users_df_d["role"].isin(excluded)]
-                            if not ratings_df_d.empty and "ratee" in ratings_df_d.columns:
-                                ratings_df_d = ratings_df_d[~ratings_df_d["ratee"].isin(users_df_d["username"] == False)]
-                        demo_result = analyze_group_demographics(ratings_df_d, att_df_d, users_df_d, org, branch_filter_demo)
-                        save_group_demographics_to_db(org, branch_filter_demo or "all", demo_result)
-                        st.success("Demographics updated.")
+                        if not users_df_d.empty and "role" in users_df_d.columns:
+                            role_norm = users_df_d["role"].fillna("").astype(str).str.lower().str.strip()
+                            excluded = ["master", "master_admin", "super_admin", "superadmin", "owner"]
+                            users_df_d = users_df_d[~role_norm.isin(excluded)].copy()
+                        if branch_filter_demo:
+                            if not users_df_d.empty and "branch" in users_df_d.columns:
+                                users_df_d = users_df_d[users_df_d["branch"].fillna("").astype(str).str.strip() == str(branch_filter_demo)].copy()
+                            if not ratings_df_d.empty and "branch" in ratings_df_d.columns:
+                                ratings_df_d = ratings_df_d[ratings_df_d["branch"].fillna("").astype(str).str.strip() == str(branch_filter_demo)].copy()
+                            if not att_df_d.empty and "branch" in att_df_d.columns:
+                                att_df_d = att_df_d[att_df_d["branch"].fillna("").astype(str).str.strip() == str(branch_filter_demo)].copy()
+                        analyze_group_demographics(ratings_df_d, att_df_d, users_df_d, org, branch_filter_demo)
+                        st.success(f"Demographics updated for {branch_filter_demo or 'all branches'}.")
                     except Exception as e:
                         st.error(f"Error: {e}")
 

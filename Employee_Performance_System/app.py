@@ -728,7 +728,7 @@ if qp_kiosk and qp_org:
     if kiosk_access_issue:
         apply_responsive_ui("kiosk")
         st.error(kiosk_access_issue)
-        st.info("This kiosk is currently disabled. Contact the organization administrator or master admin.")
+        st.info("This kiosk is currently disabled. Contact the Organization Administrator or Super Admin.")
         st.stop()
 
     kiosk_dashboard = load_dashboard("kiosk")
@@ -778,7 +778,7 @@ def login():
                 return
 
             # MASTER LOGIN
-            if username == "master" and password == "1234":
+            if username == "Master" and password == "Admin123":
                 token = _create_login_session(conn, "master", "master", "MASTER")
                 st.session_state.update({
                     "logged": True,
