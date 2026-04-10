@@ -21,6 +21,7 @@ except ImportError:
 ROLE_ALIASES = {
     "master": {"master", "master_admin", "owner", "overall"},
     "super_admin": {"super_admin", "superadmin"},
+    "hr": {"hr", "human_resources", "people_ops"},
     "admin": {"admin", "manager"},
     "employee": {"employee"},
     "kiosk": {"kiosk"},
@@ -29,6 +30,7 @@ ROLE_ALIASES = {
 ROLE_EXCLUSIONS = {
     "master": [],                                  # BOSS — full visibility
     "super_admin": ["super_admin", "master"],   # no peer/boss data
+    "hr": ["super_admin", "master"],            # HR sees org people data, not boss layer
     "admin": ["super_admin", "master"],         # no super_admin/master data
     "employee": ["super_admin", "master", "admin"],
     "kiosk": ["super_admin", "master", "admin"],

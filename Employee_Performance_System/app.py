@@ -627,6 +627,7 @@ DASHBOARD_TARGETS = {
     "super_admin": ("Dashboards.super_admin", "super_admin_dashboard"),
     "master_admin": ("Dashboards.master_admin", "master_admin_dashboard"),
     "admin": ("Dashboards.admin", "admin_dashboard"),
+    "hr": ("Dashboards.hr", "hr_dashboard"),
     "employee": ("Dashboards.employee", "employee_dashboard"),
     "kiosk": ("Dashboards.kiosk", "kiosk_dashboard"),
     "attendance": ("Dashboards.attendance", "attendance_dashboard"),
@@ -917,6 +918,13 @@ elif role == "admin":
     admin_dashboard = load_dashboard("admin")
     if admin_dashboard:
         admin_dashboard()
+
+
+# ================= HR =================
+elif role == "hr":
+    hr_dashboard = load_dashboard("hr")
+    if hr_dashboard:
+        hr_dashboard()
 
 
 # ================= EMPLOYEE =================

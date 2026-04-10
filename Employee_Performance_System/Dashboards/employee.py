@@ -1,7 +1,8 @@
+import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message
+from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message, get_hr_config
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
@@ -165,6 +166,28 @@ def employee_dashboard():
         st.warning("⚠ Your account is on probation and under management review.")
 
     branch = user_data.iloc[0]["branch"]
+    hr_config = get_hr_config(conn, org)
+    hr_mode_enabled = bool(int(hr_config.get("hr_mode_enabled", 0) or 0))
+    hr_coverage_df = _safe_read(
+        conn,
+        """
+        SELECT username, branch
+        FROM users
+        WHERE organization=?
+          AND lower(coalesce(role,''))='hr'
+          AND lower(coalesce(status,'active'))='active'
+          AND (trim(coalesce(branch,''))='' OR lower(trim(coalesce(branch,'')))=lower(trim(?)))
+        ORDER BY CASE WHEN trim(coalesce(branch,''))='' THEN 0 ELSE 1 END, username
+        """,
+        params=(org, branch),
+    ) if hr_mode_enabled else pd.DataFrame()
+    has_hr_coverage = hr_mode_enabled and not hr_coverage_df.empty
+    has_org_wide_hr = has_hr_coverage and hr_coverage_df["branch"].fillna("").astype(str).str.strip().eq("").any()
+    hr_scope_label = "Organization-wide HR" if has_org_wide_hr else (f"Branch HR ({branch})" if has_hr_coverage else "")
+
+    employee_docs_enabled = has_hr_coverage and bool(int(hr_config.get("hr_documents_enabled", 1) or 0))
+    employee_onboarding_enabled = has_hr_coverage and bool(int(hr_config.get("hr_onboarding_enabled", 1) or 0))
+    employee_case_updates_enabled = has_hr_coverage and bool(int(hr_config.get("hr_case_files_enabled", 1) or 0))
 
     st.title("Employee Dashboard")
     render_dashboard_banner(
@@ -178,6 +201,11 @@ def employee_dashboard():
         ],
     )
     show_flash_message()
+
+    if hr_mode_enabled and has_hr_coverage:
+        st.caption(f"HR support is active for you via {hr_scope_label}. Any employee-safe HR documents, onboarding tasks, and updates will appear in this dashboard only for your profile.")
+    elif hr_mode_enabled and not has_hr_coverage:
+        st.caption("HR mode is enabled for the organization, but there is currently no HR partner assigned to your branch scope yet.")
 
     # ==============================
     # NOTIFICATION COUNT
@@ -204,11 +232,17 @@ def employee_dashboard():
             return st.selectbox(label, options, key=key, **kwargs)
 
     page_items = [
-        "Profile", "Schedule", "Attendance", "Leave",
-        "Notifications", "Rate", "My Score",
+        "Profile", "Schedule", "Attendance", "Leave", "Notifications"
+    ]
+    if employee_docs_enabled:
+        page_items.append("My HR Documents")
+    if employee_onboarding_enabled:
+        page_items.append("My Onboarding")
+    page_items.extend([
+        "Rate", "My Score",
         "Analytics", "Top Performers",
         "🏅 Badges", "Polls", "Message Management", "Settings"
-    ]
+    ])
 
     if is_mobile:
         if st.button("Change Menu / Filter", key="employee_reopen_nav", use_container_width=True):
@@ -554,7 +588,21 @@ def employee_dashboard():
             params=(username, org)
         )
 
-        if msgs.empty and warns.empty and leaves.empty:
+        visible_hr_cases = _safe_read(
+            conn,
+            """
+            SELECT case_type, title, note, status, created_at, updated_at
+            FROM hr_case_files
+            WHERE organization=? AND username=?
+              AND lower(coalesce(visibility,'hr'))='employee'
+              AND (trim(coalesce(branch,''))='' OR lower(trim(coalesce(branch,'')))=lower(trim(?)))
+            ORDER BY id DESC
+            LIMIT 10
+            """,
+            params=(org, username, branch),
+        ) if employee_case_updates_enabled else pd.DataFrame()
+
+        if msgs.empty and warns.empty and leaves.empty and visible_hr_cases.empty:
             st.info("No notifications")
 
         for _, r in msgs.iterrows():
@@ -595,6 +643,166 @@ def employee_dashboard():
                     st.error(f"Leave Rejected: {message}")
                 else:
                     st.info(f"Leave Pending: {message}")
+
+        if not visible_hr_cases.empty:
+            st.subheader("HR Updates")
+            for _, case_row in visible_hr_cases.iterrows():
+                case_status = str(case_row.get("status", "open") or "open").strip().lower()
+                case_title = str(case_row.get("title", "HR Update") or "HR Update").strip()
+                case_note = str(case_row.get("note", "") or "").strip()
+                case_type = str(case_row.get("case_type", "case") or "case").replace("_", " ").title()
+                case_when = str(case_row.get("updated_at", "") or case_row.get("created_at", "")).strip()
+                message = f"{case_type}: {case_title}"
+                if case_note:
+                    message = f"{message} | {case_note}"
+                if case_when:
+                    message = f"{message} | Updated: {case_when[:16]}"
+                if case_status == "closed":
+                    st.success(message)
+                elif case_status == "in_review":
+                    st.warning(message)
+                else:
+                    st.info(message)
+
+    # =====================================================
+    # MY HR DOCUMENTS
+    # =====================================================
+    elif page == "My HR Documents":
+        st.subheader("My HR Documents")
+        st.caption("Documents shared with you by HR or super admin will appear here. You can download them and acknowledge receipt.")
+
+        if not employee_docs_enabled:
+            st.info("HR documents are not enabled for your organization.")
+        else:
+            docs_df = _safe_read(
+                conn,
+                """
+                SELECT id, title, doc_type, note, file_name, file_path, mime_type, file_size,
+                       created_at, uploaded_by, employee_acknowledged, acknowledged_at, acknowledged_note
+                FROM hr_documents
+                WHERE organization=? AND username=?
+                  AND lower(coalesce(visibility,'hr'))='employee'
+                  AND (trim(coalesce(branch,''))='' OR lower(trim(coalesce(branch,'')))=lower(trim(?)))
+                ORDER BY id DESC
+                """,
+                params=(org, username, branch),
+            )
+
+            if docs_df.empty:
+                st.info("No HR documents have been shared with you yet.")
+            else:
+                docs_view = docs_df.copy()
+                docs_view["employee_acknowledged"] = docs_view["employee_acknowledged"].apply(lambda v: "Yes" if int(v or 0) == 1 else "No")
+                st.dataframe(
+                    docs_view[[c for c in ["created_at", "title", "doc_type", "uploaded_by", "employee_acknowledged", "acknowledged_at", "file_name", "file_size"] if c in docs_view.columns]],
+                    use_container_width=True,
+                    hide_index=True,
+                )
+
+                for _, doc in docs_df.iterrows():
+                    doc_id = int(doc.get("id", 0) or 0)
+                    with st.expander(f"{str(doc.get('title', 'Document'))} | {str(doc.get('created_at', ''))[:16]}"):
+                        st.write(str(doc.get("note", "") or "No note provided."))
+                        file_path = str(doc.get("file_path", "") or "")
+                        if file_path and os.path.exists(file_path):
+                            with open(file_path, "rb") as handle:
+                                st.download_button(
+                                    "Download document",
+                                    data=handle.read(),
+                                    file_name=str(doc.get("file_name", "document.bin") or "document.bin"),
+                                    mime=str(doc.get("mime_type", "application/octet-stream") or "application/octet-stream"),
+                                    key=f"employee_hr_doc_download_{doc_id}",
+                                )
+                        else:
+                            st.warning("This file is no longer available on disk.")
+
+                        acknowledged = int(doc.get("employee_acknowledged", 0) or 0) == 1
+                        if acknowledged:
+                            ack_when = str(doc.get("acknowledged_at", "") or "").strip()
+                            ack_note = str(doc.get("acknowledged_note", "") or "").strip()
+                            st.success(f"Acknowledged{(' on ' + ack_when[:16]) if ack_when else ''}.")
+                            if ack_note:
+                                st.caption(f"Your note: {ack_note}")
+                        else:
+                            ack_note = st.text_area("Acknowledgement note (optional)", key=f"employee_doc_ack_note_{doc_id}")
+                            if st.button("Acknowledge receipt", key=f"employee_doc_ack_btn_{doc_id}"):
+                                execute_write(
+                                    conn,
+                                    """
+                                    UPDATE hr_documents
+                                    SET employee_acknowledged=1, acknowledged_at=datetime('now'), acknowledged_note=?
+                                    WHERE id=? AND organization=? AND username=?
+                                    """,
+                                    (ack_note.strip(), doc_id, org, username),
+                                )
+                                conn.commit()
+                                refresh_with_message("Document acknowledged successfully.")
+
+    # =====================================================
+    # MY ONBOARDING
+    # =====================================================
+    elif page == "My Onboarding":
+        st.subheader("My Onboarding Checklist")
+        st.caption("Track your onboarding tasks and update progress as you complete each step.")
+
+        if not employee_onboarding_enabled:
+            st.info("Onboarding checklist automation is not enabled for your organization.")
+        else:
+            onboarding_df = _safe_read(
+                conn,
+                """
+                SELECT id, checklist_name, task_name, status, note, due_date, assigned_by, completed_at, created_at
+                FROM hr_onboarding_checklists
+                WHERE organization=? AND username=?
+                  AND (trim(coalesce(branch,''))='' OR lower(trim(coalesce(branch,'')))=lower(trim(?)))
+                ORDER BY id DESC
+                """,
+                params=(org, username, branch),
+            )
+
+            if onboarding_df.empty:
+                st.info("No onboarding tasks have been assigned to you yet.")
+            else:
+                status_series = onboarding_df["status"].astype(str).str.lower()
+                total_tasks = len(onboarding_df)
+                done_tasks = int((status_series == "done").sum())
+                in_progress_tasks = int((status_series == "in_progress").sum())
+                pending_tasks = int((status_series == "pending").sum())
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric("Total Tasks", total_tasks)
+                c2.metric("Done", done_tasks)
+                c3.metric("In Progress", in_progress_tasks)
+                c4.metric("Pending", pending_tasks)
+                st.dataframe(onboarding_df, use_container_width=True, hide_index=True)
+
+                task_labels = [
+                    f"#{int(row['id'])} | {row['task_name']} | {row['status']}"
+                    for _, row in onboarding_df.iterrows()
+                ]
+                selected_task = st.selectbox("Update a task", task_labels, key="employee_onboarding_pick")
+                task_row = onboarding_df.iloc[task_labels.index(selected_task)]
+                current_status = str(task_row.get("status", "pending") or "pending")
+                with st.form("employee_onboarding_update_form", clear_on_submit=False):
+                    new_status = st.selectbox(
+                        "Task status",
+                        ["pending", "in_progress", "done"],
+                        index=["pending", "in_progress", "done"].index(current_status) if current_status in ["pending", "in_progress", "done"] else 0,
+                    )
+                    progress_note = st.text_area("Progress note", value=str(task_row.get("note", "") or ""))
+                    submit_task = st.form_submit_button("Save progress")
+                    if submit_task:
+                        completed_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S") if new_status == "done" else ""
+                        execute_write(
+                            conn,
+                            """
+                            UPDATE hr_onboarding_checklists
+                            SET status=?, note=?, completed_at=?
+                            WHERE id=? AND organization=? AND username=?
+                            """,
+                            (new_status, progress_note.strip(), completed_at, int(task_row.get("id", 0) or 0), org, username),
+                        )
+                        conn.commit()
+                        refresh_with_message("Onboarding task updated.")
 
     # =====================================================
     # RATE (ADMIN INCLUDED)

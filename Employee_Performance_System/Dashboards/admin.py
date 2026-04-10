@@ -2,7 +2,7 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
-from database.db import cached_read_sql, get_connection, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
+from database.db import cached_read_sql, get_connection, get_hr_config, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -171,6 +171,12 @@ def admin_dashboard():
     work_end = parse_hhmm(settings.get("work_end", "18:00"), "18:00")
     ensure_poll_tables(conn)
 
+    hr_config = get_hr_config(conn, org)
+    hr_mode_enabled = bool(int(hr_config.get("hr_mode_enabled", 0) or 0))
+    hr_handles_leave = hr_mode_enabled and bool(int(hr_config.get("hr_handles_leave", 1) or 0))
+    hr_handles_discipline = hr_mode_enabled and bool(int(hr_config.get("hr_handles_discipline", 1) or 0))
+    hr_handles_performance = hr_mode_enabled and bool(int(hr_config.get("hr_handles_performance", 1) or 0))
+
     st.title("Admin Dashboard")
     render_dashboard_banner(
         "Branch leadership",
@@ -184,6 +190,17 @@ def admin_dashboard():
     )
     st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
     show_flash_message()
+
+    if hr_mode_enabled:
+        delegated = []
+        if hr_handles_leave:
+            delegated.append("leave approvals")
+        if hr_handles_discipline:
+            delegated.append("discipline and warnings")
+        if hr_handles_performance:
+            delegated.append("performance governance")
+        if delegated:
+            st.info("HR mode is ON. HR now manages " + ", ".join(delegated) + ", while branch admin stays focused on daily operations and attendance.")
 
     is_mobile = is_mobile_device()
 
@@ -218,6 +235,10 @@ def admin_dashboard():
         "Staff Check In",
         "Settings",
     ]
+    if hr_handles_discipline:
+        menu_items = [item for item in menu_items if item != "Warnings"]
+    if hr_handles_performance:
+        menu_items = [item for item in menu_items if item != "Rate"]
 
     if is_mobile:
         if st.button("Change Menu / Filter", key="admin_reopen_nav", use_container_width=True):
@@ -1194,6 +1215,8 @@ def admin_dashboard():
                 pending_df = leaves_df[leaves_df["status"].astype(str).str.lower() == "pending"].copy()
                 if pending_df.empty:
                     st.info("No pending leave requests in this branch.")
+                elif hr_handles_leave:
+                    st.info("HR mode is ON. Branch managers can view leave requests here, but HR reviews them and submits the final recommendation to super admin.")
                 else:
                     st.markdown("### Review Pending Leave Requests")
                     for _, leave_row in pending_df.iterrows():
@@ -1293,6 +1316,9 @@ def admin_dashboard():
         st.subheader("Warnings")
         st.caption("Send admin warnings to employees and review warning history.")
 
+        if hr_handles_discipline:
+            st.info("HR mode is ON. Formal discipline and warning actions are managed from the HR dashboard.")
+
         employees_df = safe_read(
             "SELECT username FROM users WHERE organization=? AND branch=? AND role='employee' ORDER BY username",
             conn,
@@ -1301,7 +1327,7 @@ def admin_dashboard():
 
         if employees_df.empty:
             st.info("No employees available for warning.")
-        else:
+        elif not hr_handles_discipline:
             with st.form("admin_warn_form", clear_on_submit=False):
                 target = st.selectbox("Employee", employees_df["username"].tolist(), key="admin_warn_target")
                 warn_type = st.selectbox(

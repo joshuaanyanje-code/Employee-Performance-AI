@@ -554,6 +554,58 @@ def get_phone_uniqueness_error(conn, phone, exclude_username=None, exclude_organ
     return normalized, ""
 
 
+def get_hr_config(conn, organization=""):
+    config = {
+        "hr_mode_enabled": 0,
+        "hr_scope_default": "organization",
+        "hr_handles_leave": 1,
+        "hr_handles_discipline": 1,
+        "hr_handles_performance": 1,
+        "hr_handles_people_changes": 1,
+        "hr_case_files_enabled": 1,
+        "hr_documents_enabled": 1,
+        "hr_onboarding_enabled": 1,
+        "hr_require_recommendation_note": 1,
+        "hr_require_super_admin_note": 1,
+    }
+    org_name = str(organization or "").strip()
+    if not org_name:
+        return config
+
+    try:
+        row = conn.execute(
+            """
+            SELECT hr_mode_enabled, hr_scope_default, hr_handles_leave, hr_handles_discipline, hr_handles_performance,
+                   hr_handles_people_changes, hr_case_files_enabled, hr_documents_enabled, hr_onboarding_enabled,
+                   hr_require_recommendation_note, hr_require_super_admin_note
+            FROM organization_hr_settings
+            WHERE organization=?
+            LIMIT 1
+            """,
+            (org_name,),
+        ).fetchone()
+        if row:
+            config.update(
+                {
+                    "hr_mode_enabled": int(row[0] or 0),
+                    "hr_scope_default": str(row[1] or "organization"),
+                    "hr_handles_leave": int(row[2] if row[2] is not None else 1),
+                    "hr_handles_discipline": int(row[3] if row[3] is not None else 1),
+                    "hr_handles_performance": int(row[4] if row[4] is not None else 1),
+                    "hr_handles_people_changes": int(row[5] if row[5] is not None else 1),
+                    "hr_case_files_enabled": int(row[6] if row[6] is not None else 1),
+                    "hr_documents_enabled": int(row[7] if row[7] is not None else 1),
+                    "hr_onboarding_enabled": int(row[8] if row[8] is not None else 1),
+                    "hr_require_recommendation_note": int(row[9] if row[9] is not None else 1),
+                    "hr_require_super_admin_note": int(row[10] if row[10] is not None else 1),
+                }
+            )
+    except Exception:
+        pass
+
+    return config
+
+
 # =========================
 # LOG SYSTEM (NO IMPORT LOOP 🔥)
 # =========================
@@ -1024,6 +1076,40 @@ def create_tables():
     """)
 
     # =========================
+    # ORGANIZATION HR SETTINGS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS organization_hr_settings(
+        organization TEXT PRIMARY KEY,
+        hr_mode_enabled INTEGER DEFAULT 0,
+        hr_scope_default TEXT DEFAULT 'organization',
+        hr_handles_leave INTEGER DEFAULT 1,
+        hr_handles_discipline INTEGER DEFAULT 1,
+        hr_handles_performance INTEGER DEFAULT 1,
+        hr_handles_people_changes INTEGER DEFAULT 1,
+        hr_case_files_enabled INTEGER DEFAULT 1,
+        hr_documents_enabled INTEGER DEFAULT 1,
+        hr_onboarding_enabled INTEGER DEFAULT 1,
+        hr_require_recommendation_note INTEGER DEFAULT 1,
+        hr_require_super_admin_note INTEGER DEFAULT 1,
+        updated_by TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+    )
+    """)
+    for alter_sql in [
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_handles_people_changes INTEGER DEFAULT 1",
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_case_files_enabled INTEGER DEFAULT 1",
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_documents_enabled INTEGER DEFAULT 1",
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_onboarding_enabled INTEGER DEFAULT 1",
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_require_recommendation_note INTEGER DEFAULT 1",
+        "ALTER TABLE organization_hr_settings ADD COLUMN hr_require_super_admin_note INTEGER DEFAULT 1",
+    ]:
+        try:
+            c.execute(alter_sql)
+        except Exception:
+            pass
+
+    # =========================
     # AUDIT LOGS
     # =========================
     c.execute("""
@@ -1055,6 +1141,81 @@ def create_tables():
         review_note TEXT,
         created_at TEXT,
         reviewed_at TEXT
+    )
+    """)
+
+    # =========================
+    # HR CASE FILES
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS hr_case_files(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT,
+        username TEXT,
+        case_type TEXT,
+        title TEXT,
+        note TEXT,
+        status TEXT DEFAULT 'open',
+        visibility TEXT DEFAULT 'hr',
+        created_by TEXT,
+        updated_by TEXT DEFAULT '',
+        created_at TEXT,
+        updated_at TEXT DEFAULT ''
+    )
+    """)
+
+    # =========================
+    # HR DOCUMENTS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS hr_documents(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT,
+        username TEXT,
+        title TEXT,
+        doc_type TEXT,
+        note TEXT DEFAULT '',
+        file_name TEXT,
+        file_path TEXT,
+        mime_type TEXT DEFAULT 'application/octet-stream',
+        file_size INTEGER DEFAULT 0,
+        visibility TEXT DEFAULT 'hr',
+        employee_acknowledged INTEGER DEFAULT 0,
+        acknowledged_at TEXT DEFAULT '',
+        acknowledged_note TEXT DEFAULT '',
+        uploaded_by TEXT,
+        created_at TEXT
+    )
+    """)
+    for alter_sql in [
+        "ALTER TABLE hr_documents ADD COLUMN employee_acknowledged INTEGER DEFAULT 0",
+        "ALTER TABLE hr_documents ADD COLUMN acknowledged_at TEXT DEFAULT ''",
+        "ALTER TABLE hr_documents ADD COLUMN acknowledged_note TEXT DEFAULT ''",
+    ]:
+        try:
+            c.execute(alter_sql)
+        except Exception:
+            pass
+
+    # =========================
+    # HR ONBOARDING CHECKLISTS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS hr_onboarding_checklists(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT,
+        username TEXT,
+        checklist_name TEXT DEFAULT 'Standard Onboarding',
+        task_name TEXT,
+        status TEXT DEFAULT 'pending',
+        note TEXT DEFAULT '',
+        due_date TEXT DEFAULT '',
+        assigned_by TEXT,
+        completed_at TEXT DEFAULT '',
+        created_at TEXT
     )
     """)
 
@@ -1159,6 +1320,7 @@ def create_tables():
     exclusion_rules = [
         ('MASTER', 'super_admin, master'),
         ('super_admin', 'super_admin, master'),
+        ('hr', 'super_admin, master'),
         ('admin', 'super_admin, master'),
         ('employee', 'super_admin, master, admin'),
     ]

@@ -1,4 +1,5 @@
-﻿import streamlit as st
+﻿import os
+import streamlit as st
 import pandas as pd
 import json
 import re
@@ -14,7 +15,7 @@ except Exception:
     holiday_lib = None
     HOLIDAYS_OK = False
 
-from database.db import cached_read_sql, get_connection, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
+from database.db import cached_read_sql, get_connection, get_hr_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
@@ -64,6 +65,15 @@ except Exception:
     def get_lateness_policy(*args, **kwargs):
         return {"amount_per_hour": 0.0, "currency": "KES", "pending_request": None}
 
+
+DEFAULT_ONBOARDING_TASKS = [
+    "Issue contract and confirm signed acceptance",
+    "Create staff profile and payroll setup",
+    "Assign branch, badge, and attendance access",
+    "Complete workplace orientation and policy briefing",
+    "Assign tools/equipment and confirm receipt",
+    "Schedule first-week manager check-in",
+]
 
 # ==============================
 # HELPERS
@@ -1050,6 +1060,14 @@ def super_admin_dashboard():
         st.session_state["sa_org_for_btype"] = org
 
     org_business_type = st.session_state["sa_business_type"]
+    hr_config = get_hr_config(conn, org)
+    hr_mode_enabled = bool(int(hr_config.get("hr_mode_enabled", 0) or 0))
+    hr_handles_people_changes = hr_mode_enabled and bool(int(hr_config.get("hr_handles_people_changes", 1) or 0))
+    hr_case_files_enabled = hr_mode_enabled and bool(int(hr_config.get("hr_case_files_enabled", 1) or 0))
+    hr_documents_enabled = hr_mode_enabled and bool(int(hr_config.get("hr_documents_enabled", 1) or 0))
+    hr_onboarding_enabled = hr_mode_enabled and bool(int(hr_config.get("hr_onboarding_enabled", 1) or 0))
+    hr_requires_recommendation_note = hr_mode_enabled and bool(int(hr_config.get("hr_require_recommendation_note", 1) or 0))
+    hr_requires_super_admin_note = hr_mode_enabled and bool(int(hr_config.get("hr_require_super_admin_note", 1) or 0))
 
     st.title(f"Managing Director - {org}")
 
@@ -2158,15 +2176,17 @@ def super_admin_dashboard():
             role_norm = role_view_df["role"].astype(str).str.lower()
             role_view_df["user_category"] = "Specialist"
             role_view_df.loc[role_norm.isin(["admin"]), "user_category"] = "Manager"
+            role_view_df.loc[role_norm.isin(["hr", "human_resources", "people_ops"]), "user_category"] = "HR"
             role_view_df.loc[role_norm.isin(["superadmin", "super_admin", "master", "owner"]), "user_category"] = "Managing Director"
 
-            r1, r2, r3 = st.columns(3)
+            r1, r2, r3, r4 = st.columns(4)
             r1.metric("Managing Directors", int((role_view_df["user_category"] == "Managing Director").sum()))
-            r2.metric("Managers", int((role_view_df["user_category"] == "Manager").sum()))
-            r3.metric("Specialists", int((role_view_df["user_category"] == "Specialist").sum()))
+            r2.metric("HR Partners", int((role_view_df["user_category"] == "HR").sum()))
+            r3.metric("Managers", int((role_view_df["user_category"] == "Manager").sum()))
+            r4.metric("Specialists", int((role_view_df["user_category"] == "Specialist").sum()))
 
             with st.expander("User Categories", expanded=False):
-                for category in ["Managing Director", "Manager", "Specialist"]:
+                for category in ["Managing Director", "HR", "Manager", "Specialist"]:
                     cat_df = role_view_df[role_view_df["user_category"] == category]
                     st.markdown(f"**{category}**")
                     if cat_df.empty:
@@ -2178,7 +2198,7 @@ def super_admin_dashboard():
                         )
 
         tab_all, tab_branch, tab_create, tab_manage, tab_requests = st.tabs([
-            "All Users", "By Branch", "Create User", "Manage User", "Admin Requests"
+            "All Users", "By Branch", "Create User", "Manage User", "Admin / HR Requests"
         ])
 
         with tab_all:
@@ -2224,17 +2244,29 @@ def super_admin_dashboard():
 
         with tab_create:
             with st.form("add_user", clear_on_submit=False):
-                u    = st.text_input("Username")
-                p    = st.text_input("Password", type="password")
-                pin  = st.text_input("PIN (4 digits, default 1234)")
+                u = st.text_input("Username")
+                p = st.text_input("Password", type="password")
+                pin = st.text_input("PIN (4 digits, default 1234)")
                 phone = st.text_input("Phone Number (required, full format e.g. 2547XXXXXXXX)")
-                role = st.selectbox("Role", ["employee", "admin"])
-                br   = st.selectbox("Branch", branches if branches else ["Create a branch first"])
+                role_options = ["employee", "admin"] + (["hr"] if hr_mode_enabled else [])
+                role = st.selectbox("Role", role_options)
+                if role == "hr":
+                    hr_branch_options = ["All Branches (Org HR)"] + (branches if branches else [])
+                    default_scope_index = 0 if str(hr_config.get("hr_scope_default", "organization")).lower() == "organization" or not branches else 1
+                    br = st.selectbox(
+                        "HR Scope",
+                        hr_branch_options,
+                        index=min(default_scope_index, len(hr_branch_options) - 1),
+                        help="Choose all branches for organization-wide HR, or assign HR to a single branch.",
+                    )
+                else:
+                    br = st.selectbox("Branch", branches if branches else ["Create a branch first"])
                 gender = st.selectbox("Gender", ["unknown", "male", "female"])
-                sub  = st.form_submit_button("Create User")
+                sub = st.form_submit_button("Create User")
 
                 if sub:
-                    if not branches:
+                    stored_branch = "" if role == "hr" and br == "All Branches (Org HR)" else br
+                    if role != "hr" and not branches:
                         st.error("Create a branch first.")
                     elif not u.strip():
                         st.error("Username is required.")
@@ -2252,14 +2284,15 @@ def super_admin_dashboard():
                         else:
                             conn.execute(
                                 "INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender) VALUES(?,?,?,?,?,?,?,?,?)",
-                                (u.strip(), hash_password(p), role, br, org, "active", pin.strip() or "1234", normalized_phone, gender)
+                                (u.strip(), hash_password(p), role, stored_branch, org, "active", pin.strip() or "1234", normalized_phone, gender)
                             )
                             conn.commit()
+                            scope_label = stored_branch or "All Branches"
                             log_action(conn, user, "CREATE USER", u, org)
                             set_flash_message(
                                 "super_admin_user_flash",
                                 "success",
-                                f"User '{u.strip()}' created in branch '{br}'.",
+                                f"User '{u.strip()}' created with role '{role}' in '{scope_label}'.",
                             )
                             st.rerun()
 
@@ -2373,6 +2406,82 @@ def super_admin_dashboard():
                     st.markdown("#### Transfer history")
                     st.dataframe(transfer_history_df, use_container_width=True, hide_index=True)
 
+                if hr_case_files_enabled:
+                    hr_case_history_df = safe_read(
+                        """
+                        SELECT created_at, case_type, title, status, visibility, created_by, note
+                        FROM hr_case_files
+                        WHERE organization=? AND username=?
+                        ORDER BY id DESC
+                        """,
+                        conn,
+                        params=(org, sel_user),
+                    )
+                    if not hr_case_history_df.empty:
+                        st.markdown("#### HR case file history")
+                        st.dataframe(hr_case_history_df, use_container_width=True, hide_index=True)
+
+                if hr_documents_enabled:
+                    hr_docs_df = safe_read(
+                        """
+                        SELECT id, created_at, title, doc_type, visibility, uploaded_by, file_name, file_path, mime_type, file_size, note,
+                               employee_acknowledged, acknowledged_at, acknowledged_note
+                        FROM hr_documents
+                        WHERE organization=? AND username=?
+                        ORDER BY id DESC
+                        """,
+                        conn,
+                        params=(org, sel_user),
+                    )
+                    if not hr_docs_df.empty:
+                        st.markdown("#### HR documents")
+                        docs_view = hr_docs_df.copy()
+                        if "employee_acknowledged" in docs_view.columns:
+                            docs_view["employee_acknowledged"] = docs_view["employee_acknowledged"].apply(lambda v: "Yes" if int(v or 0) == 1 else "No")
+                        st.dataframe(
+                            docs_view[[c for c in ["created_at", "title", "doc_type", "visibility", "uploaded_by", "employee_acknowledged", "acknowledged_at", "file_name", "file_size"] if c in docs_view.columns]],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        for _, doc in hr_docs_df.head(10).iterrows():
+                            with st.expander(f"{str(doc.get('title', 'Document'))} | {str(doc.get('created_at', ''))[:16]}"):
+                                st.write(str(doc.get("note", "") or "No note provided."))
+                                if int(doc.get("employee_acknowledged", 0) or 0) == 1:
+                                    ack_time = str(doc.get("acknowledged_at", "") or "").strip()
+                                    ack_note = str(doc.get("acknowledged_note", "") or "").strip()
+                                    st.success(f"Employee acknowledged{(' on ' + ack_time[:16]) if ack_time else ''}.")
+                                    if ack_note:
+                                        st.caption(f"Employee note: {ack_note}")
+                                else:
+                                    st.info("Employee has not acknowledged this document yet.")
+                                file_path = str(doc.get("file_path", "") or "")
+                                if file_path and os.path.exists(file_path):
+                                    with open(file_path, "rb") as handle:
+                                        st.download_button(
+                                            "Download HR document",
+                                            data=handle.read(),
+                                            file_name=str(doc.get("file_name", "document.bin") or "document.bin"),
+                                            mime=str(doc.get("mime_type", "application/octet-stream") or "application/octet-stream"),
+                                            key=f"sa_hr_doc_download_{int(doc.get('id', 0) or 0)}",
+                                        )
+                                else:
+                                    st.warning("Stored document file was not found on disk.")
+
+                if hr_onboarding_enabled:
+                    onboarding_history_df = safe_read(
+                        """
+                        SELECT created_at, checklist_name, task_name, status, due_date, completed_at, assigned_by, note
+                        FROM hr_onboarding_checklists
+                        WHERE organization=? AND username=?
+                        ORDER BY id DESC
+                        """,
+                        conn,
+                        params=(org, sel_user),
+                    )
+                    if not onboarding_history_df.empty:
+                        st.markdown("#### Onboarding checklist progress")
+                        st.dataframe(onboarding_history_df, use_container_width=True, hide_index=True)
+
         with tab_requests:
             req_df = apply_branch_scope(
                 safe_read(
@@ -2414,74 +2523,218 @@ def super_admin_dashboard():
                         created_at = str(req.get("created_at", "") or "")[:16]
                         req_reason = str(req.get("reason", "") or "")
 
+                        req_payload = {}
+                        try:
+                            if req_reason.strip().startswith("{"):
+                                req_payload = json.loads(req_reason)
+                        except Exception:
+                            req_payload = {}
+
+                        display_reason = clean_display_text(req_payload.get("summary", req_reason))
+
                         with st.expander(f"{target_user} | {action_type.title()} | by {requester} | {created_at}"):
                             st.write(f"Branch: {req_branch or 'N/A'}")
-                            st.write(f"Reason: {req_reason or 'No reason provided.'}")
-                            review_note = st.text_area("Review note", key=f"sa_req_note_{req_id}")
+                            st.write(f"Reason: {display_reason or 'No reason provided.'}")
+                            meta_bits = []
+                            if req_payload.get("warning_type"):
+                                meta_bits.append(f"Warning type: {clean_display_text(req_payload.get('warning_type'))}")
+                            if req_payload.get("leave_id"):
+                                meta_bits.append(f"Leave ID: {req_payload.get('leave_id')}")
+                            if req_payload.get("requested_branch"):
+                                meta_bits.append(f"Requested scope: {clean_display_text(req_payload.get('requested_branch'))}")
+                            if req_payload.get("case_kind"):
+                                meta_bits.append(f"Workflow: {clean_display_text(req_payload.get('case_kind'))}")
+                            if req_payload.get("new_role"):
+                                meta_bits.append(f"Proposed role: {clean_display_text(req_payload.get('new_role'))}")
+                            if req_payload.get("to_branch"):
+                                meta_bits.append(f"Destination branch: {clean_display_text(req_payload.get('to_branch'))}")
+                            if req_payload.get("effective_date"):
+                                meta_bits.append(f"Effective date: {clean_display_text(req_payload.get('effective_date'))}")
+                            if meta_bits:
+                                st.caption(" | ".join(meta_bits))
+
+                            requires_super_note = hr_requires_super_admin_note and (action_type in status_map or action_type.startswith("hr_"))
+                            note_label = "Super admin decision reason" if requires_super_note else "Review note"
+                            review_note = st.text_area(note_label, key=f"sa_req_note_{req_id}")
+                            clean_review_note = review_note.strip()
+                            if requires_super_note:
+                                st.caption("This request cannot be approved or rejected until a super admin decision reason is entered.")
                             qa, qb = st.columns(2)
                             if qa.button("Approve Request", key=f"sa_req_approve_{req_id}"):
-                                final_status = status_map.get(action_type, "active")
-                                conn.execute(
-                                    "UPDATE users SET status=? WHERE username=? AND organization=?",
-                                    (final_status, target_user, org),
-                                )
-                                conn.execute(
-                                    """
-                                    UPDATE admin_action_requests
-                                    SET status='approved', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
-                                    WHERE id=? AND organization=?
-                                    """,
-                                    (user, review_note.strip(), req_id, org),
-                                )
-                                try:
-                                    conn.execute(
-                                        """
-                                        INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
-                                        VALUES(?,?,?,?,?,datetime('now'))
-                                        """,
-                                        (
-                                            user,
-                                            target_user,
-                                            req_branch,
-                                            org,
-                                            f"Management update: your status is now '{final_status}'. {review_note.strip() or req_reason}".strip(),
-                                        ),
-                                    )
-                                except Exception:
-                                    pass
-                                conn.commit()
-                                log_action(conn, user, f"APPROVE {action_type.upper()} REQUEST", target_user, org)
-                                set_flash_message("super_admin_user_flash", "success", f"Request approved for {target_user}.")
-                                st.rerun()
+                                if requires_super_note and not clean_review_note:
+                                    st.error("A super admin decision reason is required before approving this request.")
+                                else:
+                                    final_status = status_map.get(action_type, "active")
+                                    notification_message = f"Management update: your status is now '{final_status}'. {clean_review_note or display_reason}".strip()
+                                    did_apply = False
+
+                                    if action_type in status_map:
+                                        conn.execute(
+                                            "UPDATE users SET status=? WHERE username=? AND organization=?",
+                                            (final_status, target_user, org),
+                                        )
+                                        if action_type == "activate" and str(req_payload.get("case_kind", "") or "").strip().lower() == "onboarding" and hr_onboarding_enabled:
+                                            checklist_name = "Standard Onboarding"
+                                            existing_tasks = safe_read(
+                                                "SELECT id FROM hr_onboarding_checklists WHERE organization=? AND username=? AND checklist_name=? LIMIT 1",
+                                                conn,
+                                                params=(org, target_user, checklist_name),
+                                            )
+                                            if existing_tasks.empty:
+                                                due_date = str(req_payload.get("effective_date", "") or date.today().strftime("%Y-%m-%d"))
+                                                for task_name in DEFAULT_ONBOARDING_TASKS:
+                                                    conn.execute(
+                                                        """
+                                                        INSERT INTO hr_onboarding_checklists(
+                                                            organization, branch, username, checklist_name, task_name,
+                                                            status, note, due_date, assigned_by, completed_at, created_at
+                                                        )
+                                                        VALUES(?,?,?,?,?,?,?,?,?,'',datetime('now'))
+                                                        """,
+                                                        (org, req_branch, target_user, checklist_name, task_name, "pending", "Auto-generated after super admin onboarding approval.", due_date, user),
+                                                    )
+                                        did_apply = True
+                                    elif action_type.startswith("hr_leave_"):
+                                        leave_id = int(req_payload.get("leave_id", 0) or 0)
+                                        target_status = {
+                                            "hr_leave_approve": "approved",
+                                            "hr_leave_reject": "rejected",
+                                            "hr_leave_reapply": "reapply",
+                                        }.get(action_type, "pending")
+                                        if leave_id <= 0:
+                                            st.error("This HR leave request is missing its leave reference.")
+                                        else:
+                                            note_text = " | ".join(
+                                                part for part in [
+                                                    f"HR recommendation by {requester}",
+                                                    str(req_payload.get("summary", "") or "").strip(),
+                                                    clean_review_note,
+                                                ] if part
+                                            )
+                                            conn.execute(
+                                                """
+                                                UPDATE leaves
+                                                SET status=?, approved_by=?, admin_note=?, reviewed_at=datetime('now')
+                                                WHERE id=? AND organization=?
+                                                """,
+                                                (target_status, user, note_text, leave_id, org),
+                                            )
+                                            final_status = target_status
+                                            notification_message = f"Your leave request has been {target_status}. {clean_review_note or display_reason}".strip()
+                                            did_apply = True
+                                    elif action_type == "hr_warning_issue":
+                                        warning_type = str(req_payload.get("warning_type", req.get("target_role", "other")) or "other")
+                                        warning_text = str(req_payload.get("summary", req_reason) or req_reason).strip()
+                                        conn.execute(
+                                            """
+                                            INSERT INTO warnings(username,organization,branch,type,message,created_at)
+                                            VALUES (?,?,?,?,?,datetime('now'))
+                                            """,
+                                            (target_user, org, req_branch, warning_type, f"[HR request approved by {user}] {warning_text}"),
+                                        )
+                                        final_status = "warning_issued"
+                                        notification_message = f"An HR warning request was approved for you. {clean_review_note or display_reason}".strip()
+                                        did_apply = True
+                                    elif action_type == "hr_transfer_request":
+                                        to_branch = str(req_payload.get("to_branch", "") or "").strip()
+                                        transfer_note = " | ".join(
+                                            part for part in [
+                                                f"HR recommendation by {requester}",
+                                                str(req_payload.get("summary", "") or "").strip(),
+                                                clean_review_note,
+                                            ] if part
+                                        )
+                                        if not to_branch:
+                                            st.error("This HR transfer request is missing its destination branch.")
+                                        else:
+                                            move_ok, move_msg = transfer_staff_member(conn, org, target_user, to_branch, user, transfer_note)
+                                            if not move_ok:
+                                                st.error(move_msg)
+                                            else:
+                                                final_status = f"transferred to {to_branch}"
+                                                notification_message = f"Your transfer request was approved. {clean_review_note or display_reason}".strip()
+                                                did_apply = True
+                                    elif action_type == "hr_role_change_request":
+                                        new_role = str(req_payload.get("new_role", "") or "").strip().lower()
+                                        allowed_roles = {"employee", "admin"} | ({"hr"} if hr_mode_enabled else set())
+                                        if new_role not in allowed_roles:
+                                            st.error("This HR role-change request has an invalid target role.")
+                                        else:
+                                            conn.execute(
+                                                "UPDATE users SET role=? WHERE username=? AND organization=?",
+                                                (new_role, target_user, org),
+                                            )
+                                            final_status = f"role changed to {new_role}"
+                                            notification_message = f"Your role change was approved. {clean_review_note or display_reason}".strip()
+                                            did_apply = True
+                                    else:
+                                        conn.execute(
+                                            "UPDATE users SET status=? WHERE username=? AND organization=?",
+                                            (final_status, target_user, org),
+                                        )
+                                        did_apply = True
+
+                                    if did_apply:
+                                        conn.execute(
+                                            """
+                                            UPDATE admin_action_requests
+                                            SET status='approved', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
+                                            WHERE id=? AND organization=?
+                                            """,
+                                            (user, clean_review_note, req_id, org),
+                                        )
+                                        try:
+                                            conn.execute(
+                                                """
+                                                INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                                                VALUES(?,?,?,?,?,datetime('now'))
+                                                """,
+                                                (
+                                                    user,
+                                                    target_user,
+                                                    req_branch,
+                                                    org,
+                                                    notification_message,
+                                                ),
+                                            )
+                                        except Exception:
+                                            pass
+                                        conn.commit()
+                                        log_action(conn, user, f"APPROVE {action_type.upper()} REQUEST", target_user, org)
+                                        set_flash_message("super_admin_user_flash", "success", f"Request approved for {target_user}.")
+                                        st.rerun()
                             if qb.button("Reject Request", key=f"sa_req_reject_{req_id}"):
-                                conn.execute(
-                                    """
-                                    UPDATE admin_action_requests
-                                    SET status='rejected', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
-                                    WHERE id=? AND organization=?
-                                    """,
-                                    (user, review_note.strip(), req_id, org),
-                                )
-                                try:
+                                if requires_super_note and not clean_review_note:
+                                    st.error("A super admin decision reason is required before rejecting this request.")
+                                else:
                                     conn.execute(
                                         """
-                                        INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
-                                        VALUES(?,?,?,?,?,datetime('now'))
+                                        UPDATE admin_action_requests
+                                        SET status='rejected', reviewed_by=?, review_note=?, reviewed_at=datetime('now')
+                                        WHERE id=? AND organization=?
                                         """,
-                                        (
-                                            user,
-                                            target_user,
-                                            req_branch,
-                                            org,
-                                            f"Management reviewed the requested '{action_type}' action and did not approve it. {review_note.strip() or req_reason}".strip(),
-                                        ),
+                                        (user, clean_review_note, req_id, org),
                                     )
-                                except Exception:
-                                    pass
-                                conn.commit()
-                                log_action(conn, user, f"REJECT {action_type.upper()} REQUEST", target_user, org)
-                                set_flash_message("super_admin_user_flash", "warning", f"Request rejected for {target_user}.")
-                                st.rerun()
+                                    try:
+                                        conn.execute(
+                                            """
+                                            INSERT INTO messages(sender,receiver,branch,organization,message,created_at)
+                                            VALUES(?,?,?,?,?,datetime('now'))
+                                            """,
+                                            (
+                                                user,
+                                                target_user,
+                                                req_branch,
+                                                org,
+                                                f"Management reviewed the requested '{action_type}' action and did not approve it. {clean_review_note or display_reason}".strip(),
+                                            ),
+                                        )
+                                    except Exception:
+                                        pass
+                                    conn.commit()
+                                    log_action(conn, user, f"REJECT {action_type.upper()} REQUEST", target_user, org)
+                                    set_flash_message("super_admin_user_flash", "warning", f"Request rejected for {target_user}.")
+                                    st.rerun()
                 else:
                     st.success("No pending admin status requests.")
 
@@ -4498,6 +4751,92 @@ def super_admin_dashboard():
                 conn.commit()
                 log_action(conn, user, "UPDATE GUEST EXPERIENCE SETTINGS", "SYSTEM", org)
                 st.success("Guest Experience controls updated.")
+
+        st.markdown("### HR Mode & Delegation")
+        st.caption("When HR mode is ON, HR can operate organization-wide or branch-specific using the HR role. HR submits leave, discipline, workforce change, documents, and onboarding actions for super admin approval or oversight, and branch managers automatically lose selected people-ops controls.")
+        with st.form("hr_mode_control_form", clear_on_submit=False):
+            hr_mode_toggle = st.toggle("Enable HR mode for this organization", value=hr_mode_enabled)
+            hr_scope_default = st.selectbox(
+                "Default scope for new HR users",
+                ["organization", "branch"],
+                index=0 if str(hr_config.get("hr_scope_default", "organization")).lower() == "organization" else 1,
+                help="Organization scope lets HR see all branches. Branch scope limits HR to the assigned branch only.",
+            )
+            hr_handles_leave = st.toggle("HR handles leave approvals", value=bool(int(hr_config.get("hr_handles_leave", 1) or 0)))
+            hr_handles_discipline = st.toggle("HR handles discipline and warnings", value=bool(int(hr_config.get("hr_handles_discipline", 1) or 0)))
+            hr_handles_performance = st.toggle("HR handles performance governance / probation", value=bool(int(hr_config.get("hr_handles_performance", 1) or 0)))
+            hr_handles_people_changes_toggle = st.toggle(
+                "HR handles onboarding, offboarding, transfers and promotions",
+                value=bool(int(hr_config.get("hr_handles_people_changes", 1) or 0)),
+            )
+            hr_case_files_enabled_toggle = st.toggle(
+                "Enable HR employee case files and history",
+                value=bool(int(hr_config.get("hr_case_files_enabled", 1) or 0)),
+            )
+            hr_documents_enabled_toggle = st.toggle(
+                "Enable HR documents and uploads",
+                value=bool(int(hr_config.get("hr_documents_enabled", 1) or 0)),
+            )
+            hr_onboarding_enabled_toggle = st.toggle(
+                "Enable onboarding checklist automation",
+                value=bool(int(hr_config.get("hr_onboarding_enabled", 1) or 0)),
+            )
+            hr_require_recommendation_note = st.toggle(
+                "Require HR note before sending recommendation to super admin",
+                value=bool(int(hr_config.get("hr_require_recommendation_note", 1) or 0)),
+            )
+            hr_require_super_admin_note = st.toggle(
+                "Require super admin reason on approve / reject",
+                value=bool(int(hr_config.get("hr_require_super_admin_note", 1) or 0)),
+                help="When enabled, super admin must write a decision reason before approving or rejecting people-ops requests.",
+            )
+            if st.form_submit_button("Save HR Mode Settings"):
+                conn.execute(
+                    """
+                    INSERT INTO organization_hr_settings(
+                        organization, hr_mode_enabled, hr_scope_default,
+                        hr_handles_leave, hr_handles_discipline, hr_handles_performance,
+                        hr_handles_people_changes, hr_case_files_enabled,
+                        hr_documents_enabled, hr_onboarding_enabled,
+                        hr_require_recommendation_note, hr_require_super_admin_note,
+                        updated_by, updated_at
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'))
+                    ON CONFLICT(organization) DO UPDATE SET
+                        hr_mode_enabled=excluded.hr_mode_enabled,
+                        hr_scope_default=excluded.hr_scope_default,
+                        hr_handles_leave=excluded.hr_handles_leave,
+                        hr_handles_discipline=excluded.hr_handles_discipline,
+                        hr_handles_performance=excluded.hr_handles_performance,
+                        hr_handles_people_changes=excluded.hr_handles_people_changes,
+                        hr_case_files_enabled=excluded.hr_case_files_enabled,
+                        hr_documents_enabled=excluded.hr_documents_enabled,
+                        hr_onboarding_enabled=excluded.hr_onboarding_enabled,
+                        hr_require_recommendation_note=excluded.hr_require_recommendation_note,
+                        hr_require_super_admin_note=excluded.hr_require_super_admin_note,
+                        updated_by=excluded.updated_by,
+                        updated_at=datetime('now')
+                    """,
+                    (
+                        org,
+                        int(hr_mode_toggle),
+                        str(hr_scope_default),
+                        int(hr_handles_leave),
+                        int(hr_handles_discipline),
+                        int(hr_handles_performance),
+                        int(hr_handles_people_changes_toggle),
+                        int(hr_case_files_enabled_toggle),
+                        int(hr_documents_enabled_toggle),
+                        int(hr_onboarding_enabled_toggle),
+                        int(hr_require_recommendation_note),
+                        int(hr_require_super_admin_note),
+                        user,
+                    ),
+                )
+                conn.commit()
+                log_action(conn, user, "UPDATE HR MODE SETTINGS", f"enabled={int(hr_mode_toggle)}", org)
+                st.success("HR mode settings updated.")
+                st.rerun()
 
         settings = safe_read("SELECT * FROM settings WHERE id=1", conn)
         if settings.empty:
