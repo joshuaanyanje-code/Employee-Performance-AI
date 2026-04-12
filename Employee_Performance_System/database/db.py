@@ -1520,10 +1520,20 @@ def create_tables():
     # =========================
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_org_branch_role_status ON users(organization, branch, role, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_username_org ON users(username, organization)")
+    
+    # Migration: Handle old UNIQUE username constraint for new composite index
     try:
-        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_org_branch_unique ON users(username, organization, COALESCE(branch, ''))")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_org_branch_unique ON users(username, organization, branch)")
     except Exception:
-        pass
+        # If creation fails due to duplicate values or constraint conflict, try to drop any old indexes first
+        try:
+            c.execute("DROP INDEX IF EXISTS idx_users_name_org_branch_unique")
+            c.execute("CREATE UNIQUE INDEX idx_users_name_org_branch_unique ON users(username, organization, branch)")
+        except Exception:
+            # Silently fail - index creation could fail if data has duplicates
+            # which would happen if app was run with old schema and then updated
+            pass
+    
     try:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE TRIM(COALESCE(phone, '')) <> ''")
     except Exception:

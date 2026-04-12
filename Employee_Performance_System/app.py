@@ -3,6 +3,7 @@ import streamlit.components.v1 as components
 import pandas as pd
 import secrets
 import importlib
+import time
 from datetime import datetime, timedelta
 from Dashboards.ui_responsive import apply_responsive_ui
 try:
@@ -702,8 +703,23 @@ for key in ["logged","username","role","organization","branch","auth_token"]:
 @st.cache_resource(show_spinner=False)
 def _ensure_db_schema_ready():
     refresh_env_from_streamlit_secrets()
-    create_tables()
-    return True
+    try:
+        create_tables()
+        return True
+    except Exception as schema_error:
+        # If schema is malformed, backup and recreate
+        try:
+            from database.db import DB_PATH
+            import os
+            import shutil
+            if os.path.exists(DB_PATH):
+                backup_path = f"{DB_PATH}.backup_{int(time.time())}"
+                shutil.move(DB_PATH, backup_path)
+                st.warning(f"⚠️ Corrupted database backed up to: {backup_path}")
+            create_tables()
+            return True
+        except Exception as recovery_error:
+            raise Exception(f"Database initialization failed: {schema_error}. Recovery also failed: {recovery_error}")
 
 
 try:
