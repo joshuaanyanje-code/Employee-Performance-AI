@@ -1304,7 +1304,7 @@ def master_admin_dashboard():
             
             if branch_count > 0:
                 st.write("\n**Branches and Their Organizations:**")
-                branch_orgs = pd.read_sql("SELECT id, name, organization, branch FROM branches ORDER BY id DESC LIMIT 10", conn)
+                branch_orgs = pd.read_sql("SELECT id, name, organization, status FROM branches ORDER BY id DESC LIMIT 10", conn)
                 st.dataframe(branch_orgs, use_container_width=True)
             
             if org_count == 0 and branch_count > 0:
