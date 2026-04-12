@@ -1794,11 +1794,18 @@ def master_admin_dashboard():
                 )
                 if st.button("📲 Send M-Pesa Payment Prompt", key="stk_btn"):
                     if stk_push:
-                        result = stk_push(stk_phone, price)
-                        if result and "error" in str(result).lower():
-                            st.error(f"STK Push failed: {result}")
-                        else:
-                            st.success(f"✅ Payment prompt of KES {price:,} sent to {stk_phone}")
+                        try:
+                            result = stk_push(stk_phone, price)
+                            if result and "error" in str(result).lower():
+                                st.error(f"STK Push failed: {result}")
+                            else:
+                                st.success(f"✅ Payment prompt of KES {price:,} sent to {stk_phone}")
+                        except ValueError as ve:
+                            st.error(f"⚠️ {str(ve)}")
+                        except ConnectionError as ce:
+                            st.error(f"❌ Connection Error: {str(ce)}")
+                        except Exception as e:
+                            st.error(f"❌ M-Pesa Error: {str(e)}")
                     else:
                         st.warning("M-Pesa STK Push is not configured. Update credentials in payments/mpesa.py.")
 
