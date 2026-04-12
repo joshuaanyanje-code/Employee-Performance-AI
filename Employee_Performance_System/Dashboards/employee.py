@@ -256,7 +256,7 @@ def employee_dashboard():
     st.title("Employee Dashboard")
     render_dashboard_banner(
         "Specialist workspace",
-        f"Welcome, {username}!",
+        f"Welcome, {username} !",
         "Track your schedule, attendance, leave, ratings, and growth.",
         pills=[
              f"Organization: {org}",
