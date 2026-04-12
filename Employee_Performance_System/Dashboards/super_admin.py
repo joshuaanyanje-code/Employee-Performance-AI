@@ -1287,6 +1287,26 @@ def super_admin_dashboard():
         c3.metric("Ratings",  len(ratings_df))
         c4.metric("Kiosks",   len(kiosks_df))
 
+        employee_df = users_df.copy() if safe_df(users_df) else pd.DataFrame()
+        if safe_df(employee_df) and "role" in employee_df.columns:
+            employee_df = employee_df[
+                employee_df["role"].astype(str).str.lower().str.strip() == "employee"
+            ].copy()
+        if safe_df(employee_df):
+            gender_series = employee_df.get("gender", pd.Series(dtype="object")).astype(str).str.lower().str.strip()
+            male_employees = int((gender_series == "male").sum())
+            female_employees = int((gender_series == "female").sum())
+            unknown_employees = int(len(employee_df) - male_employees - female_employees)
+        else:
+            male_employees = 0
+            female_employees = 0
+            unknown_employees = 0
+
+        g1, g2, g3 = st.columns(3)
+        g1.metric("Male Employees", male_employees)
+        g2.metric("Female Employees", female_employees)
+        g3.metric("Other/Unknown", unknown_employees)
+
         try:
             overview_group_data = analyze_group_demographics(
                 ratings_df,
