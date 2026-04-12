@@ -1,4 +1,5 @@
 ﻿import os
+import time as pytime
 import streamlit as st
 import pandas as pd
 import json
@@ -15,7 +16,6 @@ except Exception:
     holiday_lib = None
     HOLIDAYS_OK = False
 
-from database.db import cached_read_sql, get_connection, get_hr_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
@@ -92,19 +92,56 @@ def safe_read(query, conn, params=None):
         normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
         query_text = str(query or "").strip()
         if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
-            return cached_read_sql(query_text, normalized_params)
-        return pd.read_sql(query, conn, params=params) if params else pd.read_sql(query, conn)
+            df = cached_read_sql(query_text, normalized_params)
+        else:
+            df = pd.read_sql(query, conn, params=params) if params else pd.read_sql(query, conn)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            for col in df.select_dtypes(include=["object"]).columns:
+                series = df[col].astype(str)
+                dirty_mask = series.str.contains(r"â[\x80-\xBF]{1,2}|Ã.|Â|�|[\u200B-\u200D\uFEFF]", regex=True, na=False)
+                if dirty_mask.any():
+                    df.loc[dirty_mask, col] = series.loc[dirty_mask].map(clean_display_text)
+        return df
     except Exception:
         return pd.DataFrame()
 
 
 def set_flash_message(key, level, text):
-    st.session_state[key] = {"level": level, "text": text}
+    st.session_state[key] = {
+        "level": level,
+        "text": text,
+        "created_at": pytime.time(),
+        "duration": 2.0,
+    }
+
+
+def _clear_action_widgets(current_flash_key):
+    keep_keys = {
+        "logged",
+        "username",
+        "role",
+        "organization",
+        "branch",
+        "auth_token",
+        current_flash_key,
+    }
+    for session_key in list(st.session_state.keys()):
+        if session_key in keep_keys:
+            continue
+        if str(session_key).startswith("_"):
+            continue
+        st.session_state.pop(session_key, None)
 
 
 def show_flash_message(key):
-    payload = st.session_state.pop(key, None)
+    payload = st.session_state.get(key)
     if not payload:
+        return
+
+    created_at = float(payload.get("created_at", pytime.time()))
+    duration = max(float(payload.get("duration", 2.0) or 2.0), 0.2)
+    if (pytime.time() - created_at) >= duration:
+        st.session_state.pop(key, None)
         return
 
     level = str(payload.get("level", "info")).lower()
@@ -120,6 +157,11 @@ def show_flash_message(key):
         st.error(text)
     else:
         st.info(text)
+
+    if not bool(payload.get("widgets_cleared", False)):
+        _clear_action_widgets(key)
+        payload["widgets_cleared"] = True
+        st.session_state[key] = payload
 
 
 def clean_display_text(value):
@@ -144,10 +186,16 @@ def clean_display_text(value):
         "âœ…": "",
         "âš ": "Warning ",
         "â„¹": "Info ",
+        "Ã": "",
+        "Â": "",
+        "�": "",
     }
     for bad, good in replacements.items():
         text = text.replace(bad, good)
 
+    text = re.sub(r"â[\x80-\xBF]{1,2}", "", text)
+    text = re.sub(r"[\u200B-\u200D\uFEFF]", "", text)
+    text = re.sub(r"[\x00-\x08\x0B\x0C\x0E-\x1F]", "", text)
     text = re.sub(r"\s{2,}", " ", text).strip()
     return text or "-"
 

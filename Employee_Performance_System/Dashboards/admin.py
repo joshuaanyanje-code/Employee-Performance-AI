@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import time as pytime
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
@@ -41,13 +42,42 @@ def refresh():
 
 
 def refresh_with_message(message, level="success"):
-    st.session_state["_admin_flash"] = {"level": level, "text": str(message or "").strip()}
+    st.session_state["_admin_flash"] = {
+        "level": level,
+        "text": str(message or "").strip(),
+        "created_at": pytime.time(),
+        "duration": 2.0,
+    }
     refresh()
 
 
+def _clear_action_widgets():
+    keep_keys = {
+        "logged",
+        "username",
+        "role",
+        "organization",
+        "branch",
+        "auth_token",
+        "_admin_flash",
+    }
+    for session_key in list(st.session_state.keys()):
+        if session_key in keep_keys:
+            continue
+        if str(session_key).startswith("_"):
+            continue
+        st.session_state.pop(session_key, None)
+
+
 def show_flash_message():
-    payload = st.session_state.pop("_admin_flash", None)
+    payload = st.session_state.get("_admin_flash")
     if not payload:
+        return
+
+    created_at = float(payload.get("created_at", pytime.time()))
+    duration = max(float(payload.get("duration", 2.0) or 2.0), 0.2)
+    if (pytime.time() - created_at) >= duration:
+        st.session_state.pop("_admin_flash", None)
         return
 
     text = str(payload.get("text", "")).strip()
@@ -64,16 +94,49 @@ def show_flash_message():
     else:
         st.info(text)
 
+    if not bool(payload.get("widgets_cleared", False)):
+        _clear_action_widgets()
+        payload["widgets_cleared"] = True
+        st.session_state["_admin_flash"] = payload
+
 
 def safe_read(query, conn, params=None):
     try:
         normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
         query_text = str(query or "").strip()
         if query_text.lower().startswith("select") and not getattr(conn, "in_transaction", False):
-            return cached_read_sql(query_text, normalized_params)
-        if params is None:
-            return pd.read_sql(query, conn)
-        return pd.read_sql(query, conn, params=params)
+            df = cached_read_sql(query_text, normalized_params)
+        else:
+            if params is None:
+                df = pd.read_sql(query, conn)
+            else:
+                df = pd.read_sql(query, conn, params=params)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            for col in df.select_dtypes(include=["object"]).columns:
+                series = df[col].astype(str)
+                dirty_mask = series.str.contains(r"â[\x80-\xBF]{1,2}|Ã.|Â|�|[\u200B-\u200D\uFEFF]", regex=True, na=False)
+                if not dirty_mask.any():
+                    continue
+                cleaned = series.loc[dirty_mask]
+                try:
+                    repaired = cleaned.str.encode("latin-1", errors="ignore").str.decode("utf-8", errors="ignore")
+                    cleaned = repaired.where(repaired.str.len() > 0, cleaned)
+                except Exception:
+                    pass
+                cleaned = (
+                    cleaned
+                    .str.replace("â€”", " - ", regex=False)
+                    .str.replace("â€“", " - ", regex=False)
+                    .str.replace("Â", "", regex=False)
+                    .str.replace("Ã", "", regex=False)
+                    .str.replace("�", "", regex=False)
+                    .str.replace(r"â[\x80-\xBF]{1,2}", "", regex=True)
+                    .str.replace(r"[\u200B-\u200D\uFEFF]", "", regex=True)
+                    .str.replace(r"\s{2,}", " ", regex=True)
+                    .str.strip()
+                )
+                df.loc[dirty_mask, col] = cleaned
+        return df
     except Exception:
         return pd.DataFrame()
 

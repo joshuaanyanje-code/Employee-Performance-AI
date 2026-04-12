@@ -1,6 +1,8 @@
 ﻿import streamlit as st
 import pandas as pd
 import os
+import time as pytime
+import re
 from datetime import datetime, timedelta
 from database.db import (
     create_tables,
@@ -67,19 +69,75 @@ except Exception:
 def safe_read(query, conn, params=None):
     try:
         if params:
-            return pd.read_sql(query, conn, params=params)
-        return pd.read_sql(query, conn)
+            df = pd.read_sql(query, conn, params=params)
+        else:
+            df = pd.read_sql(query, conn)
+        if isinstance(df, pd.DataFrame) and not df.empty:
+            for col in df.select_dtypes(include=["object"]).columns:
+                series = df[col].astype(str)
+                dirty_mask = series.str.contains(r"â[\x80-\xBF]{1,2}|Ã.|Â|�|[\u200B-\u200D\uFEFF]", regex=True, na=False)
+                if not dirty_mask.any():
+                    continue
+                cleaned = series.loc[dirty_mask]
+                try:
+                    repaired = cleaned.str.encode("latin-1", errors="ignore").str.decode("utf-8", errors="ignore")
+                    cleaned = repaired.where(repaired.str.len() > 0, cleaned)
+                except Exception:
+                    pass
+                cleaned = (
+                    cleaned
+                    .str.replace("â€”", " - ", regex=False)
+                    .str.replace("â€“", " - ", regex=False)
+                    .str.replace("Â", "", regex=False)
+                    .str.replace("Ã", "", regex=False)
+                    .str.replace("�", "", regex=False)
+                    .str.replace(r"â[\x80-\xBF]{1,2}", "", regex=True)
+                    .str.replace(r"[\u200B-\u200D\uFEFF]", "", regex=True)
+                    .str.replace(r"\s{2,}", " ", regex=True)
+                    .str.strip()
+                )
+                df.loc[dirty_mask, col] = cleaned
+        return df
     except Exception:
         return pd.DataFrame()
 
 
 def set_flash_message(key, level, text):
-    st.session_state[key] = {"level": level, "text": text}
+    st.session_state[key] = {
+        "level": level,
+        "text": text,
+        "created_at": pytime.time(),
+        "duration": 2.0,
+    }
+
+
+def _clear_action_widgets(current_flash_key):
+    keep_keys = {
+        "logged",
+        "username",
+        "role",
+        "organization",
+        "branch",
+        "auth_token",
+        current_flash_key,
+    }
+    for session_key in list(st.session_state.keys()):
+        if session_key in keep_keys:
+            continue
+        if str(session_key).startswith("_"):
+            continue
+        st.session_state.pop(session_key, None)
 
 
 def show_flash_message(key):
-    payload = st.session_state.pop(key, None)
+    payload = st.session_state.get(key)
     if not payload:
+        return
+
+    created_at = float(payload.get("created_at", pytime.time()))
+    duration = max(float(payload.get("duration", 2.0) or 2.0), 0.2)
+    if (pytime.time() - created_at) >= duration:
+        st.session_state.pop(key, None)
         return
 
     level = str(payload.get("level", "info")).lower()
@@ -95,6 +153,11 @@ def show_flash_message(key):
         st.error(text)
     else:
         st.info(text)
+
+    if not bool(payload.get("widgets_cleared", False)):
+        _clear_action_widgets(key)
+        payload["widgets_cleared"] = True
+        st.session_state[key] = payload
 
 
 # ==============================

@@ -321,59 +321,35 @@ def get_local_now_text():
     return get_local_now().strftime("%Y-%m-%d %H:%M:%S")
 
 
+_RE_DT_NOW_SQ = re.compile(r"datetime\(\s*'now'\s*\)", flags=re.IGNORECASE)
+_RE_DT_NOW_DQ = re.compile(r'datetime\(\s*"now"\s*\)', flags=re.IGNORECASE)
+_RE_DT_NOW_ARGS_SQ = re.compile(r"datetime\(\s*'now'\s*,(?!\s*'localtime')", flags=re.IGNORECASE)
+_RE_DT_NOW_ARGS_DQ = re.compile(r'datetime\(\s*"now"\s*,(?!\s*"localtime")', flags=re.IGNORECASE)
+_RE_DATE_NOW_SQ = re.compile(r"date\(\s*'now'\s*\)", flags=re.IGNORECASE)
+_RE_DATE_NOW_DQ = re.compile(r'date\(\s*"now"\s*\)', flags=re.IGNORECASE)
+_RE_DATE_NOW_ARGS_SQ = re.compile(r"date\(\s*'now'\s*,(?!\s*'localtime')", flags=re.IGNORECASE)
+_RE_DATE_NOW_ARGS_DQ = re.compile(r'date\(\s*"now"\s*,(?!\s*"localtime")', flags=re.IGNORECASE)
+
+
 def _normalize_sqlite_now(query):
     if not isinstance(query, str):
         return query
 
+    lower_query = query.lower()
+    if "now" not in lower_query:
+        return query
+    if "date(" not in lower_query and "datetime(" not in lower_query:
+        return query
+
     normalized = query
-    normalized = re.sub(
-        r"datetime\(\s*'now'\s*\)",
-        "datetime('now','localtime')",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r'datetime\(\s*"now"\s*\)',
-        'datetime("now","localtime")',
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r"datetime\(\s*'now'\s*,(?!\s*'localtime')",
-        "datetime('now','localtime',",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r'datetime\(\s*"now"\s*,(?!\s*"localtime")',
-        'datetime("now","localtime",',
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r"date\(\s*'now'\s*\)",
-        "date('now','localtime')",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r'date\(\s*"now"\s*\)',
-        'date("now","localtime")',
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r"date\(\s*'now'\s*,(?!\s*'localtime')",
-        "date('now','localtime',",
-        normalized,
-        flags=re.IGNORECASE,
-    )
-    normalized = re.sub(
-        r'date\(\s*"now"\s*,(?!\s*"localtime")',
-        'date("now","localtime",',
-        normalized,
-        flags=re.IGNORECASE,
-    )
+    normalized = _RE_DT_NOW_SQ.sub("datetime('now','localtime')", normalized)
+    normalized = _RE_DT_NOW_DQ.sub('datetime("now","localtime")', normalized)
+    normalized = _RE_DT_NOW_ARGS_SQ.sub("datetime('now','localtime',", normalized)
+    normalized = _RE_DT_NOW_ARGS_DQ.sub('datetime("now","localtime",', normalized)
+    normalized = _RE_DATE_NOW_SQ.sub("date('now','localtime')", normalized)
+    normalized = _RE_DATE_NOW_DQ.sub('date("now","localtime")', normalized)
+    normalized = _RE_DATE_NOW_ARGS_SQ.sub("date('now','localtime',", normalized)
+    normalized = _RE_DATE_NOW_ARGS_DQ.sub('date("now","localtime",', normalized)
     return normalized
 
 

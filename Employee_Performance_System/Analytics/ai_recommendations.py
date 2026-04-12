@@ -22,6 +22,7 @@ never makes a live web request on every page render.
 import re
 import xml.etree.ElementTree as ET
 from datetime import datetime
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 
 # ---------------------------------------------------------------------------
@@ -172,11 +173,20 @@ def fetch_live_recommendations(business_type: str = "Office", max_total: int = 1
     all_items: list[dict] = []
     sources_ok = 0
 
-    for name, url, category in feeds:
-        items = _fetch_feed(name, url, category)
-        if items:
-            sources_ok += 1
-            all_items.extend(items)
+    max_workers = min(6, max(1, len(feeds)))
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        future_map = {
+            pool.submit(_fetch_feed, name, url, category): (name, url, category)
+            for name, url, category in feeds
+        }
+        for future in as_completed(future_map):
+            try:
+                items = future.result()
+            except Exception:
+                items = []
+            if items:
+                sources_ok += 1
+                all_items.extend(items)
 
     return {
         "articles":      all_items[:max_total],
