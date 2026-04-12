@@ -739,6 +739,7 @@ def employee_dashboard():
             personal_feedback_count = int(len(target_feedback_df))
             completion_score = max(0.0, min(100.0, avg_completion))
             reference_stars = avg_target_stars if avg_target_stars is not None else avg_branch_stars
+            reference_feedback_count = personal_feedback_count if avg_target_stars is not None else int(len(branch_feedback_df))
             service_score = None if reference_stars is None else max(0.0, min(100.0, (float(reference_stars) / 5.0) * 100.0))
             health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
 
@@ -751,7 +752,7 @@ def employee_dashboard():
             st.markdown("### AI Coaching Snapshot")
             if avg_completion >= 85 and (avg_target_stars is None or avg_target_stars >= 4.2):
                 st.success(f"AI growth signal: you are tracking strongly at about {avg_completion:.0f}% KPI completion. Keep the current service rhythm and ask for stretch goals.")
-            elif personal_feedback_count >= min_feedback_count and (health_score <= critical_threshold or (avg_target_stars is not None and avg_target_stars <= low_star_threshold and avg_completion < warning_threshold)):
+            elif reference_feedback_count >= min_feedback_count and (health_score <= critical_threshold or (reference_stars is not None and reference_stars <= low_star_threshold and avg_completion < warning_threshold)):
                 st.error(f"AI escalation alert: your weighted health is {health_score:.0f}/100. Ask your manager for a focused recovery plan and weekly check-ins.")
             elif avg_completion < 60 and avg_target_stars is not None and avg_target_stars < 3.5:
                 st.error(f"AI alert: your KPI completion is around {avg_completion:.0f}% and guest feedback is soft at {avg_target_stars:.1f} stars. Focus on service recovery and daily follow-through.")
