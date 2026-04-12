@@ -1289,16 +1289,16 @@ def employee_dashboard():
 
         if st.button("Update"):
             stored = pd.read_sql(
-                "SELECT password FROM users WHERE username=?",
+                "SELECT password FROM users WHERE username=? AND organization=? AND branch=?",
                 conn,
-                params=(username,)
+                params=(username, org, branch)
             ).iloc[0]["password"]
 
             if verify_password(current, stored):
                 execute_write(
                     conn,
-                    "UPDATE users SET password=? WHERE username=?",
-                    (hash_password(new),username)
+                    "UPDATE users SET password=? WHERE username=? AND organization=? AND branch=?",
+                    (hash_password(new), username, org, branch)
                 )
                 conn.commit()
                 st.success("Updated")

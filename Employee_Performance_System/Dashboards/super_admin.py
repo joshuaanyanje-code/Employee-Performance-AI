@@ -2277,10 +2277,11 @@ def super_admin_dashboard():
                     elif not valid_pass(p):
                         st.error("Password must be at least 4 characters.")
                     else:
-                        exists = safe_read("SELECT id FROM users WHERE username=?", conn, params=(u,))
+                        exists = safe_read("SELECT id FROM users WHERE username=? AND organization=? AND branch=?", conn, params=(u, org, stored_branch))
                         normalized_phone, phone_error = get_phone_uniqueness_error(conn, phone)
                         if not exists.empty:
-                            st.error(f"Username '{u}' already exists.")
+                            scope_label = stored_branch or "All Branches"
+                            st.error(f"Username '{u}' already exists in {org}/{scope_label}.")
                         elif phone_error:
                             st.error(phone_error)
                         else:

@@ -482,9 +482,9 @@ def _restore_session_from_token(conn, token):
         return True
 
     user_df = pd.read_sql(
-        "SELECT username, role, organization, branch, status FROM users WHERE username=? LIMIT 1",
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
         conn,
-        params=(username,),
+        params=(username, org),
     )
     if user_df.empty:
         _invalidate_login_session(conn, token)
@@ -582,13 +582,14 @@ def _enforce_logged_in_access(conn):
         return True
 
     username = str(st.session_state.get("username", "") or "").strip()
-    if not username:
+    org = str(st.session_state.get("organization", "") or "").strip()
+    if not username or not org:
         return False
 
     user_df = pd.read_sql(
-        "SELECT username, role, organization, branch, status FROM users WHERE username=? LIMIT 1",
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
         conn,
-        params=(username,),
+        params=(username, org),
     )
     if user_df.empty:
         _set_login_blocked_message("Your account was not found. Please log in again.")
@@ -771,6 +772,23 @@ def login():
     with st.form("login_form"):
         username = st.text_input("Username")
         password = st.text_input("Password", type="password")
+        
+        # Get available organizations for the username (if it exists)
+        potential_orgs = []
+        if username and username.lower() != "master":
+            potential_orgs_df = pd.read_sql(
+                "SELECT DISTINCT organization FROM users WHERE lower(trim(username)) = lower(trim(?)) ORDER BY organization",
+                conn,
+                params=(username,)
+            )
+            if not potential_orgs_df.empty:
+                potential_orgs = potential_orgs_df["organization"].tolist()
+        
+        # Show organization selector only if multiple organizations have this username
+        org_selector = None
+        if len(potential_orgs) > 1:
+            st.info(f"ℹ️ Username exists in multiple organizations. Please select your organization:")
+            org_selector = st.selectbox("Organization", potential_orgs, key="login_org_selector")
 
         if st.form_submit_button("Login"):
 
@@ -794,14 +812,24 @@ def login():
                 st.rerun()
 
             # DATABASE LOGIN
-            user_df = pd.read_sql(
-                "SELECT * FROM users WHERE username=?",
-                conn,
-                params=(username,)
-            )
+            username_clean = username.strip()
+            query = "SELECT * FROM users WHERE lower(trim(username)) = lower(trim(?))"
+            params = [username_clean]
+            
+            # If multiple orgs and user selected one, filter by it
+            if org_selector:
+                query += " AND organization = ?"
+                params.append(org_selector)
+            
+            user_df = pd.read_sql(query, conn, params=params)
 
             if user_df.empty:
-                st.error("User not found")
+                st.error("User not found in the selected organization" if org_selector else "User not found")
+                return
+            
+            # If multiple rows but no org selector (shouldn't happen with org_selector logic above), take first
+            if len(user_df) > 1 and not org_selector:
+                st.error(f"Username '{username}' exists in multiple organizations. Please select your organization from the dropdown above and try again.")
                 return
 
             if not verify_password(password, user_df.iloc[0]["password"]):

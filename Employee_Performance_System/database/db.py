@@ -713,7 +713,7 @@ def create_tables():
     c.execute("""
     CREATE TABLE IF NOT EXISTS users(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
+        username TEXT,
         password TEXT,
         role TEXT,
         branch TEXT,
@@ -1520,6 +1520,10 @@ def create_tables():
     # =========================
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_org_branch_role_status ON users(organization, branch, role, status)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_users_username_org ON users(username, organization)")
+    try:
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_name_org_branch_unique ON users(username, organization, COALESCE(branch, ''))")
+    except Exception:
+        pass
     try:
         c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_phone_unique ON users(phone) WHERE TRIM(COALESCE(phone, '')) <> ''")
     except Exception:

@@ -1514,9 +1514,9 @@ def master_admin_dashboard():
                                 params=(org_name,),
                             )
                             existing_user = safe_read(
-                                "SELECT id FROM users WHERE lower(trim(username)) = lower(trim(?))",
+                                "SELECT id FROM users WHERE lower(trim(username)) = lower(trim(?)) AND organization=?",
                                 conn,
-                                params=(superadmin_name,),
+                                params=(superadmin_name, org_name),
                             )
                             normalized_org_phone, org_phone_error = get_phone_uniqueness_error(conn, org_phone)
                             normalized_superadmin_phone, superadmin_phone_error = get_phone_uniqueness_error(conn, superadmin_phone)

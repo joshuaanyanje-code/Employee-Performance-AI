@@ -377,13 +377,13 @@ def admin_dashboard():
                         st.error("Password must be at least 4 characters.")
                     else:
                         exists = safe_read(
-                            "SELECT id FROM users WHERE username=?",
+                            "SELECT id FROM users WHERE username=? AND organization=? AND branch=?",
                             conn,
-                            params=(new_user.strip(),),
+                            params=(new_user.strip(), org, admin_branch),
                         )
                         normalized_phone, phone_error = get_phone_uniqueness_error(conn, new_phone)
                         if not exists.empty:
-                            st.error("Username already exists.")
+                            st.error(f"Username '{new_user.strip()}' already exists in {org}/{admin_branch}.")
                         elif phone_error:
                             st.error(phone_error)
                         else:
