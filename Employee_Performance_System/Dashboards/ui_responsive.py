@@ -220,9 +220,9 @@ def apply_responsive_ui(mode="default"):
         }}
 
         .stSelectbox div[data-baseweb="select"] input,
-        .stMultiSelect div[data-baseweb="select"] input {
+        .stMultiSelect div[data-baseweb="select"] input {{
             caret-color: transparent !important;
-        }
+        }}
 
         .stSelectbox svg,
         .stMultiSelect svg {{
