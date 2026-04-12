@@ -1280,9 +1280,8 @@ def master_admin_dashboard():
     st.title("Chief Administrator Control Panel")
     render_dashboard_banner(
         "System oversight",
-        "Multi-organization control in one clean view.",
-        "Manage organizations, branches, payments, people, and settings with a lighter executive layout.",
-        pills=["Master access", "Cross-organization analytics"],
+        "Multi-organization control.",
+        "Manage organizations, branches, payments, people, and settings.",
     )
 
     is_mobile = is_mobile_device()
