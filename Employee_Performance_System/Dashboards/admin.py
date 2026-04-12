@@ -200,11 +200,19 @@ def admin_dashboard():
         st.error("Session missing user or organization.")
         return
 
-    user_row = safe_read(
-        "SELECT * FROM users WHERE username=? AND organization=?",
-        conn,
-        params=(username, org),
-    )
+    session_branch = str(st.session_state.get("branch", "") or "").strip()
+    if session_branch:
+        user_row = safe_read(
+            "SELECT * FROM users WHERE username=? AND organization=? AND branch=?",
+            conn,
+            params=(username, org, session_branch),
+        )
+    else:
+        user_row = safe_read(
+            "SELECT * FROM users WHERE username=? AND organization=?",
+            conn,
+            params=(username, org),
+        )
 
     if user_row.empty:
         st.error("Admin user not found.")
@@ -351,7 +359,7 @@ def admin_dashboard():
 
         branch_users = safe_read(
             """
-            SELECT username, role, status, pin, phone
+            SELECT username, role, status, phone
             FROM users
             WHERE organization=? AND branch=?
             ORDER BY role, username
@@ -398,8 +406,8 @@ def admin_dashboard():
         if branch_users.empty:
             st.info("No users in this branch yet.")
         else:
-            # Passwords are intentionally excluded.
-            st.dataframe(branch_users[["username", "role", "status", "pin", "phone"]], use_container_width=True)
+            # Passwords and PINs are intentionally excluded from admin visibility.
+            st.dataframe(branch_users[["username", "role", "status", "phone"]], use_container_width=True)
 
     # =====================================================
     # USERS
@@ -409,7 +417,7 @@ def admin_dashboard():
 
         users_df = safe_read(
             """
-            SELECT id, username, role, status, pin, phone
+            SELECT id, username, role, status, phone
             FROM users
             WHERE organization=? AND branch=?
             ORDER BY username
@@ -483,7 +491,7 @@ def admin_dashboard():
                 row = editable[editable["username"] == selected_user].iloc[0]
 
                 with st.form("admin_edit_user_form", clear_on_submit=False):
-                    new_pin_val = st.text_input("New PIN", value=str(row.get("pin", "1234")))
+                    new_pin_val = st.text_input("New PIN (optional)", value="", placeholder="Leave blank to keep current PIN")
                     new_phone_val = st.text_input("Phone Number (full format e.g. 2547XXXXXXXX)", value=str(row.get("phone", "") or ""))
                     reset_pass = st.text_input("Reset Password (optional)", type="password")
                     save_edit = st.form_submit_button("Save Changes")
@@ -497,9 +505,14 @@ def admin_dashboard():
                             st.error(phone_error)
                             return
                         conn.execute(
-                            "UPDATE users SET pin=?, phone=? WHERE username=? AND organization=? AND branch=?",
-                            (new_pin_val.strip() or "1234", normalized_phone_val, selected_user, org, admin_branch),
+                            "UPDATE users SET phone=? WHERE username=? AND organization=? AND branch=?",
+                            (normalized_phone_val, selected_user, org, admin_branch),
                         )
+                        if new_pin_val.strip():
+                            conn.execute(
+                                "UPDATE users SET pin=? WHERE username=? AND organization=? AND branch=?",
+                                (new_pin_val.strip(), selected_user, org, admin_branch),
+                            )
                         if reset_pass.strip():
                             if len(reset_pass) < 4:
                                 st.error("Reset password must be at least 4 characters.")
@@ -2350,9 +2363,33 @@ def admin_dashboard():
                     st.error("Passwords do not match.")
                 else:
                     conn.execute(
-                        "UPDATE users SET password=? WHERE username=? AND organization=?",
-                        (hash_password(new), username, org),
+                        "UPDATE users SET password=? WHERE id=? AND organization=?",
+                        (hash_password(new), int(user_row.iloc[0].get("id", 0) or 0), org),
                     )
                     conn.commit()
                     log_action(conn, username, "CHANGE PASSWORD", username, org)
                     refresh_with_message("Password updated.")
+
+        st.markdown("### Change PIN")
+        with st.form("admin_change_pin", clear_on_submit=False):
+            current_pin = st.text_input("Current PIN", type="password")
+            new_pin = st.text_input("New PIN", type="password")
+            confirm_pin = st.text_input("Confirm New PIN", type="password")
+            pin_sub = st.form_submit_button("Update PIN")
+
+            if pin_sub:
+                db_pin = str(user_row.iloc[0].get("pin", "") or "")
+                if not current_pin.strip() or current_pin.strip() != db_pin:
+                    st.error("Current PIN is incorrect.")
+                elif not new_pin.strip():
+                    st.error("New PIN is required.")
+                elif new_pin != confirm_pin:
+                    st.error("PINs do not match.")
+                else:
+                    conn.execute(
+                        "UPDATE users SET pin=? WHERE id=? AND organization=?",
+                        (new_pin.strip(), int(user_row.iloc[0].get("id", 0) or 0), org),
+                    )
+                    conn.commit()
+                    log_action(conn, username, "CHANGE PIN", username, org)
+                    refresh_with_message("PIN updated.")

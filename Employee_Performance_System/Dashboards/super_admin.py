@@ -2283,11 +2283,11 @@ def super_admin_dashboard():
         with tab_all:
             if safe_df(users_df):
                 st.dataframe(users_df, use_container_width=True)
-                if st.button("Show / Hide Passwords", key="show_pw_all"):
+                if st.button("Show / Hide Credentials", key="show_pw_all"):
                     st.session_state["show_pw"] = not st.session_state.get("show_pw", False)
                 if st.session_state.get("show_pw"):
                     pw_df = safe_read(
-                        "SELECT username, password FROM users WHERE organization=?",
+                        "SELECT username, role, branch, password, pin FROM users WHERE organization=?",
                         conn, params=(org,)
                     )
                     st.dataframe(pw_df, use_container_width=True)
@@ -2308,11 +2308,11 @@ def super_admin_dashboard():
                     )
                 if safe_df(branch_users):
                     st.dataframe(branch_users, use_container_width=True)
-                    if st.button("Show / Hide Passwords", key="show_pw_branch"):
+                    if st.button("Show / Hide Credentials", key="show_pw_branch"):
                         st.session_state["show_pw_br"] = not st.session_state.get("show_pw_br", False)
                     if st.session_state.get("show_pw_br"):
                         pw_df_br = safe_read(
-                            "SELECT username, password FROM users WHERE organization=? AND branch=?",
+                            "SELECT username, role, branch, password, pin FROM users WHERE organization=? AND branch=?",
                             conn, params=(org, sel_branch)
                         )
                         st.dataframe(pw_df_br, use_container_width=True)
@@ -5674,9 +5674,35 @@ def super_admin_dashboard():
                 elif new_pass != conf_pass:
                     st.error("Passwords do not match.")
                 else:
-                    conn.execute("UPDATE users SET password=? WHERE username=?", (hash_password(new_pass), user))
+                    conn.execute("UPDATE users SET password=? WHERE username=? AND organization=?", (hash_password(new_pass), user, org))
                     conn.commit()
                     st.success("Password updated.")
+
+        with st.form("change_my_pin", clear_on_submit=False):
+            current_pin = st.text_input("Current PIN", type="password")
+            new_pin = st.text_input("New PIN", type="password")
+            conf_pin = st.text_input("Confirm PIN", type="password")
+            if st.form_submit_button("Update My PIN"):
+                pin_df = safe_read(
+                    "SELECT id, pin FROM users WHERE username=? AND organization=? LIMIT 1",
+                    conn,
+                    params=(user, org),
+                )
+                if pin_df.empty:
+                    st.error("Account not found.")
+                else:
+                    stored_pin = str(pin_df.iloc[0].get("pin", "") or "").strip()
+                    user_id = int(pin_df.iloc[0].get("id", 0) or 0)
+                    if not current_pin.strip() or current_pin.strip() != stored_pin:
+                        st.error("Current PIN is incorrect.")
+                    elif not new_pin.strip():
+                        st.error("New PIN is required.")
+                    elif new_pin != conf_pin:
+                        st.error("PINs do not match.")
+                    else:
+                        conn.execute("UPDATE users SET pin=? WHERE id=? AND organization=?", (new_pin.strip(), user_id, org))
+                        conn.commit()
+                        st.success("PIN updated.")
 
     # =========================================================
     # LOGS

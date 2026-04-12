@@ -1368,3 +1368,33 @@ def employee_dashboard():
                 refresh()
             else:
                 st.error("Wrong password")
+
+        st.markdown("### Change PIN")
+        current_pin = st.text_input("Current PIN", type="password")
+        new_pin = st.text_input("New PIN", type="password")
+        confirm_pin = st.text_input("Confirm New PIN", type="password")
+
+        if st.button("Update PIN"):
+            stored_pin = str(
+                pd.read_sql(
+                    "SELECT pin FROM users WHERE username=? AND organization=? AND branch=?",
+                    conn,
+                    params=(username, org, branch),
+                ).iloc[0]["pin"]
+            ).strip()
+
+            if not current_pin.strip() or current_pin.strip() != stored_pin:
+                st.error("Wrong PIN")
+            elif not new_pin.strip():
+                st.error("New PIN is required")
+            elif new_pin != confirm_pin:
+                st.error("PINs do not match")
+            else:
+                execute_write(
+                    conn,
+                    "UPDATE users SET pin=? WHERE username=? AND organization=? AND branch=?",
+                    (new_pin.strip(), username, org, branch),
+                )
+                conn.commit()
+                st.success("PIN updated")
+                refresh()
