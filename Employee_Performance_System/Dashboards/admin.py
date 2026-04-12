@@ -255,8 +255,7 @@ def admin_dashboard():
         f"{org}, {admin_branch} Management",
         "Monitor staff, attendance, leaves, alerts, ratings, and branch operations from one clean workspace.",
         pills=[
-            f"Manager: {username}",
-           
+            f"Manager: {username}",           
             f"Hours {work_start.strftime('%H:%M')} - {work_end.strftime('%H:%M')}",
         ],
     )
