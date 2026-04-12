@@ -16,6 +16,7 @@ except Exception:
     HOLIDAYS_OK = False
 
 from database.db import cached_read_sql, get_connection, get_hr_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
+from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
 from Dashboards.ui_responsive import apply_responsive_ui
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
@@ -1061,6 +1062,7 @@ def super_admin_dashboard():
 
     org_business_type = st.session_state["sa_business_type"]
     hr_config = get_hr_config(conn, org)
+    kpi_ai_config = get_kpi_ai_config(conn, org)
     hr_mode_enabled = bool(int(hr_config.get("hr_mode_enabled", 0) or 0))
     hr_handles_people_changes = hr_mode_enabled and bool(int(hr_config.get("hr_handles_people_changes", 1) or 0))
     hr_case_files_enabled = hr_mode_enabled and bool(int(hr_config.get("hr_case_files_enabled", 1) or 0))
@@ -1152,7 +1154,7 @@ def super_admin_dashboard():
         if is_mobile:
             analytics_view = st.radio(
                 "Analytics Area",
-                ["Performance", "Intelligence", "Demographics", "Guest Experience"],
+                ["Performance", "Intelligence", "Demographics", "Guest Experience", "KPI & Service AI"],
                 horizontal=True,
                 key="sa_analytics_view",
                 on_change=_collapse_sa_mobile_nav,
@@ -1162,7 +1164,7 @@ def super_admin_dashboard():
                 st.markdown("### Analytics Area")
                 analytics_view = st.radio(
                     "Analytics Area",
-                    ["Performance", "Intelligence", "Demographics", "Guest Experience"],
+                    ["Performance", "Intelligence", "Demographics", "Guest Experience", "KPI & Service AI"],
                     key="sa_analytics_view",
                 )
 
@@ -4372,6 +4374,336 @@ def super_admin_dashboard():
             )
 
     # =========================================================
+    # KPI & SERVICE AI
+    # =========================================================
+    elif menu == "Analytics" and analytics_view == "KPI & Service AI":
+        st.subheader("KPI & Service AI")
+        st.caption("Create measurable targets, link them to guest experience, and use AI-style signals to know where to coach, reward, or intervene next.")
+
+        kpi_weight = float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
+        service_weight = float(kpi_ai_config.get("service_weight_pct", 40.0) or 40.0)
+        warning_threshold = float(kpi_ai_config.get("warning_health_score", 65.0) or 65.0)
+        critical_threshold = float(kpi_ai_config.get("critical_health_score", 45.0) or 45.0)
+        low_star_threshold = float(kpi_ai_config.get("low_star_threshold", 3.4) or 3.4)
+        min_feedback_count = int(kpi_ai_config.get("min_feedback_count", 3) or 3)
+
+        target_users_df = apply_branch_scope(
+            safe_read(
+                """
+                SELECT username, role, branch
+                FROM users
+                WHERE organization=? AND lower(coalesce(role,'')) IN ('employee','admin','hr')
+                ORDER BY branch, role, username
+                """,
+                conn,
+                params=(org,),
+            )
+        )
+
+        all_kpi_df = safe_read(
+            """
+            SELECT id, branch, scope_type, target_role, target_username, metric_name, target_value,
+                   current_value, unit, period, priority, status, due_date, note,
+                   created_by, updated_by, created_at, updated_at
+            FROM kpi_targets
+            WHERE organization=?
+            ORDER BY CASE WHEN lower(coalesce(status,'active'))='active' THEN 0 ELSE 1 END, due_date ASC, id DESC
+            """,
+            conn,
+            params=(org,),
+        )
+        if branch_scope and not all_kpi_df.empty and "branch" in all_kpi_df.columns:
+            all_kpi_df = all_kpi_df[(all_kpi_df["branch"].fillna("").astype(str).str.strip() == "") | (all_kpi_df["branch"].astype(str) == str(branch_scope))]
+
+        feedback_df = safe_read(
+            """
+            SELECT branch, feedback_scope, target_username, stars, message, created_at
+            FROM client_feedback
+            WHERE organization=?
+            ORDER BY id DESC
+            """,
+            conn,
+            params=(org,),
+        )
+        feedback_df = apply_branch_scope(feedback_df)
+
+        with st.form("sa_create_kpi_goal_form", clear_on_submit=False):
+            st.markdown("### Create KPI / Goal")
+            scope_choice = st.selectbox("Scope", ["Organization", "Branch", "Individual Staff"])
+            available_branches = branches if branches else [""]
+            branch_choice = st.selectbox(
+                "Target Branch",
+                available_branches if available_branches else [""],
+                index=available_branches.index(branch_scope) if branch_scope in available_branches else 0,
+                disabled=scope_choice == "Organization",
+            )
+            target_role = st.selectbox("Target Role", ["employee", "admin", "hr", "all"])
+            user_options_df = target_users_df.copy() if not target_users_df.empty else pd.DataFrame(columns=["username", "role", "branch"])
+            if scope_choice == "Branch" and not user_options_df.empty:
+                user_options_df = user_options_df[user_options_df["branch"].astype(str) == str(branch_choice)]
+            if target_role != "all" and not user_options_df.empty:
+                user_options_df = user_options_df[user_options_df["role"].astype(str).str.lower() == target_role]
+            staff_labels = [f"{row['username']} ({row['role']} | {row['branch'] or 'N/A'})" for _, row in user_options_df.iterrows()] if not user_options_df.empty else ["No staff available"]
+            selected_staff_label = st.selectbox("Target Staff", staff_labels, disabled=scope_choice != "Individual Staff")
+            metric_name = st.text_input("KPI / Goal Name", placeholder="Example: Monthly guest rating target")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                target_value = st.number_input("Target Value", min_value=0.0, value=100.0, step=1.0)
+            with c2:
+                unit = st.selectbox("Unit", ["points", "%", "tasks", "stars", "sales", "cases", "custom"])
+            with c3:
+                period = st.selectbox("Period", ["weekly", "monthly", "quarterly", "annual"])
+            c4, c5 = st.columns(2)
+            with c4:
+                priority = st.selectbox("Priority", ["low", "medium", "high", "critical"])
+            with c5:
+                due_date = st.date_input("Due Date", value=date.today() + timedelta(days=30))
+            goal_note = st.text_area("Goal Definition / Success Note")
+            create_goal = st.form_submit_button("Create KPI Goal")
+
+            if create_goal:
+                clean_metric_name = metric_name.strip()
+                if not clean_metric_name:
+                    st.error("A KPI or goal name is required.")
+                elif scope_choice != "Organization" and not str(branch_choice).strip():
+                    st.error("Choose a target branch for this KPI.")
+                elif scope_choice == "Individual Staff" and (user_options_df.empty or selected_staff_label == "No staff available"):
+                    st.error("No valid staff member is available for this target.")
+                else:
+                    selected_user = user_options_df.iloc[staff_labels.index(selected_staff_label)] if scope_choice == "Individual Staff" and not user_options_df.empty else None
+                    stored_scope = scope_choice.lower().split()[0]
+                    stored_branch = "" if scope_choice == "Organization" else str(branch_choice or "").strip()
+                    stored_target_username = str(selected_user.get("username", "") or "") if selected_user is not None else ""
+                    stored_target_role = str(selected_user.get("role", target_role) or target_role) if selected_user is not None else target_role
+                    conn.execute(
+                        """
+                        INSERT INTO kpi_targets(
+                            organization, branch, scope_type, target_role, target_username,
+                            metric_name, target_value, current_value, unit, period, priority,
+                            status, due_date, note, created_by, updated_by, created_at, updated_at
+                        )
+                        VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,datetime('now'),datetime('now'))
+                        """,
+                        (
+                            org,
+                            stored_branch,
+                            stored_scope,
+                            stored_target_role,
+                            stored_target_username,
+                            clean_metric_name,
+                            float(target_value),
+                            0.0,
+                            unit,
+                            period,
+                            priority,
+                            "active",
+                            str(due_date),
+                            goal_note.strip(),
+                            user,
+                            user,
+                        ),
+                    )
+                    conn.commit()
+                    log_action(conn, user, "CREATE KPI GOAL", clean_metric_name, org)
+                    st.success("KPI goal created.")
+                    st.rerun()
+
+        if all_kpi_df.empty:
+            st.info("No KPI goals created yet.")
+        else:
+            kpi_view = all_kpi_df.copy()
+            kpi_view["target_value"] = pd.to_numeric(kpi_view["target_value"], errors="coerce").fillna(0)
+            kpi_view["current_value"] = pd.to_numeric(kpi_view["current_value"], errors="coerce").fillna(0)
+            kpi_view["completion_pct"] = kpi_view.apply(
+                lambda row: round((float(row["current_value"]) / float(row["target_value"]) * 100), 1) if float(row["target_value"] or 0) > 0 else 0.0,
+                axis=1,
+            )
+            kpi_view["scope_label"] = kpi_view.apply(
+                lambda row: "All Branches" if str(row.get("scope_type", "")).lower() == "organization" else (str(row.get("branch", "") or "All Branches") if str(row.get("scope_type", "")).lower() == "branch" else str(row.get("target_username", "") or "Staff")),
+                axis=1,
+            )
+
+            avg_completion = float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
+            avg_stars = float(pd.to_numeric(feedback_df["stars"], errors="coerce").mean()) if not feedback_df.empty else None
+            feedback_count = int(len(feedback_df))
+            overdue = int((pd.to_datetime(kpi_view["due_date"], errors="coerce") < pd.Timestamp.now().normalize()).fillna(False).sum()) if "due_date" in kpi_view.columns else 0
+            completion_score = max(0.0, min(100.0, avg_completion))
+            service_score = None if avg_stars is None else max(0.0, min(100.0, (float(avg_stars) / 5.0) * 100.0))
+            health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
+
+            s1, s2, s3, s4, s5 = st.columns(5)
+            s1.metric("KPI Goals", len(kpi_view))
+            s2.metric("Avg Completion", f"{avg_completion:.0f}%")
+            s3.metric("Guest Stars", f"{avg_stars:.1f}" if avg_stars is not None else "-")
+            s4.metric("Overdue Goals", overdue)
+            s5.metric("Health Score", f"{health_score:.0f}/100")
+
+            st.markdown("### AI Wow Signals")
+            if avg_stars is not None and avg_stars >= 4.5 and avg_completion >= 85:
+                st.success(f"AI wow: service and execution are both strong right now ({avg_stars:.1f} stars, {avg_completion:.0f}% KPI completion). This scope can be used as a model playbook.")
+            elif feedback_count >= min_feedback_count and (health_score <= critical_threshold or (avg_stars is not None and avg_stars <= low_star_threshold and avg_completion < warning_threshold)):
+                st.error(f"AI critical escalation: weighted health is {health_score:.0f}/100 with {feedback_count} guest signals. Escalate this scope for immediate intervention and recovery actions.")
+            elif avg_stars is not None and avg_stars < 3.5 and avg_completion < 60:
+                st.error(f"AI risk alert: guest sentiment ({avg_stars:.1f} stars) and KPI execution ({avg_completion:.0f}%) are both weak. Trigger coaching, follow-up, and service recovery fast.")
+            elif health_score <= warning_threshold:
+                st.warning(f"AI warning: weighted health is {health_score:.0f}/100. Tighten execution rhythm and customer care follow-through before risk escalates.")
+            elif avg_stars is not None and avg_stars < 3.8:
+                st.warning(f"AI service alert: customers are rating this scope at {avg_stars:.1f} stars on average. Review speed, courtesy, and consistency.")
+            elif avg_completion < 60:
+                st.warning(f"AI execution alert: KPI completion is only around {avg_completion:.0f}%. Tighten weekly accountability and follow-through.")
+            else:
+                st.info("AI coach: maintain the current rhythm and keep balancing output, quality, and customer experience.")
+
+            st.markdown("### KPI Board")
+            st.dataframe(
+                kpi_view[[c for c in ["metric_name", "scope_type", "scope_label", "target_role", "current_value", "target_value", "unit", "completion_pct", "priority", "status", "due_date"] if c in kpi_view.columns]],
+                use_container_width=True,
+                hide_index=True,
+            )
+
+            update_labels = [f"#{int(row['id'])} | {row['metric_name']} | {row['scope_label']}" for _, row in kpi_view.iterrows()]
+            selected_kpi_label = st.selectbox("Update KPI / Goal", update_labels, key="sa_kpi_pick")
+            selected_kpi_row = kpi_view.iloc[update_labels.index(selected_kpi_label)]
+            with st.form("sa_kpi_update_form", clear_on_submit=False):
+                new_value = st.number_input("Current progress", min_value=0.0, value=float(selected_kpi_row.get("current_value", 0) or 0), step=1.0)
+                new_note = st.text_area("Progress note", value=str(selected_kpi_row.get("note", "") or ""))
+                new_status = st.selectbox(
+                    "Status",
+                    ["active", "at_risk", "completed", "paused"],
+                    index=["active", "at_risk", "completed", "paused"].index(str(selected_kpi_row.get("status", "active") or "active")) if str(selected_kpi_row.get("status", "active") or "active") in ["active", "at_risk", "completed", "paused"] else 0,
+                )
+                if st.form_submit_button("Save KPI Update"):
+                    conn.execute(
+                        """
+                        UPDATE kpi_targets
+                        SET current_value=?, note=?, status=?, updated_by=?, updated_at=datetime('now')
+                        WHERE id=? AND organization=?
+                        """,
+                        (float(new_value), new_note.strip(), new_status, user, int(selected_kpi_row.get("id", 0) or 0), org),
+                    )
+                    conn.execute(
+                        """
+                        INSERT INTO kpi_progress_updates(kpi_id, organization, branch, target_username, progress_value, progress_note, updated_by, created_at)
+                        VALUES(?,?,?,?,?,?,?,datetime('now'))
+                        """,
+                        (
+                            int(selected_kpi_row.get("id", 0) or 0),
+                            org,
+                            str(selected_kpi_row.get("branch", "") or ""),
+                            str(selected_kpi_row.get("target_username", "") or ""),
+                            float(new_value),
+                            new_note.strip(),
+                            user,
+                        ),
+                    )
+                    conn.commit()
+                    log_action(conn, user, "UPDATE KPI GOAL", str(selected_kpi_row.get("metric_name", "KPI")), org)
+                    st.success("KPI updated.")
+                    st.rerun()
+
+            st.markdown("### Branch Service vs KPI Execution")
+            branch_kpi_summary = (
+                kpi_view.assign(branch_label=kpi_view["branch"].fillna("").astype(str).replace({"": "All Branches"}))
+                .groupby("branch_label", dropna=False)
+                .agg(kpi_count=("id", "count"), avg_completion=("completion_pct", "mean"))
+                .reset_index()
+            )
+            if feedback_df.empty:
+                branch_feedback_summary = pd.DataFrame(columns=["branch_label", "feedback_count", "avg_stars"])
+            else:
+                branch_feedback_summary = (
+                    feedback_df.assign(branch_label=feedback_df["branch"].fillna("").astype(str).replace({"": "All Branches"}))
+                    .groupby("branch_label", dropna=False)
+                    .agg(feedback_count=("stars", "count"), avg_stars=("stars", "mean"))
+                    .reset_index()
+                )
+            branch_merge = branch_kpi_summary.merge(branch_feedback_summary, how="left", on="branch_label")
+            if not branch_merge.empty:
+                branch_merge["avg_completion"] = branch_merge["avg_completion"].round(1)
+                branch_merge["avg_stars"] = pd.to_numeric(branch_merge["avg_stars"], errors="coerce").round(1)
+                branch_merge["health_score"] = branch_merge.apply(
+                    lambda row: round(
+                        (
+                            (max(0.0, min(100.0, float(row.get("avg_completion", 0) or 0))) * kpi_weight)
+                            + (max(0.0, min(100.0, (float(row.get("avg_stars", 0) or 0) / 5.0) * 100.0)) * service_weight)
+                        ) / max(1.0, (kpi_weight + service_weight)),
+                        1,
+                    ) if pd.notna(row.get("avg_stars")) else round(max(0.0, min(100.0, float(row.get("avg_completion", 0) or 0))), 1),
+                    axis=1,
+                )
+                def _branch_ai_note(row):
+                    stars = float(row.get("avg_stars", 0) or 0)
+                    completion = float(row.get("avg_completion", 0) or 0)
+                    health = float(row.get("health_score", 0) or 0)
+                    if stars >= 4.5 and completion >= 85:
+                        return "Benchmark branch"
+                    if health <= critical_threshold:
+                        return "Escalate now"
+                    if health <= warning_threshold:
+                        return "Watchlist branch"
+                    if stars < 3.5 and completion < 60:
+                        return "Urgent service + KPI reset"
+                    if stars < 3.8:
+                        return "Customer care coaching"
+                    if completion < 60:
+                        return "Execution follow-up needed"
+                    return "Steady monitor"
+                branch_merge["AI Signal"] = branch_merge.apply(_branch_ai_note, axis=1)
+                st.dataframe(branch_merge, use_container_width=True, hide_index=True)
+
+            if not feedback_df.empty:
+                st.markdown("### Staff Service Spotlight")
+                ratings_summary = apply_branch_scope(safe_read(
+                    "SELECT rated, AVG(score) AS peer_avg_score, COUNT(*) AS rating_count FROM ratings WHERE organization=? GROUP BY rated",
+                    conn,
+                    params=(org,),
+                ))
+                individual_feedback = feedback_df[feedback_df["feedback_scope"].astype(str) == "individual"].copy()
+                if not individual_feedback.empty:
+                    service_summary = (
+                        individual_feedback.groupby("target_username", dropna=False)
+                        .agg(guest_feedback_count=("stars", "count"), guest_avg_stars=("stars", "mean"))
+                        .reset_index()
+                        .rename(columns={"target_username": "staff"})
+                    )
+                    if not ratings_summary.empty:
+                        ratings_summary = ratings_summary.rename(columns={"rated": "staff"})
+                        service_summary = service_summary.merge(ratings_summary, how="left", on="staff")
+                    if not service_summary.empty:
+                        service_summary["guest_avg_stars"] = pd.to_numeric(service_summary["guest_avg_stars"], errors="coerce").round(1)
+                        service_summary["peer_avg_score"] = pd.to_numeric(service_summary.get("peer_avg_score"), errors="coerce").round(1)
+                        service_summary["health_score"] = service_summary.apply(
+                            lambda row: round(
+                                (
+                                    (max(0.0, min(100.0, float(row.get("peer_avg_score", 0) or 0))) * kpi_weight)
+                                    + (max(0.0, min(100.0, (float(row.get("guest_avg_stars", 0) or 0) / 5.0) * 100.0)) * service_weight)
+                                ) / max(1.0, (kpi_weight + service_weight)),
+                                1,
+                            ),
+                            axis=1,
+                        )
+                        def _staff_ai_signal(row):
+                            stars = float(row.get("guest_avg_stars", 0) or 0)
+                            peer = float(row.get("peer_avg_score", 0) or 0)
+                            health = float(row.get("health_score", 0) or 0)
+                            feedback_n = int(row.get("guest_feedback_count", 0) or 0)
+                            if stars >= 4.5 and peer >= 80:
+                                return "WOW performer"
+                            if feedback_n >= min_feedback_count and health <= critical_threshold:
+                                return "Escalate coaching case"
+                            if health <= warning_threshold:
+                                return "Watchlist"
+                            if stars < 3.5 and peer < 60:
+                                return "Coach urgently"
+                            if stars >= 4.5 and peer < 60:
+                                return "Guests love them - strengthen internal consistency"
+                            if stars < 3.5 and peer >= 80:
+                                return "Output high but service risk"
+                            return "Normal monitor"
+                        service_summary["AI Signal"] = service_summary.apply(_staff_ai_signal, axis=1)
+                        st.dataframe(service_summary.sort_values(["guest_avg_stars", "guest_feedback_count"], ascending=[False, False]), use_container_width=True, hide_index=True)
+
+    # =========================================================
     # ATTENDANCE
     # =========================================================
     elif menu == "Attendance":
@@ -4751,6 +5083,81 @@ def super_admin_dashboard():
                 conn.commit()
                 log_action(conn, user, "UPDATE GUEST EXPERIENCE SETTINGS", "SYSTEM", org)
                 st.success("Guest Experience controls updated.")
+        st.markdown("### KPI & Service AI Controls")
+        st.caption("Tune weighted health scoring and escalation thresholds that drive KPI and service risk signals across dashboards.")
+        with st.form("kpi_service_ai_control_form", clear_on_submit=False):
+            ks1, ks2 = st.columns(2)
+            with ks1:
+                kpi_weight_input = st.slider(
+                    "KPI execution weight (%)",
+                    min_value=10,
+                    max_value=90,
+                    value=int(round(float(kpi_ai_config.get("kpi_weight_pct", 60.0)))),
+                )
+                warning_health_input = st.slider(
+                    "Warning threshold (health score)",
+                    min_value=20,
+                    max_value=95,
+                    value=int(round(float(kpi_ai_config.get("warning_health_score", 65.0)))),
+                )
+                low_star_threshold_input = st.slider(
+                    "Low service stars threshold",
+                    min_value=1.0,
+                    max_value=5.0,
+                    value=float(kpi_ai_config.get("low_star_threshold", 3.4)),
+                    step=0.1,
+                )
+            with ks2:
+                service_weight_input = 100 - int(kpi_weight_input)
+                st.metric("Service weight (%)", service_weight_input)
+                critical_health_input = st.slider(
+                    "Critical threshold (health score)",
+                    min_value=10,
+                    max_value=int(warning_health_input),
+                    value=min(int(round(float(kpi_ai_config.get("critical_health_score", 45.0)))), int(warning_health_input)),
+                )
+                min_feedback_input = st.number_input(
+                    "Minimum feedback count for escalation",
+                    min_value=1,
+                    max_value=50,
+                    value=int(kpi_ai_config.get("min_feedback_count", 3) or 3),
+                    step=1,
+                )
+            if st.form_submit_button("Save KPI & Service AI Controls"):
+                conn.execute(
+                    """
+                    INSERT INTO organization_kpi_ai_settings(
+                        organization, kpi_weight_pct, service_weight_pct,
+                        warning_health_score, critical_health_score,
+                        low_star_threshold, min_feedback_count,
+                        updated_by, updated_at
+                    )
+                    VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+                    ON CONFLICT(organization) DO UPDATE SET
+                        kpi_weight_pct=excluded.kpi_weight_pct,
+                        service_weight_pct=excluded.service_weight_pct,
+                        warning_health_score=excluded.warning_health_score,
+                        critical_health_score=excluded.critical_health_score,
+                        low_star_threshold=excluded.low_star_threshold,
+                        min_feedback_count=excluded.min_feedback_count,
+                        updated_by=excluded.updated_by,
+                        updated_at=datetime('now')
+                    """,
+                    (
+                        org,
+                        float(kpi_weight_input),
+                        float(service_weight_input),
+                        float(warning_health_input),
+                        float(critical_health_input),
+                        float(low_star_threshold_input),
+                        int(min_feedback_input),
+                        user,
+                    ),
+                )
+                conn.commit()
+                log_action(conn, user, "UPDATE KPI SERVICE AI SETTINGS", "SYSTEM", org)
+                st.success("KPI & Service AI controls updated.")
+                st.rerun()
 
         st.markdown("### HR Mode & Delegation")
         st.caption("When HR mode is ON, HR can operate organization-wide or branch-specific using the HR role. HR submits leave, discipline, workforce change, documents, and onboarding actions for super admin approval or oversight, and branch managers automatically lose selected people-ops controls.")

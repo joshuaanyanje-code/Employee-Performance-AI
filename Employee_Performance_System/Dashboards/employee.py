@@ -2,7 +2,7 @@ import os
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
-from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message, get_hr_config
+from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message, get_hr_config, get_kpi_ai_config
 from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
@@ -167,6 +167,7 @@ def employee_dashboard():
 
     branch = user_data.iloc[0]["branch"]
     hr_config = get_hr_config(conn, org)
+    kpi_ai_config = get_kpi_ai_config(conn, org)
     hr_mode_enabled = bool(int(hr_config.get("hr_mode_enabled", 0) or 0))
     hr_coverage_df = _safe_read(
         conn,
@@ -232,7 +233,7 @@ def employee_dashboard():
             return st.selectbox(label, options, key=key, **kwargs)
 
     page_items = [
-        "Profile", "Schedule", "Attendance", "Leave", "Notifications"
+        "Profile", "Schedule", "Attendance", "Leave", "Notifications", "My KPIs"
     ]
     if employee_docs_enabled:
         page_items.append("My HR Documents")
@@ -663,6 +664,153 @@ def employee_dashboard():
                     st.warning(message)
                 else:
                     st.info(message)
+
+    # =====================================================
+    # MY KPIS
+    # =====================================================
+    elif page == "My KPIs":
+        st.subheader("My Goals & KPIs")
+        st.caption("Track your assigned goals, update progress, and see how guest experience is linking to your performance.")
+
+        kpi_weight = float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
+        service_weight = float(kpi_ai_config.get("service_weight_pct", 40.0) or 40.0)
+        warning_threshold = float(kpi_ai_config.get("warning_health_score", 65.0) or 65.0)
+        critical_threshold = float(kpi_ai_config.get("critical_health_score", 45.0) or 45.0)
+        low_star_threshold = float(kpi_ai_config.get("low_star_threshold", 3.4) or 3.4)
+        min_feedback_count = int(kpi_ai_config.get("min_feedback_count", 3) or 3)
+
+        kpi_df = _safe_read(
+            conn,
+            """
+            SELECT id, branch, scope_type, target_role, metric_name, target_value, current_value,
+                   unit, period, priority, status, due_date, note, created_by, updated_by, created_at, updated_at
+            FROM kpi_targets
+            WHERE organization=?
+              AND lower(coalesce(status,'active'))!='archived'
+              AND (
+                    (lower(coalesce(scope_type,'individual'))='individual' AND lower(trim(coalesce(target_username,'')))=lower(trim(?)))
+                 OR (lower(coalesce(scope_type,'branch'))='branch' AND lower(trim(coalesce(branch,'')))=lower(trim(?)) AND lower(coalesce(target_role,'employee')) IN ('employee','all'))
+                 OR (lower(coalesce(scope_type,'organization'))='organization' AND lower(coalesce(target_role,'employee')) IN ('employee','all'))
+              )
+            ORDER BY CASE WHEN lower(coalesce(status,'active'))='active' THEN 0 ELSE 1 END, due_date ASC, id DESC
+            """,
+            params=(org, username, branch),
+        )
+
+        service_df = _safe_read(
+            conn,
+            """
+            SELECT feedback_scope, stars, message, created_at
+            FROM client_feedback
+            WHERE organization=?
+              AND ((feedback_scope='individual' AND lower(trim(coalesce(target_username,'')))=lower(trim(?)))
+                   OR (feedback_scope='general' AND lower(trim(coalesce(branch,'')))=lower(trim(?))))
+            ORDER BY id DESC
+            """,
+            params=(org, username, branch),
+        )
+
+        if kpi_df.empty:
+            st.info("No KPI goals have been assigned to you yet.")
+        else:
+            kpi_view = kpi_df.copy()
+            kpi_view["target_value"] = pd.to_numeric(kpi_view["target_value"], errors="coerce").fillna(0)
+            kpi_view["current_value"] = pd.to_numeric(kpi_view["current_value"], errors="coerce").fillna(0)
+            kpi_view["completion_pct"] = kpi_view.apply(
+                lambda row: round((float(row["current_value"]) / float(row["target_value"]) * 100), 1) if float(row["target_value"] or 0) > 0 else 0.0,
+                axis=1,
+            )
+
+            total_goals = len(kpi_view)
+            avg_completion = float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
+            due_soon = int((pd.to_datetime(kpi_view["due_date"], errors="coerce") <= (pd.Timestamp.now() + pd.Timedelta(days=7))).fillna(False).sum()) if "due_date" in kpi_view.columns else 0
+            c1, c2, c3 = st.columns(3)
+            c1.metric("Active Goals", total_goals)
+            c2.metric("Average Completion", f"{avg_completion:.0f}%")
+            c3.metric("Due Soon", due_soon)
+
+            display_cols = [c for c in ["metric_name", "scope_type", "branch", "current_value", "target_value", "unit", "completion_pct", "period", "priority", "status", "due_date"] if c in kpi_view.columns]
+            st.dataframe(kpi_view[display_cols], use_container_width=True, hide_index=True)
+
+            target_feedback_df = service_df[service_df["feedback_scope"].astype(str) == "individual"].copy() if not service_df.empty else pd.DataFrame()
+            branch_feedback_df = service_df[service_df["feedback_scope"].astype(str) == "general"].copy() if not service_df.empty else pd.DataFrame()
+            avg_target_stars = float(pd.to_numeric(target_feedback_df["stars"], errors="coerce").mean()) if not target_feedback_df.empty else None
+            avg_branch_stars = float(pd.to_numeric(branch_feedback_df["stars"], errors="coerce").mean()) if not branch_feedback_df.empty else None
+            personal_feedback_count = int(len(target_feedback_df))
+            completion_score = max(0.0, min(100.0, avg_completion))
+            reference_stars = avg_target_stars if avg_target_stars is not None else avg_branch_stars
+            service_score = None if reference_stars is None else max(0.0, min(100.0, (float(reference_stars) / 5.0) * 100.0))
+            health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
+
+            h1, h2, h3, h4 = st.columns(4)
+            h1.metric("Personal Health Score", f"{health_score:.0f}/100")
+            h2.metric("KPI Weight", f"{kpi_weight:.0f}%")
+            h3.metric("Service Weight", f"{service_weight:.0f}%")
+            h4.metric("Feedback Count", personal_feedback_count)
+
+            st.markdown("### AI Coaching Snapshot")
+            if avg_completion >= 85 and (avg_target_stars is None or avg_target_stars >= 4.2):
+                st.success(f"AI growth signal: you are tracking strongly at about {avg_completion:.0f}% KPI completion. Keep the current service rhythm and ask for stretch goals.")
+            elif personal_feedback_count >= min_feedback_count and (health_score <= critical_threshold or (avg_target_stars is not None and avg_target_stars <= low_star_threshold and avg_completion < warning_threshold)):
+                st.error(f"AI escalation alert: your weighted health is {health_score:.0f}/100. Ask your manager for a focused recovery plan and weekly check-ins.")
+            elif avg_completion < 60 and avg_target_stars is not None and avg_target_stars < 3.5:
+                st.error(f"AI alert: your KPI completion is around {avg_completion:.0f}% and guest feedback is soft at {avg_target_stars:.1f} stars. Focus on service recovery and daily follow-through.")
+            elif health_score <= warning_threshold:
+                st.warning(f"AI watchlist: your weighted health is {health_score:.0f}/100. Increase consistency in execution and customer experience this week.")
+            elif avg_completion < 60:
+                st.warning(f"AI coach: your KPI completion is around {avg_completion:.0f}%. Break the goal into weekly wins and update progress more often.")
+            elif avg_target_stars is not None and avg_target_stars >= 4.5:
+                st.success(f"AI recognition: guests are rating your service at {avg_target_stars:.1f} stars on average. Keep building on that strength.")
+            else:
+                st.info("AI coach: stay consistent on your current goals and keep watching customer feedback for service trends.")
+
+            if not service_df.empty:
+                st.markdown("### Customer / Guest Feedback Link")
+                s1, s2, s3 = st.columns(3)
+                s1.metric("Personal Feedback", len(target_feedback_df))
+                s2.metric("Personal Avg Stars", f"{avg_target_stars:.1f}" if avg_target_stars is not None else "-")
+                s3.metric("Branch Team Avg Stars", f"{avg_branch_stars:.1f}" if avg_branch_stars is not None else "-")
+                service_view = service_df.copy()
+                service_view["stars"] = pd.to_numeric(service_view["stars"], errors="coerce").fillna(0)
+                st.dataframe(service_view[[c for c in ["created_at", "feedback_scope", "stars", "message"] if c in service_view.columns]], use_container_width=True, hide_index=True)
+
+            labels = [f"#{int(row['id'])} | {row['metric_name']} | {row['current_value']}/{row['target_value']} {row['unit']}" for _, row in kpi_view.iterrows()]
+            selected_label = st.selectbox("Update progress", labels, key="employee_kpi_pick")
+            selected_row = kpi_view.iloc[labels.index(selected_label)]
+            with st.form("employee_kpi_update_form", clear_on_submit=False):
+                progress_value = st.number_input(
+                    "Current progress value",
+                    min_value=0.0,
+                    value=float(selected_row.get("current_value", 0) or 0),
+                    step=1.0,
+                )
+                progress_note = st.text_area("Progress note", value=str(selected_row.get("note", "") or ""))
+                progress_status = st.selectbox(
+                    "Status",
+                    ["active", "at_risk", "completed"],
+                    index=["active", "at_risk", "completed"].index(str(selected_row.get("status", "active") or "active")) if str(selected_row.get("status", "active") or "active") in ["active", "at_risk", "completed"] else 0,
+                )
+                save_progress = st.form_submit_button("Save KPI Progress")
+                if save_progress:
+                    execute_write(
+                        conn,
+                        """
+                        UPDATE kpi_targets
+                        SET current_value=?, note=?, status=?, updated_by=?, updated_at=datetime('now')
+                        WHERE id=? AND organization=?
+                        """,
+                        (float(progress_value), progress_note.strip(), progress_status, username, int(selected_row.get("id", 0) or 0), org),
+                    )
+                    execute_write(
+                        conn,
+                        """
+                        INSERT INTO kpi_progress_updates(kpi_id, organization, branch, target_username, progress_value, progress_note, updated_by, created_at)
+                        VALUES(?,?,?,?,?,?,?,datetime('now'))
+                        """,
+                        (int(selected_row.get("id", 0) or 0), org, branch, username, float(progress_value), progress_note.strip(), username),
+                    )
+                    conn.commit()
+                    refresh_with_message("KPI progress updated.")
 
     # =====================================================
     # MY HR DOCUMENTS

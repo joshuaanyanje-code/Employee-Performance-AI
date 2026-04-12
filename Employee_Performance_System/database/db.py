@@ -606,6 +606,59 @@ def get_hr_config(conn, organization=""):
     return config
 
 
+def get_kpi_ai_config(conn, organization=""):
+    config = {
+        "kpi_weight_pct": 60.0,
+        "service_weight_pct": 40.0,
+        "warning_health_score": 65.0,
+        "critical_health_score": 45.0,
+        "low_star_threshold": 3.4,
+        "min_feedback_count": 3,
+    }
+    org_name = str(organization or "").strip()
+    if not org_name:
+        return config
+
+    try:
+        row = conn.execute(
+            """
+            SELECT kpi_weight_pct, service_weight_pct, warning_health_score,
+                   critical_health_score, low_star_threshold, min_feedback_count
+            FROM organization_kpi_ai_settings
+            WHERE organization=?
+            LIMIT 1
+            """,
+            (org_name,),
+        ).fetchone()
+        if row:
+            config.update(
+                {
+                    "kpi_weight_pct": float(row[0] if row[0] is not None else 60.0),
+                    "service_weight_pct": float(row[1] if row[1] is not None else 40.0),
+                    "warning_health_score": float(row[2] if row[2] is not None else 65.0),
+                    "critical_health_score": float(row[3] if row[3] is not None else 45.0),
+                    "low_star_threshold": float(row[4] if row[4] is not None else 3.4),
+                    "min_feedback_count": int(row[5] if row[5] is not None else 3),
+                }
+            )
+    except Exception:
+        pass
+
+    total_weight = float(config.get("kpi_weight_pct", 60.0)) + float(config.get("service_weight_pct", 40.0))
+    if total_weight <= 0:
+        config["kpi_weight_pct"] = 60.0
+        config["service_weight_pct"] = 40.0
+    else:
+        config["kpi_weight_pct"] = round(float(config.get("kpi_weight_pct", 60.0)) / total_weight * 100.0, 1)
+        config["service_weight_pct"] = round(float(config.get("service_weight_pct", 40.0)) / total_weight * 100.0, 1)
+
+    config["warning_health_score"] = max(1.0, min(100.0, float(config.get("warning_health_score", 65.0))))
+    config["critical_health_score"] = max(1.0, min(float(config["warning_health_score"]), float(config.get("critical_health_score", 45.0))))
+    config["low_star_threshold"] = max(1.0, min(5.0, float(config.get("low_star_threshold", 3.4))))
+    config["min_feedback_count"] = max(1, int(config.get("min_feedback_count", 3) or 3))
+    return config
+
+
 # =========================
 # LOG SYSTEM (NO IMPORT LOOP 🔥)
 # =========================
@@ -1056,6 +1109,61 @@ def create_tables():
     """)
 
     # =========================
+    # KPI TARGETS
+    # =========================
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS kpi_targets(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        organization TEXT,
+        branch TEXT DEFAULT '',
+        scope_type TEXT DEFAULT 'individual',
+        target_role TEXT DEFAULT 'employee',
+        target_username TEXT DEFAULT '',
+        metric_name TEXT,
+        target_value REAL DEFAULT 0,
+        current_value REAL DEFAULT 0,
+        unit TEXT DEFAULT 'points',
+        period TEXT DEFAULT 'monthly',
+        priority TEXT DEFAULT 'medium',
+        status TEXT DEFAULT 'active',
+        due_date TEXT DEFAULT '',
+        note TEXT DEFAULT '',
+        created_by TEXT DEFAULT '',
+        updated_by TEXT DEFAULT '',
+        created_at TEXT,
+        updated_at TEXT DEFAULT ''
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS kpi_progress_updates(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kpi_id INTEGER,
+        organization TEXT,
+        branch TEXT DEFAULT '',
+        target_username TEXT DEFAULT '',
+        progress_value REAL DEFAULT 0,
+        progress_note TEXT DEFAULT '',
+        updated_by TEXT DEFAULT '',
+        created_at TEXT
+    )
+    """)
+
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS organization_kpi_ai_settings(
+        organization TEXT PRIMARY KEY,
+        kpi_weight_pct REAL DEFAULT 60,
+        service_weight_pct REAL DEFAULT 40,
+        warning_health_score REAL DEFAULT 65,
+        critical_health_score REAL DEFAULT 45,
+        low_star_threshold REAL DEFAULT 3.4,
+        min_feedback_count INTEGER DEFAULT 3,
+        updated_by TEXT DEFAULT '',
+        updated_at TEXT DEFAULT ''
+    )
+    """)
+
+    # =========================
     # SETTINGS
     # =========================
     c.execute("""
@@ -1449,6 +1557,9 @@ def create_tables():
     c.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_expires ON user_sessions(expires_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_client_feedback_org_branch_created ON client_feedback(organization, branch, created_at)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_client_feedback_target_scope ON client_feedback(target_username, feedback_scope)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_kpi_targets_org_branch_scope ON kpi_targets(organization, branch, scope_type, target_username)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_kpi_targets_status_due ON kpi_targets(status, due_date)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_kpi_progress_org_target_created ON kpi_progress_updates(organization, target_username, created_at)")
 
     conn.commit()
     conn.close()
