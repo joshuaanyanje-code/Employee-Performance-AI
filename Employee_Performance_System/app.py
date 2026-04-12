@@ -5,12 +5,17 @@ import secrets
 import importlib
 import time
 from datetime import datetime, timedelta
-from Dashboards.ui_responsive import apply_responsive_ui
 try:
-    from Dashboards.ui_responsive import is_mobile_device
+    from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
 except Exception:
-    def is_mobile_device():
-        return False
+    try:
+        from Employee_Performance_System.Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+    except Exception:
+        def apply_responsive_ui(mode="default"):
+            return None
+
+        def is_mobile_device():
+            return False
 
 # =====================================================
 # PAGE CONFIG
