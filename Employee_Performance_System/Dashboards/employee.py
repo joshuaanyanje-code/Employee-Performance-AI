@@ -192,7 +192,7 @@ def recommendation(score):
     elif score >= 75:
         return "👏 Strong performance. Stay consistent."
     elif score >= 55:
-        return "⚠ Improve consistency."
+        return "⚠ Improve on your performance."
     else:
         return "🚨 Serious improvement required."
 
@@ -255,9 +255,9 @@ def employee_dashboard():
 
     st.title("Employee Dashboard")
     render_dashboard_banner(
-        "Employee workspace",
+        "Specialist workspace",
         f"Welcome, {username}",
-        "Track your schedule, attendance, leave, ratings, and growth in one calm place.",
+        "Track your schedule, attendance, leave, ratings, and growth.",
         pills=[
             f"Branch {branch}",
             f"Organization {org}",
