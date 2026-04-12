@@ -259,9 +259,7 @@ def employee_dashboard():
         f"Welcome, {username}",
         "Track your schedule, attendance, leave, ratings, and growth.",
         pills=[
-            f"Branch {branch}",
-            f"Organization {org}",
-            "Attendance and growth",
+             f"Organization {org}",
         ],
     )
     show_flash_message()
