@@ -1306,6 +1306,10 @@ def master_admin_dashboard():
         with st.sidebar:
             return st.multiselect(label, options, default=default, key=key, **kwargs)
 
+    def render_table_on_demand(label, data, key, **kwargs):
+        if st.checkbox(f"View {label}", key=f"master_view_{key}", value=False):
+            st.dataframe(data, **kwargs)
+
     menu_items = [
         "📊 Overview",
         "🏢 Organizations",
@@ -1363,12 +1367,12 @@ def master_admin_dashboard():
             if org_count > 0:
                 st.write("\n**Organization Details:**")
                 org_details = pd.read_sql("SELECT id, name, status, created_at FROM organizations ORDER BY id DESC", conn)
-                st.dataframe(org_details, use_container_width=True)
+                render_table_on_demand("organization details", org_details, "debug_org_details", use_container_width=True)
             
             if branch_count > 0:
                 st.write("\n**Branches and Their Organizations:**")
                 branch_orgs = pd.read_sql("SELECT id, name, organization, status FROM branches ORDER BY id DESC LIMIT 10", conn)
-                st.dataframe(branch_orgs, use_container_width=True)
+                render_table_on_demand("branches and organizations", branch_orgs, "debug_branch_orgs", use_container_width=True)
             
             if org_count == 0 and branch_count > 0:
                 st.error("⚠️ Issue Found: Branches exist but no organizations exist. This suggests branches were created with organization references that no longer exist.")
@@ -1431,7 +1435,12 @@ def master_admin_dashboard():
                     return ["background-color: #fff3cd"] * len(r)
                 return [""] * len(r)
 
-            st.dataframe(df_summary.style.apply(color_row, axis=1), use_container_width=True)
+            render_table_on_demand(
+                "organization summary table",
+                df_summary.style.apply(color_row, axis=1),
+                "overview_org_summary",
+                use_container_width=True,
+            )
 
         st.divider()
         st.markdown("### ⬇ Chief Administrator Data Exports")
@@ -1502,7 +1511,7 @@ def master_admin_dashboard():
                 custom_df = base_df.copy()
 
             st.caption(f"Preview: {len(custom_df)} row(s), {len(custom_df.columns)} column(s)")
-            st.dataframe(custom_df.head(50), use_container_width=True)
+            render_table_on_demand("custom export preview", custom_df.head(50), "overview_custom_export_preview", use_container_width=True)
 
             safe_name = export_kind.lower().replace(" ", "_")
             if selected_org_filter != "All":
@@ -1535,7 +1544,7 @@ def master_admin_dashboard():
             if df.empty:
                 st.info("No organizations yet.")
             else:
-                st.dataframe(df, use_container_width=True)
+                render_table_on_demand("organizations list", df, "orgs_list", use_container_width=True)
                 st.download_button(
                     "Export Organizations (CSV)",
                     data=df.to_csv(index=False),
@@ -1795,7 +1804,7 @@ def master_admin_dashboard():
                 cm1.metric("💰 Total Collected (Filtered)", f"KES {total_amt:,.0f}")
                 cm2.metric("Transactions", len(df_filtered))
 
-                st.dataframe(df_filtered, use_container_width=True)
+                render_table_on_demand("payment history table", df_filtered, "payments_history", use_container_width=True)
 
                 if not df_filtered.empty:
                     st.divider()
@@ -1803,7 +1812,7 @@ def master_admin_dashboard():
                     per_org = df_filtered.groupby("organization")["amount"].sum().reset_index()
                     per_org.columns = ["Organization", "Total (KES)"]
                     per_org = per_org.sort_values("Total (KES)", ascending=False)
-                    st.dataframe(per_org, use_container_width=True)
+                    render_table_on_demand("per-organization payment totals", per_org, "payments_per_org_totals", use_container_width=True)
 
         with tab_req:
             orgs_req = safe_read("SELECT name, phone FROM organizations ORDER BY name", conn)
@@ -2228,7 +2237,7 @@ def master_admin_dashboard():
                 df_emp = df_emp[df_emp["role"] == role_filter]
 
             st.markdown(f"**{len(df_emp)} record(s) found**")
-            st.dataframe(df_emp, use_container_width=True)
+            render_table_on_demand("employees and users table", df_emp, "employees_filtered", use_container_width=True)
 
             st.download_button(
                 "Export Filtered Users (CSV)",
@@ -2270,9 +2279,9 @@ def master_admin_dashboard():
                                      title="Top 5 Org Performance")
                         st.plotly_chart(fig, use_container_width=True)
                     except Exception:
-                        st.dataframe(org_scores)
+                        render_table_on_demand("top organization scores", org_scores, "analytics_top_org_scores_fallback")
                 else:
-                    st.dataframe(org_scores)
+                    render_table_on_demand("top organization scores", org_scores, "analytics_top_org_scores")
 
             if not payments_all.empty:
                 st.divider()
@@ -2288,7 +2297,7 @@ def master_admin_dashboard():
                         fig2 = px.bar(pay_chart, x="Month", y="Total KES", title="Monthly Revenue")
                         st.plotly_chart(fig2, use_container_width=True)
                     else:
-                        st.dataframe(pay_chart)
+                        render_table_on_demand("monthly revenue table", pay_chart, "analytics_monthly_revenue")
                 except Exception:
                     pass
 
@@ -2313,7 +2322,12 @@ def master_admin_dashboard():
                 if inactive_activity.empty:
                     st.success("✅ All organizations have recent activity.")
                 else:
-                    st.dataframe(inactive_activity[["name", "status", "expires_at"]], use_container_width=True)
+                    render_table_on_demand(
+                        "inactive organizations (last 30 days)",
+                        inactive_activity[["name", "status", "expires_at"]],
+                        "analytics_inactive_orgs",
+                        use_container_width=True,
+                    )
 
         with tab_org:
             orgs_d = safe_read("SELECT name FROM organizations ORDER BY name", conn)
@@ -2389,7 +2403,7 @@ def master_admin_dashboard():
                 if branch_view.empty:
                     st.info(f"No branch-level data yet for '{sel_org}'.")
                 else:
-                    st.dataframe(branch_view, use_container_width=True)
+                    render_table_on_demand("branch health summary", branch_view, "org_branch_health_summary", use_container_width=True)
                     if PLOTLY_AVAILABLE and "Avg Score" in branch_view.columns:
                         try:
                             chart_df = branch_view.copy()
@@ -2409,7 +2423,7 @@ def master_admin_dashboard():
                     ].copy()
                     if not needs_attention.empty:
                         st.markdown("### ⚠️ Branches Requiring Attention")
-                        st.dataframe(needs_attention, use_container_width=True)
+                        render_table_on_demand("branches requiring attention", needs_attention, "org_branch_needs_attention", use_container_width=True)
 
                 rx, ry = st.columns(2)
                 with rx:
@@ -2461,7 +2475,7 @@ def master_admin_dashboard():
 
                 if not branch_diag.empty:
                     st.markdown("### 🧭 Branch Diagnosis & Learning Partners")
-                    st.dataframe(branch_diag, use_container_width=True)
+                    render_table_on_demand("branch diagnosis", branch_diag, "org_branch_diagnosis", use_container_width=True)
 
                 bx, by = st.columns(2)
                 with bx:
@@ -2473,7 +2487,7 @@ def master_admin_dashboard():
                         st.info("Peer benchmark notes will appear as more organization data grows.")
 
                     if not benchmark_examples_df.empty:
-                        st.dataframe(benchmark_examples_df, use_container_width=True)
+                        render_table_on_demand("benchmark examples", benchmark_examples_df, "org_benchmark_examples", use_container_width=True)
 
                 with by:
                     st.markdown("### 🛠️ Add / Remove / Improve / Research Cases")
@@ -2538,21 +2552,23 @@ def master_admin_dashboard():
                 b3.metric("Needs Intervention", int((benchmark_df["Health Status"] == "Needs Intervention").sum()))
 
                 st.markdown("**Cross-Organization Performance Benchmark**")
-                st.dataframe(benchmark_df, use_container_width=True)
+                render_table_on_demand("cross-organization benchmark", benchmark_df, "ai_cross_org_benchmark", use_container_width=True)
 
                 st.markdown("**Top Organizations to Learn From**")
                 top_orgs = benchmark_df[[
                     "Organization", "Business Type", "Health Score", "Health Status", "Avg Score", "True Late %", "Payment Trend"
                 ]].head(5)
-                st.dataframe(top_orgs, use_container_width=True)
+                render_table_on_demand("top organizations", top_orgs, "ai_top_orgs", use_container_width=True)
 
                 turnaround_cases = benchmark_df[benchmark_df["Health Status"].astype(str) != "Strong"].copy()
                 if not turnaround_cases.empty:
                     st.markdown("**Organizations Needing Turnaround Support**")
-                    st.dataframe(
+                    render_table_on_demand(
+                        "turnaround support organizations",
                         turnaround_cases[[
                             "Organization", "Business Type", "Health Score", "Primary Root Cause", "True Late %", "Payment Trend"
                         ]].sort_values("Health Score", ascending=True),
+                        "ai_turnaround_orgs",
                         use_container_width=True,
                     )
 
@@ -2691,7 +2707,7 @@ def master_admin_dashboard():
                     else:
                         st.info("Benchmark guidance will appear as more peer organization data becomes available.")
                     if not benchmark_examples_df.empty:
-                        st.dataframe(benchmark_examples_df, use_container_width=True)
+                        render_table_on_demand("benchmark examples", benchmark_examples_df, "ai_org_benchmark_examples", use_container_width=True)
 
                 with ax2:
                     st.markdown("**What to Add / Remove / Improve / Research**")
