@@ -436,6 +436,7 @@ def admin_dashboard():
                 new_pass = st.text_input("Password", type="password", key="admin_create_password")
                 new_pin = st.text_input("PIN", value="1234", key="admin_create_pin")
                 new_phone = st.text_input("Phone Number (required, full format e.g. 2547XXXXXXXX)", key="admin_create_phone")
+                new_gender = st.selectbox("Gender", ["male", "female"], key="admin_create_gender")
                 create_sub = st.form_submit_button("Create Employee")
 
                 if create_sub:
@@ -459,8 +460,8 @@ def admin_dashboard():
                         else:
                             conn.execute(
                                 """
-                                INSERT INTO users(username,password,role,branch,organization,status,pin,phone)
-                                VALUES (?,?,?,?,?,?,?,?)
+                                INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender)
+                                VALUES (?,?,?,?,?,?,?,?,?)
                                 """,
                                 (
                                     new_user.strip(),
@@ -471,6 +472,7 @@ def admin_dashboard():
                                     "active",
                                     new_pin.strip() or "1234",
                                     normalized_phone,
+                                    str(new_gender).strip().lower(),
                                 ),
                             )
                             conn.commit()
@@ -479,6 +481,7 @@ def admin_dashboard():
                             st.session_state["admin_create_password"] = ""
                             st.session_state["admin_create_pin"] = "1234"
                             st.session_state["admin_create_phone"] = ""
+                            st.session_state["admin_create_gender"] = "male"
                             refresh_with_message(f"Employee '{new_user.strip()}' created.")
 
         with tab_edit:
