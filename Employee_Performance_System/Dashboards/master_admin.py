@@ -1278,8 +1278,8 @@ def master_admin_dashboard():
         now = datetime.now()
 
         c1, c2, c3, c4 = st.columns(4)
-        total_orgs = len(orgs)
-        total_branches = len(branches)
+        total_orgs = len(orgs) if not orgs.empty else 0
+        total_branches = len(branches) if not branches.empty else 0
         active_orgs = len(orgs[orgs["status"] == "active"]) if not orgs.empty else 0
         expired_orgs = len(orgs[orgs["status"] != "active"]) if not orgs.empty else 0
 
@@ -1287,6 +1287,28 @@ def master_admin_dashboard():
         c2.metric("🌿 Total Branches", total_branches)
         c3.metric("🟢 Active Orgs", active_orgs)
         c4.metric("🔴 Inactive / Expired", expired_orgs)
+        
+        with st.expander("🔧 Debug Info (Show if orgs count is 0)", expanded=(total_orgs == 0 and total_branches > 0)):
+            st.write("**Raw Database Counts:**")
+            org_count = conn.execute("SELECT COUNT(*) FROM organizations").fetchone()[0]
+            branch_count = conn.execute("SELECT COUNT(*) FROM branches").fetchone()[0]
+            user_count = conn.execute("SELECT COUNT(*) FROM users WHERE role != 'master'").fetchone()[0]
+            st.write(f"- Organizations in DB: {org_count}")
+            st.write(f"- Branches in DB: {branch_count}")
+            st.write(f"- Users in DB: {user_count}")
+            
+            if org_count > 0:
+                st.write("\n**Organization Details:**")
+                org_details = pd.read_sql("SELECT id, name, status, created_at FROM organizations ORDER BY id DESC", conn)
+                st.dataframe(org_details, use_container_width=True)
+            
+            if branch_count > 0:
+                st.write("\n**Branches and Their Organizations:**")
+                branch_orgs = pd.read_sql("SELECT id, name, organization, branch FROM branches ORDER BY id DESC LIMIT 10", conn)
+                st.dataframe(branch_orgs, use_container_width=True)
+            
+            if org_count == 0 and branch_count > 0:
+                st.error("⚠️ Issue Found: Branches exist but no organizations exist. This suggests branches were created with organization references that no longer exist.")
 
         c5, c6, c7 = st.columns(3)
         total_users = len(users)
@@ -1511,16 +1533,35 @@ def master_admin_dashboard():
                                 st.error("Organization phone and super admin phone must be different. Phone numbers cannot be shared.")
                             else:
                                 expiry = datetime.now() + timedelta(days=30)
-                                execute_write(conn, """
-                                    INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
-                                    VALUES (?,?,?,?,?,?,?,?)
-                                """, (org_name, "active", normalized_org_phone, email.strip(), location.strip(),
-                                      str(datetime.now()), str(expiry), business_type))
-                                execute_write(conn, """
-                                    INSERT INTO users(username, password, role, organization, status, phone)
-                                    VALUES (?,?,?,?,?,?)
-                                """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", normalized_superadmin_phone))
-                                conn.commit()
+                                try:
+                                    cursor1 = execute_write(conn, """
+                                        INSERT INTO organizations(name, status, phone, email, location, created_at, expires_at, business_type)
+                                        VALUES (?,?,?,?,?,?,?,?)
+                                    """, (org_name, "active", normalized_org_phone, email.strip(), location.strip(),
+                                          str(datetime.now()), str(expiry), business_type))
+                                    st.write(f"☑️ Organization record inserted (rows affected: {cursor1.rowcount})")
+                                except Exception as e:
+                                    st.error(f"❌ Failed to create organization: {str(e)}")
+                                    st.stop()
+                                
+                                try:
+                                    cursor2 = execute_write(conn, """
+                                        INSERT INTO users(username, password, role, organization, status, phone)
+                                        VALUES (?,?,?,?,?,?)
+                                    """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", normalized_superadmin_phone))
+                                    st.write(f"☑️ Super admin user record inserted (rows affected: {cursor2.rowcount})")
+                                except Exception as e:
+                                    st.error(f"❌ Failed to create super admin user: {str(e)}")
+                                    st.stop()
+                                
+                                try:
+                                    conn.commit()
+                                    st.write("✅ Transaction committed to database")
+                                except Exception as e:
+                                    st.error(f"❌ Failed to commit transaction: {str(e)}")
+                                    st.stop()
+                                
+                                st.cache_data.clear()
                                 set_flash_message(
                                     "master_org_flash",
                                     "success",
@@ -1528,7 +1569,7 @@ def master_admin_dashboard():
                                 )
                                 st.rerun()
                         except Exception as e:
-                            st.error(str(e))
+                            st.error(f"Unexpected error creating organization: {str(e)}")
 
         with tab_edit:
             df_e = safe_read("SELECT * FROM organizations", conn)
