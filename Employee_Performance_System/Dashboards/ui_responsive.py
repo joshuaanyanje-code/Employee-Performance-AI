@@ -174,6 +174,34 @@ def apply_responsive_ui(mode="default"):
             color: var(--text-main);
         }}
 
+        .stTimeInput input {
+            min-height: 42px;
+            border-radius: 14px;
+            border: 1px solid var(--surface-border) !important;
+            background: rgba(255, 255, 255, 0.96) !important;
+            color: var(--text-main) !important;
+            caret-color: var(--text-main) !important;
+            transition: box-shadow 0.28s cubic-bezier(0.22, 0.61, 0.36, 1), border-color 0.28s ease;
+        }
+
+        .stTimeInput input:focus {
+            border-color: var(--accent) !important;
+            box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.24), 0 0 0 10px rgba(0, 113, 227, 0.08) !important;
+            animation: appTimeFocusPulse 1.65s cubic-bezier(0.22, 0.61, 0.36, 1) infinite;
+        }
+
+        @keyframes appTimeFocusPulse {
+            0% {
+                box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.24), 0 0 0 10px rgba(0, 113, 227, 0.10);
+            }
+            50% {
+                box-shadow: 0 0 0 6px rgba(0, 113, 227, 0.14), 0 0 0 16px rgba(0, 113, 227, 0.04);
+            }
+            100% {
+                box-shadow: 0 0 0 3px rgba(0, 113, 227, 0.24), 0 0 0 10px rgba(0, 113, 227, 0.10);
+            }
+        }
+
         .stSelectbox div[data-baseweb="select"] > div,
         .stMultiSelect div[data-baseweb="select"] > div {{
             min-height: 42px;
@@ -190,6 +218,11 @@ def apply_responsive_ui(mode="default"):
             color: var(--text-main) !important;
             -webkit-text-fill-color: var(--text-main) !important;
         }}
+
+        .stSelectbox div[data-baseweb="select"] input,
+        .stMultiSelect div[data-baseweb="select"] input {
+            caret-color: transparent !important;
+        }
 
         .stSelectbox svg,
         .stMultiSelect svg {{
