@@ -192,6 +192,43 @@ def apply_date_range(df, col, range_sel, start_date, end_date):
 def admin_dashboard():
     apply_responsive_ui("default")
 
+    st.markdown(
+        """
+        <style>
+        /* Keep dropdown menus readable even when browser/theme applies dark surfaces. */
+        div[data-baseweb="popover"],
+        div[data-baseweb="popover"] ul,
+        div[role="listbox"],
+        div[role="option"] {
+            background: #ffffff !important;
+            color: #111827 !important;
+            border-color: rgba(15, 23, 42, 0.12) !important;
+        }
+
+        div[role="option"][aria-selected="true"] {
+            background: rgba(0, 113, 227, 0.14) !important;
+            color: #0b4f9c !important;
+        }
+
+        /* Make kiosk links in st.code easy to read on light admin screens. */
+        [data-testid="stCodeBlock"] {
+            background: #f8fafc !important;
+            border: 1px solid rgba(15, 23, 42, 0.12) !important;
+            border-radius: 12px !important;
+        }
+
+        [data-testid="stCodeBlock"] pre,
+        [data-testid="stCodeBlock"] code,
+        .stCodeBlock pre,
+        .stCodeBlock code {
+            background: #f8fafc !important;
+            color: #0f172a !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
     conn = get_connection()
     username = st.session_state.get("username")
     org = st.session_state.get("organization")
