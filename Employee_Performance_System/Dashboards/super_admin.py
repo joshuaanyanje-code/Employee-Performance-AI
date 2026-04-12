@@ -106,6 +106,27 @@ def safe_read(query, conn, params=None):
         return pd.DataFrame()
 
 
+@st.cache_data(ttl=45, show_spinner=False)
+def _cached_super_admin_intelligence(org_name, branch_name, super_admin_user, start_date_value, end_date_value):
+    branch_value = str(branch_name or "").strip() or None
+    start_value = str(start_date_value or "").strip() or None
+    end_value = str(end_date_value or "").strip() or None
+    return get_super_admin_dashboard(org_name, branch_value, super_admin_user, start_value, end_value)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_demographic_stats(org_name, branch_name):
+    branch_value = str(branch_name or "").strip() or None
+    return get_demographic_statistics(org_name, branch_value)
+
+
+@st.cache_data(ttl=30, show_spinner=False)
+def _cached_group_details(org_name, branch_name, risk_level):
+    branch_value = str(branch_name or "").strip() or None
+    risk_value = str(risk_level or "").strip() or None
+    return get_group_details_for_super_admin(org_name, branch_value, risk_value)
+
+
 def set_flash_message(key, level, text):
     st.session_state[key] = {
         "level": level,
@@ -1352,14 +1373,21 @@ def super_admin_dashboard():
                 else:
                     with st.spinner("Analyzing..."):
                         try:
-                            intelligence = get_super_admin_dashboard(org, branch_filter, user, intel_from, intel_to)
+                            start_key = intel_from.isoformat() if hasattr(intel_from, "isoformat") else str(intel_from)
+                            end_key = intel_to.isoformat() if hasattr(intel_to, "isoformat") else str(intel_to)
+                            started_at = pytime.perf_counter()
+                            intelligence = _cached_super_admin_intelligence(org, branch_filter, user, start_key, end_key)
+                            elapsed_ms = (pytime.perf_counter() - started_at) * 1000.0
                             st.session_state["sa_intelligence"] = intelligence
+                            st.session_state["sa_intel_elapsed_ms"] = round(elapsed_ms, 1)
                         except Exception as e:
                             st.error(f"Analysis error: {e}")
             
             intel = st.session_state.get("sa_intelligence")
             
             if intel:
+                if "sa_intel_elapsed_ms" in st.session_state:
+                    st.caption(f"Analysis runtime: {st.session_state['sa_intel_elapsed_ms']} ms")
                 
                 # --- EXECUTIVE SUMMARY ---
                 st.divider()
@@ -3754,7 +3782,7 @@ def super_admin_dashboard():
             
             # Display statistics
             try:
-                stats = get_demographic_statistics(org, branch_filter_demo)
+                stats = _cached_demographic_stats(org, branch_filter_demo)
                 
                 if stats:
                     st.divider()
@@ -3809,7 +3837,7 @@ def super_admin_dashboard():
             risk_val = None if risk_filter == "All" else risk_filter
             
             try:
-                group_details = get_group_details_for_super_admin(org, branch_filter_demo, risk_val)
+                group_details = _cached_group_details(org, branch_filter_demo, risk_val)
                 if group_details:
                     gd_df = pd.DataFrame(group_details)
                     show_cols = [c for c in ["group_type", "members", "risk_level", "member_count", "avg_rating", "male_count", "female_count"] if c in gd_df.columns]
