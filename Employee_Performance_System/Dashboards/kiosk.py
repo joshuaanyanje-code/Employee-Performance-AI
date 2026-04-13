@@ -6,6 +6,7 @@ import os
 import hashlib
 import time
 import importlib
+from html import escape
 
 try:
     holiday_lib = importlib.import_module("holidays")
@@ -72,14 +73,17 @@ def home_kiosk_button(label, key):
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
-    secondary_html = f"<div class='branch-name'>{secondary_title}</div>" if secondary_title else ""
-    tertiary_html = f"<div class='manager-name'>{tertiary_title}</div>" if tertiary_title else ""
+    primary_safe = escape(str(primary_title or ""))
+    secondary_safe = escape(str(secondary_title or ""))
+    tertiary_safe = escape(str(tertiary_title or ""))
+    secondary_html = f"<div class='branch-name'>{secondary_safe}</div>" if secondary_safe else ""
+    tertiary_html = f"<div class='manager-name'>{tertiary_safe}</div>" if tertiary_safe else ""
     st.markdown(
         f"""
         <div class='home-kiosk-hero'>
             <div class='home-kiosk-kicker'>Workplace kiosk</div>
             <div class='home-kiosk-title'>
-                <div class='org-name'>{primary_title}</div>
+                <div class='org-name'>{primary_safe}</div>
                 {secondary_html}
                 {tertiary_html}
             </div>
@@ -621,7 +625,7 @@ def kiosk_dashboard():
         render_kiosk_hero(
             org,
             branch,
-            f"Branch Manager: <b>{manager_name}</b>",
+            f"Branch Manager: {manager_name}",
         )
 
         st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
