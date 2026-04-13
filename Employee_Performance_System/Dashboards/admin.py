@@ -224,6 +224,30 @@ def admin_dashboard():
             background: #f8fafc !important;
             color: #0f172a !important;
         }
+
+        /* Fix time input fields so text is always readable */
+        div[data-baseweb="time-picker"],
+        div[data-baseweb="time-picker"] input,
+        div[data-baseweb="input"] input[type="time"],
+        input[type="time"] {
+            background: #ffffff !important;
+            color: #0f172a !important;
+            border-color: rgba(15, 23, 42, 0.20) !important;
+        }
+
+        div[data-testid="stTimeInput"] input,
+        div[data-testid="stTimeInput"] div[data-baseweb="input"],
+        div[data-testid="stTimeInput"] div[data-baseweb="base-input"] {
+            background: #ffffff !important;
+            color: #0f172a !important;
+        }
+
+        /* Spinbutton segments inside the time picker (hours / minutes) */
+        div[data-baseweb="time-picker"] [role="spinbutton"],
+        div[data-testid="stTimeInput"] [role="spinbutton"] {
+            background: #ffffff !important;
+            color: #0f172a !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
