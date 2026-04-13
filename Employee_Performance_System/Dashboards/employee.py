@@ -389,6 +389,52 @@ def employee_dashboard():
         p2.info(f"**Off Day(s):** {off_day_text}")
         st.success("Keep improving daily, adhere to rules and regulations, and stay consistent.")
 
+        st.markdown("### Quick Performance Snapshot")
+
+        prof_att = _safe_read(
+            conn,
+            "SELECT date, status FROM attendance WHERE username=? AND organization=?",
+            params=(username, org),
+        )
+        if not prof_att.empty:
+            prof_att["date"] = pd.to_datetime(prof_att["date"], errors="coerce")
+            prof_att = prof_att[
+                (prof_att["date"] >= pd.to_datetime(start_date)) &
+                (prof_att["date"] <= pd.to_datetime(end_date))
+            ]
+
+        prof_lateness = _safe_read(
+            conn,
+            """
+            SELECT approved_for_date, status, reason, actual_reason, approved_by
+            FROM lateness_approvals
+            WHERE username=? AND organization=?
+            """,
+            params=(username, org),
+        )
+        prof_att = _annotate_attendance_with_lateness(prof_att, prof_lateness)
+        true_late_flags = int(prof_att["true_late"].sum()) if not prof_att.empty and "true_late" in prof_att.columns else 0
+
+        fine_summary = compute_lateness_fines(conn, org, username=username)
+        fine_row = fine_summary.iloc[0].to_dict() if not fine_summary.empty else {}
+        chargeable_min = int(fine_row.get("Chargeable Late Minutes", 0) or 0)
+        approved_min = int(fine_row.get("Approved Late Minutes", 0) or 0)
+        total_late_min = chargeable_min + approved_min
+        fine_due = float(fine_row.get("Fine Amount", 0) or 0)
+
+        score_df = _safe_read(
+            conn,
+            "SELECT score FROM ratings WHERE rated=? AND organization=?",
+            params=(username, org),
+        )
+        avg_score = float(pd.to_numeric(score_df["score"], errors="coerce").mean()) if not score_df.empty else 0.0
+
+        q1, q2, q3, q4 = st.columns(4)
+        q1.metric("Lateness Flags", true_late_flags)
+        q2.metric("Total Lateness (min)", total_late_min)
+        q3.metric("Fines Accumulated", f"KES {fine_due:,.0f}")
+        q4.metric("Average Score", f"{avg_score:.1f}/100" if not score_df.empty else "-")
+
     # =====================================================
     # SCHEDULE
     # =====================================================
