@@ -433,7 +433,7 @@ def employee_dashboard():
         q1.metric("Lateness Flags", true_late_flags)
         q2.metric("Total Lateness (min)", total_late_min)
         q3.metric("Fines Accumulated", f"KES {fine_due:,.0f}")
-        q4.metric("Average Score", f"{avg_score:.1f}/100" if not score_df.empty else "-")
+        q4.metric("Average Score", f"{avg_score:.1f}/100 ({avg_score:.1f}%)" if not score_df.empty else "-")
 
     # =====================================================
     # SCHEDULE
@@ -851,7 +851,7 @@ def employee_dashboard():
             health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
 
             h1, h2, h3, h4 = st.columns(4)
-            h1.metric("Personal Health Score", f"{health_score:.0f}/100")
+            h1.metric("Personal Health Score", f"{health_score:.0f}/100 ({health_score:.0f}%)")
             h2.metric("KPI Weight", f"{kpi_weight:.0f}%")
             h3.metric("Service Weight", f"{service_weight:.0f}%")
             h4.metric("Feedback Count", personal_feedback_count)
@@ -1141,7 +1141,8 @@ def employee_dashboard():
         else:
             avg = df.groupby("topic")["score"].mean()
             st.bar_chart(avg)
-            st.metric("Average", round(avg.mean(),1))
+            avg_score_val = round(float(avg.mean()), 1)
+            st.metric("Average", f"{avg_score_val:.1f}/100 ({avg_score_val:.1f}%)")
             st.caption(recommendation(avg.mean()))
 
     # =====================================================
