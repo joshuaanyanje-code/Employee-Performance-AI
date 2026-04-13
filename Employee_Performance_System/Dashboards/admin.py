@@ -690,13 +690,6 @@ def admin_dashboard():
 
         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-        def _parse_t(t_str, default_h=9, default_m=0):
-            try:
-                parts = str(t_str).split(":")
-                return time(int(parts[0]), int(parts[1]))
-            except Exception:
-                return time(default_h, default_m)
-
         # Employee selector OUTSIDE form so existing values pre-fill on change
         s_user = st.selectbox("Select Employee", users_df["username"].tolist(), key="sched_emp_select")
 
