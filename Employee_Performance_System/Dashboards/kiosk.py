@@ -6,6 +6,7 @@ import os
 import hashlib
 import time
 import importlib
+from html import escape
 
 try:
     holiday_lib = importlib.import_module("holidays")
@@ -72,12 +73,24 @@ def home_kiosk_button(label, key):
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
-    st.caption("WORKPLACE KIOSK")
-    st.markdown(f"## {str(primary_title or '').strip()}")
-    if secondary_title:
-        st.markdown(f"### {str(secondary_title).strip()}")
-    if tertiary_title:
-        st.caption(str(tertiary_title).strip())
+    primary_safe = escape(str(primary_title or "").strip())
+    secondary_safe = escape(str(secondary_title or "").strip())
+    tertiary_safe = escape(str(tertiary_title or "").strip())
+    secondary_html = f"<div class='branch-name'>{secondary_safe}</div>" if secondary_safe else ""
+    tertiary_html = f"<div class='manager-name'>{tertiary_safe}</div>" if tertiary_safe else ""
+    st.markdown(
+        f"""
+        <div class='home-kiosk-hero'>
+            <div class='home-kiosk-kicker'>WORKPLACE KIOSK</div>
+            <div class='home-kiosk-title'>
+                <div class='org-name'>{primary_safe}</div>
+                {secondary_html}
+                {tertiary_html}
+            </div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
 def _safe_read(conn, query, params=None):
