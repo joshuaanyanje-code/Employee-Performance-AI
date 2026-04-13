@@ -12,7 +12,7 @@ try:
 except Exception:
     holiday_lib = None
 
-from database.db import get_connection, execute_write
+from database.db import get_connection, execute_write, verify_password
 from Dashboards.ui_responsive import apply_responsive_ui
 
 # ==============================
@@ -39,9 +39,7 @@ def refresh():
 
 
 def clear_kiosk_pin_input():
-    # Use a rotating widget key so PIN can be reset without mutating
-    # an already-instantiated Streamlit widget state key.
-    st.session_state["kiosk_pin_nonce"] = st.session_state.get("kiosk_pin_nonce", 0) + 1
+    st.session_state.pop("kiosk_pin_input", None)
 
 
 def clear_kiosk_photo_state():
@@ -748,26 +746,32 @@ def kiosk_dashboard():
 
             selected_user = st.selectbox("Select Your Name", users["username"], key="kiosk_selected_user")
 
-            pin_widget_key = f"kiosk_pin_{st.session_state.get('kiosk_pin_nonce', 0)}"
-            pin = st.text_input("Enter PIN", type="password", key=pin_widget_key)
+            pin = st.text_input("Enter PIN (admin can use password)", type="password", key="kiosk_pin_input")
 
             if compact_kiosk_button("🔐 Verify & Continue", key="kiosk_verify_continue"):
                 clear_kiosk_pin_input()
                 if not pin:
-                    st.warning("Enter PIN")
+                    st.warning("Please enter your PIN or password.")
                     return
                 check = _safe_read(
                     conn,
-                    "SELECT pin, role FROM users WHERE username=? AND branch=? AND organization=?",
+                    "SELECT pin, password, role FROM users WHERE username=? AND branch=? AND organization=?",
                     params=(selected_user, branch, org),
                 )
                 if check.empty:
                     st.error("User not found in this branch")
                     return
                 db_pin = str(check.iloc[0]["pin"]).strip()
+                db_password = str(check.iloc[0].get("password", "") or "").strip()
                 role_value = str(check.iloc[0].get("role", "employee") or "employee").strip().lower()
-                if str(pin).strip() != db_pin:
-                    st.error("❌ Invalid PIN")
+                entered_credential = str(pin).strip()
+                pin_matches = bool(entered_credential) and entered_credential == db_pin
+                password_matches = bool(entered_credential and db_password) and verify_password(entered_credential, db_password)
+                admin_roles = {"admin", "superadmin", "super_admin", "master", "owner"}
+                allow_password_login = role_value in admin_roles
+
+                if not (pin_matches or (allow_password_login and password_matches)):
+                    st.error("❌ Invalid PIN or password")
                     return
                 st.session_state.kiosk_user = selected_user
                 st.session_state.kiosk_user_role = role_value
