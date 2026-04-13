@@ -1,6 +1,7 @@
 ﻿import os
 import time as pytime
 import streamlit as st
+from streamlit.errors import StreamlitAPIException
 import pandas as pd
 import json
 import re
@@ -1119,7 +1120,12 @@ def super_admin_dashboard():
             label = f"View Table  ({len(data)} rows)"
         except Exception:
             label = "View Table"
-        with st.expander(label, expanded=False):
+        try:
+            with st.expander(label, expanded=False):
+                _SA_ORIG_DATAFRAME(data, *args, **kwargs)
+        except StreamlitAPIException:
+            # Streamlit disallows some nested container combinations
+            # (for example expander inside expander); render normally then.
             _SA_ORIG_DATAFRAME(data, *args, **kwargs)
 
     st.dataframe = _auto_table
