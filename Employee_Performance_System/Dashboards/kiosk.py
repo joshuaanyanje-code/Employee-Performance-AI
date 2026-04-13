@@ -437,7 +437,7 @@ def kiosk_dashboard():
     st.markdown("""
         <style>
         .block-container {max-width: 700px; padding-top: 0.9rem; padding-bottom: 2rem;}
-        button {height:58px; font-size:20px; font-weight:600;}
+        button {height:58px; font-size:20px; font-weight:700;}
         .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
             width: min(100%, 340px);
             display: block;
