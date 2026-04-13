@@ -1,5 +1,4 @@
 import streamlit as st
-import streamlit.components.v1 as components
 import pandas as pd
 import secrets
 import importlib
@@ -291,7 +290,7 @@ div[role="option"][aria-selected="true"] {
 
 
 def render_global_sidebar_toggle_button():
-    components.html(
+    st.html(
         """
         <script>
         (function() {
@@ -342,9 +341,7 @@ def render_global_sidebar_toggle_button():
             }
         })();
         </script>
-        """,
-        height=0,
-        width=0,
+        """
     )
 
 

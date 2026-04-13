@@ -2420,8 +2420,8 @@ def super_admin_dashboard():
                             st.error(phone_error)
                         else:
                             conn.execute(
-                                "INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender) VALUES(?,?,?,?,?,?,?,?,?)",
-                                (u.strip(), hash_password(p), role, stored_branch, org, "active", pin.strip() or "1234", normalized_phone, gender)
+                                "INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender,created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
+                                (u.strip(), hash_password(p), role, stored_branch, org, "active", pin.strip() or "1234", normalized_phone, gender, user)
                             )
                             conn.commit()
                             scope_label = stored_branch or "All Branches"
@@ -2436,127 +2436,133 @@ def super_admin_dashboard():
         with tab_manage:
             if safe_df(users_df):
                 manage_df = users_df.copy()
-                manage_df["branch"] = manage_df["branch"].fillna("").astype(str)
-                manage_df["role"] = manage_df["role"].fillna("").astype(str)
-                manage_df["username"] = manage_df["username"].fillna("").astype(str)
-                manage_df["_scope_label"] = manage_df["branch"].apply(lambda value: str(value).strip() or "All Branches (Org HR)")
-                manage_df["_select_label"] = manage_df.apply(
-                    lambda item: f"{item['username']} | {item['role']} | {item['_scope_label']}",
-                    axis=1,
-                )
-
-                sel_user_label = st.selectbox("Select User", manage_df["_select_label"].tolist(), key="manage_user_sel")
-                row = manage_df[manage_df["_select_label"] == sel_user_label].iloc[0]
-                sel_user = str(row.get("username", "") or "").strip()
-                selected_user_id = int(row.get("id", 0) or 0)
-                selected_user_branch = str(row.get("branch", "") or "").strip()
-                branch_display = selected_user_branch or "All Branches (Org HR)"
-                st.write(
-                    f"**Role:** {row['role']} | **Phone:** {row.get('phone', '')} | "
-                    f"**Branch:** {branch_display} | **Status:** {row['status']}"
-                )
-
-                ca, cb, cc, cd = st.columns(4)
-                if ca.button("Suspend", key="sus_user"):
-                    conn.execute("UPDATE users SET status='suspended' WHERE id=? AND organization=?", (selected_user_id, org))
-                    conn.commit()
-                    log_action(conn, user, "SUSPEND USER", sel_user, org)
-                    set_flash_message("super_admin_user_flash", "warning", f"{sel_user} suspended.")
-                    st.rerun()
-                if cb.button("Probation", key="prob_user"):
-                    conn.execute("UPDATE users SET status='probation' WHERE id=? AND organization=?", (selected_user_id, org))
-                    conn.commit()
-                    log_action(conn, user, "PUT USER ON PROBATION", sel_user, org)
-                    set_flash_message("super_admin_user_flash", "info", f"{sel_user} moved to probation.")
-                    st.rerun()
-                if cc.button("Activate", key="act_user"):
-                    conn.execute("UPDATE users SET status='active' WHERE id=? AND organization=?", (selected_user_id, org))
-                    conn.commit()
-                    log_action(conn, user, "ACTIVATE USER", sel_user, org)
-                    set_flash_message("super_admin_user_flash", "success", f"{sel_user} activated.")
-                    st.rerun()
-                if cd.button("Delete User", key="del_user"):
-                    conn.execute("DELETE FROM users WHERE id=? AND organization=?", (selected_user_id, org))
-                    conn.commit()
-                    log_action(conn, user, "DELETE USER", sel_user, org)
-                    set_flash_message("super_admin_user_flash", "success", f"{sel_user} deleted.")
-                    st.rerun()
-
-                st.divider()
-                with st.form("reset_pw_form", clear_on_submit=False):
-                    new_pass  = st.text_input("New Password", type="password")
-                    conf_pass = st.text_input("Confirm Password", type="password")
-                    reset_sub = st.form_submit_button("Reset Password")
-                    if reset_sub:
-                        if not valid_pass(new_pass):
-                            st.error("Password must be at least 4 characters.")
-                        elif new_pass != conf_pass:
-                            st.error("Passwords do not match.")
-                        else:
-                            conn.execute(
-                                "UPDATE users SET password=? WHERE id=? AND organization=?",
-                                (hash_password(new_pass), selected_user_id, org)
-                            )
-                            conn.commit()
-                            log_action(conn, user, "RESET PASSWORD", sel_user, org)
-                            set_flash_message("super_admin_user_flash", "success", f"Password for '{sel_user}' reset.")
-                            st.rerun()
-
-                st.divider()
-                st.markdown("### Transfer Staff To Another Branch")
-                st.caption(
-                    "Employees and admins can be moved to a different branch inside the same organization. "
-                    "Their current assignment switches to the new manager and kiosk after refresh, while older records keep the original branch label for clean history. "
-                    "The super admin remains the same boss across the organization."
-                )
-
-                role_lower = str(row.get("role", "") or "").strip().lower()
-                if role_lower not in {"employee", "admin"}:
-                    st.info("This transfer tool is only for employees and admins.")
+                manage_df = manage_df[
+                    manage_df["role"].astype(str).str.lower().isin(["admin", "hr", "employee"])
+                ].copy()
+                if manage_df.empty:
+                    st.info("No admin, HR, or employee users available to manage.")
                 else:
-                    available_transfer_branches = [b for b in branches if str(b) != str(row.get("branch", ""))]
-                    if not available_transfer_branches:
-                        st.info("Create another branch first before transferring this staff member.")
-                    else:
-                        with st.form("transfer_user_form", clear_on_submit=False):
-                            new_branch = st.selectbox("Move to branch", available_transfer_branches, key="transfer_user_target_branch")
-                            transfer_note = st.text_area(
-                                "Transfer note (optional)",
-                                placeholder="Example: Reassigned to support the new branch launch.",
-                                key="transfer_user_note",
-                            )
-                            transfer_sub = st.form_submit_button("Transfer Staff")
-                            if transfer_sub:
-                                ok, message = transfer_staff_member(
-                                    conn,
-                                    org,
-                                    sel_user,
-                                    new_branch,
-                                    user,
-                                    transfer_note,
-                                    current_branch=selected_user_branch,
-                                )
-                                if ok:
-                                    log_action(conn, user, "TRANSFER STAFF", f"{sel_user} -> {new_branch}", org)
-                                    set_flash_message("super_admin_user_flash", "success", message)
-                                    st.rerun()
-                                else:
-                                    st.error(message)
+                    manage_df["branch"] = manage_df["branch"].fillna("").astype(str)
+                    manage_df["role"] = manage_df["role"].fillna("").astype(str)
+                    manage_df["username"] = manage_df["username"].fillna("").astype(str)
+                    manage_df["_scope_label"] = manage_df["branch"].apply(lambda value: str(value).strip() or "All Branches (Org HR)")
+                    manage_df["_select_label"] = manage_df.apply(
+                        lambda item: f"{item['username']} | {item['role']} | {item['_scope_label']}",
+                        axis=1,
+                    )
 
-                ensure_staff_transfer_table(conn)
-                transfer_history_df = safe_read(
-                    """
-                    SELECT created_at, username, role, from_branch, to_branch, transferred_by, note, effective_date
-                    FROM staff_transfers
-                    WHERE organization=? AND username=?
-                    ORDER BY id DESC
-                    """,
-                    conn,
-                    params=(org, sel_user),
-                )
-                if not transfer_history_df.empty:
-                    st.markdown("#### Transfer history")
-                    st.dataframe(transfer_history_df, use_container_width=True, hide_index=True)
+                    sel_user_label = st.selectbox("Select User", manage_df["_select_label"].tolist(), key="manage_user_sel")
+                    row = manage_df[manage_df["_select_label"] == sel_user_label].iloc[0]
+                    sel_user = str(row.get("username", "") or "").strip()
+                    selected_user_id = int(row.get("id", 0) or 0)
+                    selected_user_branch = str(row.get("branch", "") or "").strip()
+                    branch_display = selected_user_branch or "All Branches (Org HR)"
+                    st.write(
+                        f"**Role:** {row['role']} | **Phone:** {row.get('phone', '')} | "
+                        f"**Branch:** {branch_display} | **Status:** {row['status']}"
+                    )
+
+                    ca, cb, cc, cd = st.columns(4)
+                    if ca.button("Suspend", key="sus_user"):
+                        conn.execute("UPDATE users SET status='suspended' WHERE id=? AND organization=?", (selected_user_id, org))
+                        conn.commit()
+                        log_action(conn, user, "SUSPEND USER", sel_user, org)
+                        set_flash_message("super_admin_user_flash", "warning", f"{sel_user} suspended.")
+                        st.rerun()
+                    if cb.button("Probation", key="prob_user"):
+                        conn.execute("UPDATE users SET status='probation' WHERE id=? AND organization=?", (selected_user_id, org))
+                        conn.commit()
+                        log_action(conn, user, "PUT USER ON PROBATION", sel_user, org)
+                        set_flash_message("super_admin_user_flash", "info", f"{sel_user} moved to probation.")
+                        st.rerun()
+                    if cc.button("Activate", key="act_user"):
+                        conn.execute("UPDATE users SET status='active' WHERE id=? AND organization=?", (selected_user_id, org))
+                        conn.commit()
+                        log_action(conn, user, "ACTIVATE USER", sel_user, org)
+                        set_flash_message("super_admin_user_flash", "success", f"{sel_user} activated.")
+                        st.rerun()
+                    if cd.button("Delete User", key="del_user"):
+                        conn.execute("DELETE FROM users WHERE id=? AND organization=?", (selected_user_id, org))
+                        conn.commit()
+                        log_action(conn, user, "DELETE USER", sel_user, org)
+                        set_flash_message("super_admin_user_flash", "success", f"{sel_user} deleted.")
+                        st.rerun()
+
+                    st.divider()
+                    with st.form("reset_pw_form", clear_on_submit=False):
+                        new_pass  = st.text_input("New Password", type="password")
+                        conf_pass = st.text_input("Confirm Password", type="password")
+                        reset_sub = st.form_submit_button("Reset Password")
+                        if reset_sub:
+                            if not valid_pass(new_pass):
+                                st.error("Password must be at least 4 characters.")
+                            elif new_pass != conf_pass:
+                                st.error("Passwords do not match.")
+                            else:
+                                conn.execute(
+                                    "UPDATE users SET password=? WHERE id=? AND organization=?",
+                                    (hash_password(new_pass), selected_user_id, org)
+                                )
+                                conn.commit()
+                                log_action(conn, user, "RESET PASSWORD", sel_user, org)
+                                set_flash_message("super_admin_user_flash", "success", f"Password for '{sel_user}' reset.")
+                                st.rerun()
+
+                    st.divider()
+                    st.markdown("### Transfer Staff To Another Branch")
+                    st.caption(
+                        "Employees and admins can be moved to a different branch inside the same organization. "
+                        "Their current assignment switches to the new manager and kiosk after refresh, while older records keep the original branch label for clean history. "
+                        "The super admin remains the same boss across the organization."
+                    )
+
+                    role_lower = str(row.get("role", "") or "").strip().lower()
+                    if role_lower not in {"employee", "admin"}:
+                        st.info("This transfer tool is only for employees and admins.")
+                    else:
+                        available_transfer_branches = [b for b in branches if str(b) != str(row.get("branch", ""))]
+                        if not available_transfer_branches:
+                            st.info("Create another branch first before transferring this staff member.")
+                        else:
+                            with st.form("transfer_user_form", clear_on_submit=False):
+                                new_branch = st.selectbox("Move to branch", available_transfer_branches, key="transfer_user_target_branch")
+                                transfer_note = st.text_area(
+                                    "Transfer note (optional)",
+                                    placeholder="Example: Reassigned to support the new branch launch.",
+                                    key="transfer_user_note",
+                                )
+                                transfer_sub = st.form_submit_button("Transfer Staff")
+                                if transfer_sub:
+                                    ok, message = transfer_staff_member(
+                                        conn,
+                                        org,
+                                        sel_user,
+                                        new_branch,
+                                        user,
+                                        transfer_note,
+                                        current_branch=selected_user_branch,
+                                    )
+                                    if ok:
+                                        log_action(conn, user, "TRANSFER STAFF", f"{sel_user} -> {new_branch}", org)
+                                        set_flash_message("super_admin_user_flash", "success", message)
+                                        st.rerun()
+                                    else:
+                                        st.error(message)
+
+                    ensure_staff_transfer_table(conn)
+                    transfer_history_df = safe_read(
+                        """
+                        SELECT created_at, username, role, from_branch, to_branch, transferred_by, note, effective_date
+                        FROM staff_transfers
+                        WHERE organization=? AND username=?
+                        ORDER BY id DESC
+                        """,
+                        conn,
+                        params=(org, sel_user),
+                    )
+                    if not transfer_history_df.empty:
+                        st.markdown("#### Transfer history")
+                        st.dataframe(transfer_history_df, use_container_width=True, hide_index=True)
 
                 if hr_case_files_enabled:
                     hr_case_history_df = safe_read(
@@ -2944,8 +2950,8 @@ def super_admin_dashboard():
                             st.error(f"Branch '{new_branch}' already exists.")
                         else:
                             conn.execute(
-                                "INSERT INTO branches(name,organization,status) VALUES(?,?,?)",
-                                (new_branch.strip(), org, "active")
+                                "INSERT INTO branches(name,organization,status,created_by) VALUES(?,?,?,?)",
+                                (new_branch.strip(), org, "active", user)
                             )
                             conn.commit()
                             log_action(conn, user, "ADD BRANCH", new_branch, org)
@@ -3025,9 +3031,12 @@ def super_admin_dashboard():
 
         # ---- TOPICS ----
         with tab_topics:
-            topics_df = safe_read("SELECT * FROM topics", conn)
+            topics_df = safe_read("SELECT id, topic, COALESCE(created_by, '') AS created_by FROM topics ORDER BY topic", conn)
             if safe_df(topics_df):
                 st.dataframe(topics_df, use_container_width=True)
+            manageable_topics_df = topics_df[
+                topics_df["created_by"].fillna("").astype(str).isin(["", user])
+            ].copy() if safe_df(topics_df) else pd.DataFrame()
 
             with st.form("add_topic", clear_on_submit=False):
                 new_topic = st.text_input("New Topic Name")
@@ -3042,24 +3051,27 @@ def super_admin_dashboard():
                         if not exists.empty:
                             st.error(f"Topic '{new_topic}' already exists.")
                         else:
-                            conn.execute("INSERT INTO topics(topic) VALUES(?)", (new_topic.strip(),))
+                            conn.execute(
+                                "INSERT INTO topics(topic, created_by) VALUES(?,?)",
+                                (new_topic.strip(), user),
+                            )
                             conn.commit()
                             log_action(conn, user, "ADD TOPIC", new_topic, org)
                             st.success(f"Topic '{new_topic}' added.")
 
-            if safe_df(topics_df):
+            if safe_df(manageable_topics_df):
                 st.divider()
                 col_ed, col_del = st.columns(2)
                 with col_ed:
                     with st.form("edit_topic", clear_on_submit=False):
-                        et_sel = st.selectbox("Edit Topic", topics_df["topic"].tolist(), key="edit_topic_sel")
+                        et_sel = st.selectbox("Edit Topic", manageable_topics_df["topic"].tolist(), key="edit_topic_sel")
                         et_val = st.text_input("New Name")
                         et_sub = st.form_submit_button("Save")
                         if et_sub:
                             if et_val.strip():
                                 conn.execute(
-                                    "UPDATE topics SET topic=? WHERE topic=?",
-                                    (et_val.strip(), et_sel)
+                                    "UPDATE topics SET topic=? WHERE topic=? AND COALESCE(created_by, '') IN ('', ?)",
+                                    (et_val.strip(), et_sel, user)
                                 )
                                 conn.commit()
                                 st.success(f"Topic renamed to '{et_val}'.")
@@ -3068,14 +3080,19 @@ def super_admin_dashboard():
                                 st.error("New name required.")
                 with col_del:
                     with st.form("del_topic", clear_on_submit=False):
-                        dt_sel = st.selectbox("Delete Topic", topics_df["topic"].tolist(), key="del_topic_sel")
+                        dt_sel = st.selectbox("Delete Topic", manageable_topics_df["topic"].tolist(), key="del_topic_sel")
                         dt_sub = st.form_submit_button("Delete")
                         if dt_sub:
-                            conn.execute("DELETE FROM topics WHERE topic=?", (dt_sel,))
+                            conn.execute(
+                                "DELETE FROM topics WHERE topic=? AND COALESCE(created_by, '') IN ('', ?)",
+                                (dt_sel, user),
+                            )
                             conn.commit()
                             log_action(conn, user, "DELETE TOPIC", dt_sel, org)
                             st.success(f"Topic '{dt_sel}' deleted.")
                             st.rerun()
+            else:
+                st.info("No topics available for you to edit or delete yet.")
 
         # ---- LEAVES ----
         with tab_leaves:
@@ -5339,13 +5356,13 @@ def super_admin_dashboard():
                         else:
                             try:
                                 conn.execute(
-                                    "INSERT INTO kiosks(branch,organization,device_name,last_active,status) VALUES(?,?,?,datetime('now'),'active')",
-                                    (kf_br, org, dev_name)
+                                    "INSERT INTO kiosks(branch,organization,device_name,last_active,status,created_by) VALUES(?,?,?,datetime('now'),'active',?)",
+                                    (kf_br, org, dev_name, user)
                                 )
                             except Exception:
                                 conn.execute(
-                                    "INSERT INTO kiosks(branch,organization,device_name,last_active) VALUES(?,?,?,datetime('now'))",
-                                    (kf_br, org, dev_name)
+                                    "INSERT INTO kiosks(branch,organization,device_name,last_active,created_by) VALUES(?,?,?,datetime('now'),?)",
+                                    (kf_br, org, dev_name, user)
                                 )
                             conn.commit()
                             log_action(conn, user, "CREATE KIOSK", dev_name, org)
@@ -5357,11 +5374,18 @@ def super_admin_dashboard():
                 st.info("Create a branch first before adding a kiosk.")
 
         with k_manage:
-            kiosks_m = safe_read("SELECT * FROM kiosks WHERE organization=?", conn, params=(org,))
-            if kiosks_m.empty:
+            kiosks_m = safe_read(
+                "SELECT *, COALESCE(created_by, '') AS created_by FROM kiosks WHERE organization=?",
+                conn,
+                params=(org,),
+            )
+            manageable_kiosks_m = kiosks_m[
+                kiosks_m["created_by"].fillna("").astype(str).isin(["", user])
+            ].copy() if not kiosks_m.empty else pd.DataFrame()
+            if manageable_kiosks_m.empty:
                 st.info("No kiosks to manage.")
             else:
-                for _, k in kiosks_m.iterrows():
+                for _, k in manageable_kiosks_m.iterrows():
                     kid_raw  = k.get("id")
                     kid      = int(kid_raw) if pd.notna(kid_raw) else None
                     kname    = str(k.get("device_name", "Unknown"))
@@ -5376,7 +5400,7 @@ def super_admin_dashboard():
 
                             if ek1.button("Lock",   key=f"k_lock_{kid}"):
                                 try:
-                                    conn.execute("UPDATE kiosks SET status='locked' WHERE id=?", (kid,))
+                                    conn.execute("UPDATE kiosks SET status='locked' WHERE id=? AND COALESCE(created_by, '') IN ('', ?)", (kid, user))
                                     conn.commit()
                                     st.success(f"'{kname}' locked.")
                                     st.rerun()
@@ -5385,7 +5409,7 @@ def super_admin_dashboard():
 
                             if ek2.button("Unlock", key=f"k_unlock_{kid}"):
                                 try:
-                                    conn.execute("UPDATE kiosks SET status='active' WHERE id=?", (kid,))
+                                    conn.execute("UPDATE kiosks SET status='active' WHERE id=? AND COALESCE(created_by, '') IN ('', ?)", (kid, user))
                                     conn.commit()
                                     st.success(f"'{kname}' unlocked.")
                                     st.rerun()
@@ -5393,7 +5417,7 @@ def super_admin_dashboard():
                                     st.warning("status column not in kiosks schema.")
 
                             if ek3.button("Delete", key=f"k_del_{kid}"):
-                                conn.execute("DELETE FROM kiosks WHERE id=?", (kid,))
+                                conn.execute("DELETE FROM kiosks WHERE id=? AND COALESCE(created_by, '') IN ('', ?)", (kid, user))
                                 conn.commit()
                                 log_action(conn, user, "DELETE KIOSK", kname, org)
                                 st.success(f"Kiosk '{kname}' deleted.")
@@ -5405,8 +5429,8 @@ def super_admin_dashboard():
                                 if st.form_submit_button("Save Changes"):
                                     final_kname = new_kname.strip() or kname
                                     conn.execute(
-                                        "UPDATE kiosks SET device_name=?, branch=? WHERE id=?",
-                                        (final_kname, new_kbr, kid)
+                                        "UPDATE kiosks SET device_name=?, branch=? WHERE id=? AND COALESCE(created_by, '') IN ('', ?)",
+                                        (final_kname, new_kbr, kid, user)
                                     )
                                     conn.commit()
                                     st.success(f"Kiosk updated: '{final_kname}' in '{new_kbr}'.")
@@ -5981,7 +6005,15 @@ def super_admin_dashboard():
         log_to = nav_date_input("To", value=date.today(), key="log_to")
 
         logs = safe_read(
-            "SELECT * FROM audit_logs WHERE organization=? ORDER BY created_at DESC",
+            """
+            SELECT l.*, lower(coalesce(u.role, '')) AS actor_role_current
+            FROM audit_logs l
+            LEFT JOIN users u
+              ON u.username = l.username
+             AND u.organization = l.organization
+            WHERE l.organization=?
+            ORDER BY l.created_at DESC
+            """,
             conn, params=(org,)
         )
         logs = apply_branch_scope(logs)
@@ -5990,9 +6022,20 @@ def super_admin_dashboard():
             st.info("No logs found.")
         else:
             logs["created_at"] = pd.to_datetime(logs["created_at"], errors="coerce")
+            actor_filter = nav_selectbox(
+                "Show Changes By",
+                ["All", "admin only", "superadmin", "hr", "employee"],
+                key="sa_logs_actor_filter",
+            )
+
             filtered = logs[
                 (logs["created_at"].dt.date >= log_from) &
                 (logs["created_at"].dt.date <= log_to)
             ]
+            if actor_filter == "admin only":
+                filtered = filtered[filtered.get("actor_role_current", "").astype(str).str.lower() == "admin"]
+            elif actor_filter != "All":
+                filtered = filtered[filtered.get("actor_role_current", "").astype(str).str.lower() == actor_filter]
+
             st.markdown(f"**{len(filtered)} log(s)** in selected date range.")
             st.dataframe(filtered, use_container_width=True)

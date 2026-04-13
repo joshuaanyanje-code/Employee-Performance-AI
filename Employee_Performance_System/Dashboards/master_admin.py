@@ -1617,9 +1617,9 @@ def master_admin_dashboard():
                                 
                                 try:
                                     cursor2 = execute_write(conn, """
-                                        INSERT INTO users(username, password, role, organization, status, phone)
-                                        VALUES (?,?,?,?,?,?)
-                                    """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", normalized_superadmin_phone))
+                                        INSERT INTO users(username, password, role, organization, status, phone, created_by)
+                                        VALUES (?,?,?,?,?,?,?)
+                                    """, (superadmin_name, hash_password(password), "superadmin", org_name, "active", normalized_superadmin_phone, st.session_state.get("username", "master_admin")))
                                     st.write(f"☑️ Super admin user record inserted (rows affected: {cursor2.rowcount})")
                                 except Exception as e:
                                     st.error(f"❌ Failed to create super admin user: {str(e)}")
@@ -2209,7 +2209,7 @@ def master_admin_dashboard():
         st.subheader("👥 Employees & Users")
 
         users_all = safe_read("""
-            SELECT username, role, phone, gender, branch, organization, status
+            SELECT id, username, role, phone, gender, branch, organization, status
             FROM users
             WHERE role != 'master'
             ORDER BY organization, branch, role, username
@@ -2235,8 +2235,17 @@ def master_admin_dashboard():
             if role_filter != "All":
                 df_emp = df_emp[df_emp["role"] == role_filter]
 
+            display_cols = [
+                c for c in ["username", "role", "phone", "gender", "branch", "organization", "status"]
+                if c in df_emp.columns
+            ]
             st.markdown(f"**{len(df_emp)} record(s) found**")
-            render_table_on_demand("employees and users table", df_emp, "employees_filtered", use_container_width=True)
+            render_table_on_demand(
+                "employees and users table",
+                df_emp[display_cols] if display_cols else df_emp,
+                "employees_filtered",
+                use_container_width=True,
+            )
 
             st.download_button(
                 "Export Filtered Users (CSV)",
@@ -2244,6 +2253,159 @@ def master_admin_dashboard():
                 file_name="users_filtered_export.csv",
                 mime="text/csv",
             )
+
+            st.divider()
+            st.markdown("### ✏️ Rename User")
+            st.caption("Master Admin can rename Super Admin usernames only.")
+
+            rename_df = df_emp.copy() if not df_emp.empty else users_all.copy()
+            if rename_df.empty:
+                st.info("No users available to rename in this filter.")
+            else:
+                rename_df = rename_df.copy()
+                rename_df = rename_df[
+                    rename_df["role"].astype(str).str.lower().isin(["superadmin", "super_admin"])
+                ].copy()
+                if rename_df.empty:
+                    st.info("No Super Admin users in the current filter.")
+                    return
+                rename_df["username"] = rename_df["username"].fillna("").astype(str)
+                rename_df["role"] = rename_df["role"].fillna("").astype(str)
+                rename_df["organization"] = rename_df["organization"].fillna("").astype(str)
+                rename_df["branch"] = rename_df["branch"].fillna("").astype(str)
+                rename_df["_rename_label"] = rename_df.apply(
+                    lambda r: f"{r['username']} | {r['role']} | {r['organization']} | {r['branch'] or 'No Branch'}",
+                    axis=1,
+                )
+
+                rename_pick = st.selectbox(
+                    "Select User to Rename",
+                    rename_df["_rename_label"].tolist(),
+                    key="master_rename_user_pick",
+                )
+                selected_row = rename_df[rename_df["_rename_label"] == rename_pick].iloc[0]
+
+                old_username = str(selected_row.get("username", "") or "").strip()
+                old_role = str(selected_row.get("role", "") or "").strip()
+                old_org = str(selected_row.get("organization", "") or "").strip()
+                old_branch = str(selected_row.get("branch", "") or "").strip()
+                selected_user_id = int(selected_row.get("id", 0) or 0)
+
+                st.caption(
+                    f"Current: {old_username} ({old_role}) in {old_org} / {old_branch or 'No Branch'}"
+                )
+                new_username = st.text_input(
+                    "New Username",
+                    value=old_username,
+                    key="master_rename_user_new_name",
+                )
+
+                if st.button("Save Username Change", key="master_rename_user_save_btn", use_container_width=True):
+                    clean_new_username = str(new_username or "").strip()
+                    if not clean_new_username:
+                        st.error("New username cannot be empty.")
+                    elif old_role.lower() not in {"superadmin", "super_admin"}:
+                        st.error("Master Admin can rename Super Admin users only.")
+                    elif clean_new_username == old_username:
+                        st.info("No change detected.")
+                    else:
+                        same_name_count_df = safe_read(
+                            """
+                            SELECT COUNT(*) AS cnt
+                            FROM users
+                            WHERE organization=? AND lower(trim(username))=lower(trim(?))
+                            """,
+                            conn,
+                            params=(old_org, old_username),
+                        )
+                        same_name_count = int(same_name_count_df.iloc[0].get("cnt", 0) or 0) if not same_name_count_df.empty else 0
+
+                        if same_name_count > 1:
+                            st.error(
+                                "This username exists in multiple branches in the same organization. "
+                                "Rename is blocked to avoid changing the wrong records."
+                            )
+                        else:
+                            conflict_df = safe_read(
+                                """
+                                SELECT id
+                                FROM users
+                                WHERE lower(trim(username))=lower(trim(?))
+                                  AND organization=?
+                                  AND coalesce(branch,'')=coalesce(?, '')
+                                  AND id<>?
+                                LIMIT 1
+                                """,
+                                conn,
+                                params=(clean_new_username, old_org, old_branch, selected_user_id),
+                            )
+                            if not conflict_df.empty:
+                                st.error(
+                                    "Username already exists in the same organization and branch. "
+                                    "Choose a different name."
+                                )
+                            else:
+                                try:
+                                    execute_write(
+                                        conn,
+                                        "UPDATE users SET username=? WHERE id=?",
+                                        (clean_new_username, selected_user_id),
+                                    )
+
+                                    # Propagate username changes to related records.
+                                    rename_queries = [
+                                        ("UPDATE attendance SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE schedules SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE leaves SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE leaves SET approved_by=? WHERE organization=? AND approved_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE warnings SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE ratings SET rated=? WHERE organization=? AND rated=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE ratings SET rater=? WHERE organization=? AND rater=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE messages SET sender=? WHERE organization=? AND sender=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE messages SET receiver=? WHERE organization=? AND receiver=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE early_clockout_approvals SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE early_clockout_approvals SET approved_by=? WHERE organization=? AND approved_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE lateness_approvals SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE lateness_approvals SET approved_by=? WHERE organization=? AND approved_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE client_feedback SET target_username=? WHERE organization=? AND target_username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE kpi_targets SET target_username=? WHERE organization=? AND target_username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE kpi_progress_updates SET target_username=? WHERE organization=? AND target_username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE admin_action_requests SET target_username=? WHERE organization=? AND target_username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE admin_action_requests SET requested_by=? WHERE organization=? AND requested_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE admin_action_requests SET reviewed_by=? WHERE organization=? AND reviewed_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_case_files SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_case_files SET created_by=? WHERE organization=? AND created_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_case_files SET updated_by=? WHERE organization=? AND updated_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_documents SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_documents SET uploaded_by=? WHERE organization=? AND uploaded_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_onboarding_checklists SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE hr_onboarding_checklists SET assigned_by=? WHERE organization=? AND assigned_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE staff_transfers SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE staff_transfers SET transferred_by=? WHERE organization=? AND transferred_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE user_sessions SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE audit_logs SET username=? WHERE organization=? AND username=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE system_messages SET from_user=? WHERE organization=? AND from_user=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE system_messages SET to_user=? WHERE organization=? AND to_user=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE polls SET created_by=? WHERE organization=? AND created_by=?", (clean_new_username, old_org, old_username)),
+                                        ("UPDATE poll_responses SET responder=? WHERE organization=? AND responder=?", (clean_new_username, old_org, old_username)),
+                                    ]
+
+                                    for query, params in rename_queries:
+                                        try:
+                                            execute_write(conn, query, params)
+                                        except Exception:
+                                            pass
+
+                                    conn.commit()
+                                    set_flash_message(
+                                        "master_org_flash",
+                                        "success",
+                                        f"Username changed from '{old_username}' to '{clean_new_username}'.",
+                                    )
+                                    st.success(f"Username updated: {old_username} -> {clean_new_username}")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"Failed to rename user: {e}")
 
     # ==========================================================
     # ANALYTICS

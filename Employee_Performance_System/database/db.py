@@ -698,6 +698,7 @@ def create_tables():
         pin TEXT,
         phone TEXT DEFAULT '',
         gender TEXT DEFAULT 'unknown',
+        created_by TEXT DEFAULT '',
         created_at TEXT,
         exclude_from_analytics INTEGER DEFAULT 0
     )
@@ -706,6 +707,11 @@ def create_tables():
     # Safe migrations for older databases
     try:
         c.execute("ALTER TABLE users ADD COLUMN phone TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN created_by TEXT DEFAULT ''")
         conn.commit()
     except Exception:
         pass
@@ -718,9 +724,15 @@ def create_tables():
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT,
         organization TEXT,
+        created_by TEXT DEFAULT '',
         status TEXT DEFAULT 'active'
     )
     """)
+    try:
+        c.execute("ALTER TABLE branches ADD COLUMN created_by TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
 
     # =========================
     # BRANCH WORKING HOURS
@@ -776,9 +788,15 @@ def create_tables():
     c.execute("""
     CREATE TABLE IF NOT EXISTS topics(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        topic TEXT UNIQUE
+        topic TEXT UNIQUE,
+        created_by TEXT DEFAULT ''
     )
     """)
+    try:
+        c.execute("ALTER TABLE topics ADD COLUMN created_by TEXT DEFAULT ''")
+        conn.commit()
+    except Exception:
+        pass
 
     default_topics = [
         "Customer Service",
@@ -1047,6 +1065,7 @@ def create_tables():
         device_name TEXT,
         last_active TEXT,
         status TEXT DEFAULT 'active',
+        created_by TEXT DEFAULT '',
         device_fingerprint TEXT DEFAULT ''
     )
     """)
@@ -1056,6 +1075,10 @@ def create_tables():
         pass
     try:
         c.execute("ALTER TABLE kiosks ADD COLUMN device_fingerprint TEXT DEFAULT ''")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE kiosks ADD COLUMN created_by TEXT DEFAULT ''")
     except Exception:
         pass
 

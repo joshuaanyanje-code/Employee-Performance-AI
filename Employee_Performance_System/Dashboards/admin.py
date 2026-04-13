@@ -502,8 +502,8 @@ def admin_dashboard():
                         else:
                             conn.execute(
                                 """
-                                INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender)
-                                VALUES (?,?,?,?,?,?,?,?,?)
+                                INSERT INTO users(username,password,role,branch,organization,status,pin,phone,gender,created_by)
+                                VALUES (?,?,?,?,?,?,?,?,?,?)
                                 """,
                                 (
                                     new_user.strip(),
@@ -515,6 +515,7 @@ def admin_dashboard():
                                     new_pin.strip() or "1234",
                                     normalized_phone,
                                     str(new_gender).strip().lower(),
+                                    username,
                                 ),
                             )
                             conn.commit()
@@ -528,8 +529,10 @@ def admin_dashboard():
 
         with tab_edit:
             editable = users_df[users_df["username"] != username] if not users_df.empty else pd.DataFrame()
+            if not editable.empty and "role" in editable.columns:
+                editable = editable[editable["role"].astype(str).str.lower() == "employee"].copy()
             if editable.empty:
-                st.info("No editable users available.")
+                st.info("No editable employee users available.")
             else:
                 selected_user = st.selectbox("Select User", editable["username"].tolist(), key="admin_edit_user_select")
                 row = editable[editable["username"] == selected_user].iloc[0]
@@ -571,8 +574,10 @@ def admin_dashboard():
 
         with tab_suspend:
             manageable = users_df[users_df["username"] != username] if not users_df.empty else pd.DataFrame()
+            if not manageable.empty and "role" in manageable.columns:
+                manageable = manageable[manageable["role"].astype(str).str.lower() == "employee"].copy()
             if manageable.empty:
-                st.info("No users to manage.")
+                st.info("No employee users to manage.")
             else:
                 selected = st.selectbox("Select User", manageable["username"].tolist(), key="admin_suspend_user_select")
                 row = manageable[manageable["username"] == selected].iloc[0]
@@ -1934,8 +1939,11 @@ def admin_dashboard():
     elif menu == "Topics":
         st.subheader("Topics")
 
-        topics = safe_read("SELECT id, topic FROM topics ORDER BY topic", conn)
+        topics = safe_read("SELECT id, topic, COALESCE(created_by, '') AS created_by FROM topics ORDER BY topic", conn)
         st.dataframe(topics if not topics.empty else pd.DataFrame({"Info": ["No topics available"]}), use_container_width=True)
+        manageable_topics = topics[
+            topics["created_by"].fillna("").astype(str).isin(["", username])
+        ].copy() if not topics.empty else pd.DataFrame()
 
         t1, t2, t3 = st.tabs(["Add", "Edit", "Delete"])
 
@@ -1951,37 +1959,46 @@ def admin_dashboard():
                         if not exists.empty:
                             st.error("Topic already exists.")
                         else:
-                            conn.execute("INSERT INTO topics(topic) VALUES(?)", (topic_new.strip(),))
+                            conn.execute(
+                                "INSERT INTO topics(topic, created_by) VALUES(?,?)",
+                                (topic_new.strip(), username),
+                            )
                             conn.commit()
                             log_action(conn, username, "ADD TOPIC", topic_new.strip(), org)
                             refresh_with_message("Topic added.")
 
         with t2:
-            if topics.empty:
-                st.info("No topics to edit.")
+            if manageable_topics.empty:
+                st.info("No topics available for you to edit. New topics you create will appear here.")
             else:
                 with st.form("admin_edit_topic", clear_on_submit=False):
-                    old_topic = st.selectbox("Select Topic", topics["topic"].tolist(), key="admin_topic_edit_select")
+                    old_topic = st.selectbox("Select Topic", manageable_topics["topic"].tolist(), key="admin_topic_edit_select")
                     new_topic = st.text_input("New Name")
                     edit_sub = st.form_submit_button("Save")
                     if edit_sub:
                         if not new_topic.strip():
                             st.error("New topic name is required.")
                         else:
-                            conn.execute("UPDATE topics SET topic=? WHERE topic=?", (new_topic.strip(), old_topic))
+                            conn.execute(
+                                "UPDATE topics SET topic=? WHERE topic=? AND COALESCE(created_by, '') IN ('', ?)",
+                                (new_topic.strip(), old_topic, username),
+                            )
                             conn.commit()
                             log_action(conn, username, "EDIT TOPIC", f"{old_topic} -> {new_topic.strip()}", org)
                             refresh_with_message("Topic updated.")
 
         with t3:
-            if topics.empty:
-                st.info("No topics to delete.")
+            if manageable_topics.empty:
+                st.info("No topics available for you to delete.")
             else:
                 with st.form("admin_delete_topic", clear_on_submit=False):
-                    del_topic = st.selectbox("Select Topic", topics["topic"].tolist(), key="admin_topic_delete_select")
+                    del_topic = st.selectbox("Select Topic", manageable_topics["topic"].tolist(), key="admin_topic_delete_select")
                     del_sub = st.form_submit_button("Delete Topic")
                     if del_sub:
-                        conn.execute("DELETE FROM topics WHERE topic=?", (del_topic,))
+                        conn.execute(
+                            "DELETE FROM topics WHERE topic=? AND COALESCE(created_by, '') IN ('', ?)",
+                            (del_topic, username),
+                        )
                         conn.commit()
                         log_action(conn, username, "DELETE TOPIC", del_topic, org)
                         refresh_with_message("Topic deleted.", level="warning")
@@ -2280,7 +2297,7 @@ def admin_dashboard():
 
         kiosks_df = safe_read(
             """
-            SELECT id, device_name, last_active, COALESCE(status, 'active') AS status
+            SELECT id, device_name, last_active, COALESCE(status, 'active') AS status, COALESCE(created_by, '') AS created_by
             FROM kiosks
             WHERE organization=? AND branch=?
             ORDER BY id DESC
@@ -2293,6 +2310,9 @@ def admin_dashboard():
             st.info("No kiosk devices registered for this branch.")
         else:
             st.dataframe(kiosks_df, use_container_width=True)
+        manageable_kiosks_df = kiosks_df[
+            kiosks_df["created_by"].fillna("").astype(str).isin(["", username])
+        ].copy() if not kiosks_df.empty else pd.DataFrame()
 
         st.markdown("### Branch Kiosk Link")
         st.code(build_kiosk_link(admin_branch, org), language="text")
@@ -2314,18 +2334,18 @@ def admin_dashboard():
                         st.error("Kiosk name already exists for this branch.")
                     else:
                         conn.execute(
-                            "INSERT INTO kiosks(branch,organization,device_name,last_active,status) VALUES(?,?,?,datetime('now'),'active')",
-                            (admin_branch, org, device_name),
+                            "INSERT INTO kiosks(branch,organization,device_name,last_active,status,created_by) VALUES(?,?,?,datetime('now'),'active',?)",
+                            (admin_branch, org, device_name, username),
                         )
                         conn.commit()
                         log_action(conn, username, "CREATE KIOSK", device_name, org)
                         refresh_with_message(f"Kiosk '{device_name}' created for branch '{admin_branch}'.")
 
         with km_tab:
-            if kiosks_df.empty:
-                st.info("No kiosks to manage in this branch.")
+            if manageable_kiosks_df.empty:
+                st.info("No kiosks available for you to manage in this branch.")
             else:
-                for _, kiosk_row in kiosks_df.iterrows():
+                for _, kiosk_row in manageable_kiosks_df.iterrows():
                     kiosk_id = int(kiosk_row["id"])
                     kiosk_name = str(kiosk_row.get("device_name", "Unknown"))
                     kiosk_status = str(kiosk_row.get("status", "active") or "active")
@@ -2338,24 +2358,24 @@ def admin_dashboard():
                         mk1, mk2, mk3 = st.columns(3)
                         if mk1.button("Lock", key=f"admin_kiosk_lock_{kiosk_id}"):
                             conn.execute(
-                                "UPDATE kiosks SET status='locked' WHERE id=? AND organization=? AND branch=?",
-                                (kiosk_id, org, admin_branch),
+                                "UPDATE kiosks SET status='locked' WHERE id=? AND organization=? AND branch=? AND COALESCE(created_by, '') IN ('', ?)",
+                                (kiosk_id, org, admin_branch, username),
                             )
                             conn.commit()
                             log_action(conn, username, "LOCK KIOSK", kiosk_name, org)
                             refresh_with_message(f"Kiosk '{kiosk_name}' locked.", level="warning")
                         if mk2.button("Unlock", key=f"admin_kiosk_unlock_{kiosk_id}"):
                             conn.execute(
-                                "UPDATE kiosks SET status='active' WHERE id=? AND organization=? AND branch=?",
-                                (kiosk_id, org, admin_branch),
+                                "UPDATE kiosks SET status='active' WHERE id=? AND organization=? AND branch=? AND COALESCE(created_by, '') IN ('', ?)",
+                                (kiosk_id, org, admin_branch, username),
                             )
                             conn.commit()
                             log_action(conn, username, "UNLOCK KIOSK", kiosk_name, org)
                             refresh_with_message(f"Kiosk '{kiosk_name}' unlocked.")
                         if mk3.button("Delete", key=f"admin_kiosk_delete_{kiosk_id}"):
                             conn.execute(
-                                "DELETE FROM kiosks WHERE id=? AND organization=? AND branch=?",
-                                (kiosk_id, org, admin_branch),
+                                "DELETE FROM kiosks WHERE id=? AND organization=? AND branch=? AND COALESCE(created_by, '') IN ('', ?)",
+                                (kiosk_id, org, admin_branch, username),
                             )
                             conn.commit()
                             log_action(conn, username, "DELETE KIOSK", kiosk_name, org)
@@ -2375,8 +2395,8 @@ def admin_dashboard():
                                     st.error("Another kiosk in this branch already uses that name.")
                                 else:
                                     conn.execute(
-                                        "UPDATE kiosks SET device_name=? WHERE id=? AND organization=? AND branch=?",
-                                        (final_name, kiosk_id, org, admin_branch),
+                                        "UPDATE kiosks SET device_name=? WHERE id=? AND organization=? AND branch=? AND COALESCE(created_by, '') IN ('', ?)",
+                                        (final_name, kiosk_id, org, admin_branch, username),
                                     )
                                     conn.commit()
                                     log_action(conn, username, "EDIT KIOSK", f"{kiosk_name} -> {final_name}", org)

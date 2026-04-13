@@ -950,8 +950,8 @@ def kiosk_dashboard():
             settings = pd.read_sql("SELECT * FROM settings WHERE id=1", conn).iloc[0]
 
             today_day = datetime.now().strftime("%A")
-            work_start = _parse_time_value(settings.get("work_start", "09:00"), "09:00")
-            work_end = _parse_time_value(settings.get("work_end", "18:00"), "18:00")
+            work_start = _parse_time_value(settings.get("work_start", "08:00"), "08:00")
+            work_end = _parse_time_value(settings.get("work_end", "20:00"), "20:00")
             work_start, work_end, off_day, schedule_note = _resolve_effective_work_hours(
                 conn,
                 org,
@@ -971,7 +971,7 @@ def kiosk_dashboard():
             now = datetime.now()
             now_time = now.time()
             shift_start_dt = datetime.combine(now.date(), work_start)
-            earliest_clockin_dt = shift_start_dt - timedelta(minutes=30)
+            earliest_clockin_dt = shift_start_dt - timedelta(minutes=45)
 
             today_requests = _safe_read(
                 conn,
