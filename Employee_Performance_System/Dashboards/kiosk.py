@@ -6,7 +6,6 @@ import os
 import hashlib
 import time
 import importlib
-from html import escape
 
 try:
     holiday_lib = importlib.import_module("holidays")
@@ -73,24 +72,12 @@ def home_kiosk_button(label, key):
 
 
 def render_kiosk_hero(primary_title, secondary_title="", tertiary_title=""):
-    primary_safe = escape(str(primary_title or ""))
-    secondary_safe = escape(str(secondary_title or ""))
-    tertiary_safe = escape(str(tertiary_title or ""))
-    secondary_html = f"<div class='branch-name'>{secondary_safe}</div>" if secondary_safe else ""
-    tertiary_html = f"<div class='manager-name'>{tertiary_safe}</div>" if tertiary_safe else ""
-    st.markdown(
-        f"""
-        <div class='home-kiosk-hero'>
-            <div class='home-kiosk-kicker'>Workplace kiosk</div>
-            <div class='home-kiosk-title'>
-                <div class='org-name'>{primary_safe}</div>
-                {secondary_html}
-                {tertiary_html}
-            </div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    st.caption("WORKPLACE KIOSK")
+    st.markdown(f"## {str(primary_title or '').strip()}")
+    if secondary_title:
+        st.markdown(f"### {str(secondary_title).strip()}")
+    if tertiary_title:
+        st.caption(str(tertiary_title).strip())
 
 
 def _safe_read(conn, query, params=None):
@@ -503,6 +490,20 @@ def kiosk_dashboard():
             border: 1px solid rgba(15, 23, 42, 0.08);
         }
 
+        [data-testid="stCameraInput"] {
+            width: 100% !important;
+        }
+
+        [data-testid="stCameraInput"] video,
+        [data-testid="stCameraInput"] img,
+        [data-testid="stImage"] img {
+            width: 100% !important;
+            max-width: 100% !important;
+            max-height: 60vh !important;
+            object-fit: cover !important;
+            border-radius: 14px;
+        }
+
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
@@ -628,13 +629,13 @@ def kiosk_dashboard():
             f"Branch Manager: {manager_name}",
         )
 
-        st.markdown("<div style='height:1.5rem;'></div>", unsafe_allow_html=True)
+        st.write("")
 
         if home_kiosk_button("Guest Experience", key="home_btn_guest"):
             st.session_state["kiosk_view"] = "guest"
             refresh()
 
-        st.markdown("<div style='height:0.75rem;'></div>", unsafe_allow_html=True)
+        st.write("")
 
         if home_kiosk_button("Staff Check In", key="home_btn_staff"):
             st.session_state["kiosk_view"] = "staff"
