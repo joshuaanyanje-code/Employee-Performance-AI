@@ -1046,11 +1046,16 @@ def create_tables():
         organization TEXT,
         device_name TEXT,
         last_active TEXT,
-        status TEXT DEFAULT 'active'
+        status TEXT DEFAULT 'active',
+        device_fingerprint TEXT DEFAULT ''
     )
     """)
     try:
         c.execute("ALTER TABLE kiosks ADD COLUMN status TEXT DEFAULT 'active'")
+    except Exception:
+        pass
+    try:
+        c.execute("ALTER TABLE kiosks ADD COLUMN device_fingerprint TEXT DEFAULT ''")
     except Exception:
         pass
 

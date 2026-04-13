@@ -960,12 +960,21 @@ def admin_dashboard():
 
             early_count = int(filtered["early_clock_out"].sum())
             full_clock_count = int(filtered["clock_out"].astype(str).str.strip().ne("").sum())
+            no_clock_out_df = filtered[
+                filtered["clock_in"].astype(str).str.strip().ne("")
+                & filtered["clock_out"].astype(str).str.strip().eq("")
+            ].copy()
+            no_clock_out_count = len(no_clock_out_df)
 
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Records", len(filtered))
             c2.metric("Late", late_count)
             c3.metric("Early Clock Out", early_count)
             c4.metric("Absent Today", absent_count)
+
+            nco1, nco2 = st.columns(2)
+            nco1.metric("Clocked In, No Clock Out", no_clock_out_count)
+            nco2.metric("Full Clock-Out Logs", full_clock_count)
 
             pcol1, pcol2 = st.columns(2)
             pcol1.metric("Pending Early Requests", pending_requests_total)
@@ -1028,6 +1037,15 @@ def admin_dashboard():
                 ]],
                 use_container_width=True,
             )
+
+            st.markdown("### Clocked In But No Clock Out")
+            if no_clock_out_df.empty:
+                st.success("No open shifts in this range.")
+            else:
+                st.dataframe(
+                    no_clock_out_df[["id", "username", "date", "clock_in", "status"]],
+                    use_container_width=True,
+                )
 
             st.markdown("### Latecomers")
             late_df = filtered[filtered["status"].astype(str).str.upper() == "LATE"]

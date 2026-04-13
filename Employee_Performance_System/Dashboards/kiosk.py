@@ -16,6 +16,21 @@ from database.db import get_connection, execute_write
 from Dashboards.ui_responsive import apply_responsive_ui
 
 # ==============================
+# DEVICE FINGERPRINT
+# ==============================
+def _get_device_fingerprint(ctx):
+    """Generate device fingerprint from IP + user agent hash."""
+    try:
+        headers = getattr(ctx, "headers", {}) if ctx else {}
+        client_ip = str(headers.get("x-forwarded-for", "").split(",")[0].strip() or headers.get("x-client-ip", "") or "0.0.0.0")
+        user_agent = str(headers.get("user-agent", "unknown"))
+        fingerprint_str = f"{client_ip}:{user_agent}"
+        fingerprint_hash = hashlib.sha256(fingerprint_str.encode()).hexdigest()[:16]
+        return fingerprint_hash
+    except Exception:
+        return "unknown"
+
+# ==============================
 # REFRESH
 # ==============================
 def refresh():
@@ -42,6 +57,7 @@ def clear_kiosk_staff_transient_state():
     st.session_state.pop("kiosk_early_request_reason", None)
     st.session_state.pop("kiosk_early_clockout_reason", None)
     st.session_state.pop("kiosk_selected_user", None)
+    st.session_state.pop("kiosk_user_role", None)
     st.session_state["kiosk_lateness_request_date"] = datetime.now().date()
 
 
@@ -333,6 +349,75 @@ def _notify_branch_admins_for_lateness_request(conn, org, branch, employee, requ
                 f"Employee {employee} requested lateness approval for {request_date}: {reason}",
             ),
         )
+
+
+def _notify_super_admin_policy_breach(conn, org, branch, staff_user, staff_role, breach_type, subject, detail, recommendation):
+    super_admins = _safe_read(
+        conn,
+        """
+        SELECT username FROM users
+        WHERE organization=?
+          AND lower(coalesce(role,'')) IN ('superadmin','super_admin','master','owner')
+          AND lower(coalesce(status,'active'))='active'
+        """,
+        params=(org,),
+    )
+    if super_admins.empty:
+        return
+
+    event_day = datetime.now().strftime("%Y-%m-%d")
+    body = (
+        f"Policy signal from kiosk.\n"
+        f"User: {staff_user} ({staff_role})\n"
+        f"Branch: {branch}\n"
+        f"Date: {event_day}\n"
+        f"Detail: {detail}\n"
+        f"Recommendation: {recommendation}"
+    )
+
+    for _, row in super_admins.iterrows():
+        sa_user = str(row.get("username", "")).strip()
+        if not sa_user:
+            continue
+
+        existing = _safe_read(
+            conn,
+            """
+            SELECT id FROM system_messages
+            WHERE from_user=? AND to_user=? AND organization=?
+              AND message_type=? AND subject=?
+              AND created_at >= datetime('now', '-1 day')
+            ORDER BY id DESC LIMIT 1
+            """,
+            params=(staff_user, sa_user, org, breach_type, subject),
+        )
+        if existing.empty:
+            execute_write(
+                conn,
+                """
+                INSERT INTO system_messages(
+                    from_user, to_user, organization, branch,
+                    message_type, subject, body, priority, read_at, created_at
+                )
+                VALUES (?,?,?,?,?,?,?,?,?,datetime('now'))
+                """,
+                (staff_user, sa_user, org, branch, breach_type, subject, body, "high", ""),
+            )
+
+    execute_write(
+        conn,
+        """
+        INSERT INTO warnings(username, organization, branch, type, message, created_at)
+        VALUES (?,?,?,?,?,datetime('now'))
+        """,
+        (
+            staff_user,
+            org,
+            branch,
+            breach_type,
+            f"{subject} | {detail} | Recommendation: {recommendation}",
+        ),
+    )
 
 
 # ==============================
@@ -673,27 +758,40 @@ def kiosk_dashboard():
                     return
                 check = _safe_read(
                     conn,
-                    "SELECT pin FROM users WHERE username=? AND branch=? AND organization=?",
+                    "SELECT pin, role FROM users WHERE username=? AND branch=? AND organization=?",
                     params=(selected_user, branch, org),
                 )
                 if check.empty:
                     st.error("User not found in this branch")
                     return
                 db_pin = str(check.iloc[0]["pin"]).strip()
+                role_value = str(check.iloc[0].get("role", "employee") or "employee").strip().lower()
                 if str(pin).strip() != db_pin:
                     st.error("❌ Invalid PIN")
                     return
                 st.session_state.kiosk_user = selected_user
+                st.session_state.kiosk_user_role = role_value
                 clear_kiosk_photo_state()
                 st.success("✅ Verified")
                 refresh()
 
         else:
             user = st.session_state.kiosk_user
+            user_role = str(st.session_state.get("kiosk_user_role", "employee") or "employee").strip().lower()
+            if not user_role:
+                user_row = _safe_read(
+                    conn,
+                    "SELECT role FROM users WHERE username=? AND branch=? AND organization=? LIMIT 1",
+                    params=(user, branch, org),
+                )
+                user_role = str(user_row.iloc[0].get("role", "employee") or "employee").strip().lower() if not user_row.empty else "employee"
+                st.session_state.kiosk_user_role = user_role
+            is_admin_user = user_role in {"admin", "superadmin", "super_admin", "master", "owner"}
 
             col_user, col_next = st.columns([3, 1])
             with col_user:
-                st.success(f"✅ {user}")
+                role_badge = "Admin" if is_admin_user else "Employee"
+                st.success(f"✅ {user} ({role_badge})")
             with col_next:
                 if st.button("Next User", use_container_width=True):
                     st.session_state.pop("kiosk_user", None)
@@ -719,84 +817,87 @@ def kiosk_dashboard():
                 st.session_state["kiosk_show_lateness_request"] = False
 
             st.divider()
-            if compact_kiosk_button("📩 Request Lateness Approval", key="kiosk_toggle_lateness_request"):
-                st.session_state["kiosk_show_lateness_request"] = not st.session_state["kiosk_show_lateness_request"]
-                refresh()
+            if is_admin_user:
+                st.info("Admin clock-in lateness does not require approval. Any breach against branch time policy is auto-reported to super admin.")
+            else:
+                if compact_kiosk_button("📩 Request Lateness Approval", key="kiosk_toggle_lateness_request"):
+                    st.session_state["kiosk_show_lateness_request"] = not st.session_state["kiosk_show_lateness_request"]
+                    refresh()
 
-            if st.session_state.get("kiosk_show_lateness_request", False):
-                st.markdown("### Lateness Approval Request")
-                st.caption("Request for today, tomorrow, or the next day so approved lateness is not flagged as late.")
+                if st.session_state.get("kiosk_show_lateness_request", False):
+                    st.markdown("### Lateness Approval Request")
+                    st.caption("Request for today, tomorrow, or the next day so approved lateness is not flagged as late.")
 
-                if not lateness_requests.empty:
-                    request_view = lateness_requests.copy()
-                    request_view["request_note"] = request_view["actual_reason"].fillna("")
-                    st.dataframe(
-                        request_view[["approved_for_date", "status", "reason", "approved_by", "request_note", "used_at"]],
-                        use_container_width=True,
-                    )
-
-                with st.form("kiosk_lateness_request_form", clear_on_submit=False):
-                    lateness_request_date = st.date_input(
-                        "Request lateness for",
-                        value=datetime.now().date(),
-                        min_value=datetime.now().date(),
-                        max_value=(datetime.now() + timedelta(days=2)).date(),
-                        key="kiosk_lateness_request_date",
-                    )
-                    lateness_reason = st.text_area(
-                        "Reason for lateness request",
-                        key="kiosk_lateness_request_reason",
-                        placeholder="Explain why you may arrive late on the selected date.",
-                    )
-                    submit_lateness_request = compact_kiosk_form_submit_button("✅ Submit Lateness Request")
-
-                    if submit_lateness_request:
-                        request_date_tag = lateness_request_date.strftime("%Y-%m-%d")
-                        existing_lateness = _safe_read(
-                            conn,
-                            """
-                            SELECT id, status FROM lateness_approvals
-                            WHERE username=? AND organization=? AND branch=? AND approved_for_date=?
-                            ORDER BY id DESC LIMIT 1
-                            """,
-                            params=(user, org, branch, request_date_tag),
+                    if not lateness_requests.empty:
+                        request_view = lateness_requests.copy()
+                        request_view["request_note"] = request_view["actual_reason"].fillna("")
+                        st.dataframe(
+                            request_view[["approved_for_date", "status", "reason", "approved_by", "request_note", "used_at"]],
+                            use_container_width=True,
                         )
-                        if not lateness_reason.strip():
-                            st.error("Reason is required to request lateness approval.")
-                        elif not existing_lateness.empty and str(existing_lateness.iloc[0].get("status", "")).lower() == "approved":
-                            st.info("A lateness approval already exists for that date.")
-                        else:
-                            if existing_lateness.empty:
-                                execute_write(
-                                    conn,
-                                    """
-                                    INSERT INTO lateness_approvals(
-                                        username, organization, branch, approved_for_date,
-                                        reason, approved_by, status, actual_reason, created_at
-                                    )
-                                    VALUES (?,?,?,?,?,?,?,?,datetime('now'))
-                                    """,
-                                    (user, org, branch, request_date_tag, lateness_reason.strip(), "", "pending", ""),
-                                )
+
+                    with st.form("kiosk_lateness_request_form", clear_on_submit=False):
+                        lateness_request_date = st.date_input(
+                            "Request lateness for",
+                            value=datetime.now().date(),
+                            min_value=datetime.now().date(),
+                            max_value=(datetime.now() + timedelta(days=2)).date(),
+                            key="kiosk_lateness_request_date",
+                        )
+                        lateness_reason = st.text_area(
+                            "Reason for lateness request",
+                            key="kiosk_lateness_request_reason",
+                            placeholder="Explain why you may arrive late on the selected date.",
+                        )
+                        submit_lateness_request = compact_kiosk_form_submit_button("✅ Submit Lateness Request")
+
+                        if submit_lateness_request:
+                            request_date_tag = lateness_request_date.strftime("%Y-%m-%d")
+                            existing_lateness = _safe_read(
+                                conn,
+                                """
+                                SELECT id, status FROM lateness_approvals
+                                WHERE username=? AND organization=? AND branch=? AND approved_for_date=?
+                                ORDER BY id DESC LIMIT 1
+                                """,
+                                params=(user, org, branch, request_date_tag),
+                            )
+                            if not lateness_reason.strip():
+                                st.error("Reason is required to request lateness approval.")
+                            elif not existing_lateness.empty and str(existing_lateness.iloc[0].get("status", "")).lower() == "approved":
+                                st.info("A lateness approval already exists for that date.")
                             else:
-                                execute_write(
-                                    conn,
-                                    """
-                                    UPDATE lateness_approvals
-                                    SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
-                                    WHERE id=?
-                                    """,
-                                    (lateness_reason.strip(), int(existing_lateness.iloc[0]["id"])),
-                                )
-                            _notify_branch_admins_for_lateness_request(conn, org, branch, user, request_date_tag, lateness_reason.strip())
-                            conn.commit()
-                            st.success("Lateness request sent to admin for review.")
-                            st.session_state.pop("kiosk_user", None)
-                            clear_kiosk_photo_state()
-                            clear_kiosk_pin_input()
-                            clear_kiosk_staff_transient_state()
-                            st.session_state["kiosk_view"] = "home"
-                            refresh()
+                                if existing_lateness.empty:
+                                    execute_write(
+                                        conn,
+                                        """
+                                        INSERT INTO lateness_approvals(
+                                            username, organization, branch, approved_for_date,
+                                            reason, approved_by, status, actual_reason, created_at
+                                        )
+                                        VALUES (?,?,?,?,?,?,?,?,datetime('now'))
+                                        """,
+                                        (user, org, branch, request_date_tag, lateness_reason.strip(), "", "pending", ""),
+                                    )
+                                else:
+                                    execute_write(
+                                        conn,
+                                        """
+                                        UPDATE lateness_approvals
+                                        SET reason=?, approved_by='', status='pending', actual_reason='', used_at=''
+                                        WHERE id=?
+                                        """,
+                                        (lateness_reason.strip(), int(existing_lateness.iloc[0]["id"])),
+                                    )
+                                _notify_branch_admins_for_lateness_request(conn, org, branch, user, request_date_tag, lateness_reason.strip())
+                                conn.commit()
+                                st.success("Lateness request sent to admin for review.")
+                                st.session_state.pop("kiosk_user", None)
+                                clear_kiosk_photo_state()
+                                clear_kiosk_pin_input()
+                                clear_kiosk_staff_transient_state()
+                                st.session_state["kiosk_view"] = "home"
+                                refresh()
 
             st.markdown("### 📸 Capture Face")
             st.caption("Take a clear photo in good lighting. Your face should be centered and visible.")
@@ -956,6 +1057,49 @@ def kiosk_dashboard():
                             pass
 
             # ==============================
+            # DEVICE FINGERPRINT CHECK
+            # ==============================
+            try:
+                ctx = getattr(st, "context", None)
+                current_device_fp = _get_device_fingerprint(ctx)
+                
+                # Get any registered kiosk for this branch
+                kiosk_check = _safe_read(
+                    conn,
+                    "SELECT device_fingerprint FROM kiosks WHERE branch=? AND organization=? LIMIT 1",
+                    params=(branch, org),
+                )
+                
+                if not kiosk_check.empty:
+                    registered_fp = str(kiosk_check.iloc[0].get("device_fingerprint", "")).strip()
+                    
+                    # If no fingerprint registered yet, register it now on first use
+                    if not registered_fp:
+                        conn.execute(
+                            "UPDATE kiosks SET device_fingerprint=? WHERE branch=? AND organization=?",
+                            (current_device_fp, branch, org),
+                        )
+                        conn.commit()
+                        st.info("✓ Device registered for secure check-in")
+                    # If fingerprint exists and doesn't match, block
+                    elif registered_fp != current_device_fp:
+                        st.error(
+                            "🚫 Access denied: This check-in was attempted from an unregistered device. "
+                            "Kiosk devices are locked to prevent remote clock-in from personal phones. "
+                            "Please use the authorized kiosk at your branch."
+                        )
+                        conn.execute(
+                            "INSERT INTO warnings(username, organization, branch, type, message, created_at) "
+                            "VALUES(?,?,?,?,?,datetime('now'))",
+                            (user, org, branch, "unauthorized_device_clockin", 
+                             f"{user} attempted check-in from unregistered device at {now.strftime('%H:%M')}"),
+                        )
+                        conn.commit()
+                        st.stop()
+            except Exception as e:
+                st.warning(f"Device validation warning: {e}")
+
+            # ==============================
             # CLOCK IN
             # ==============================
             if record.empty:
@@ -980,7 +1124,26 @@ def kiosk_dashboard():
                     status = "IN"
 
                     if delay > late_minutes:
-                        if approved_lateness_request.empty:
+                        if is_admin_user:
+                            status = "LATE"
+                            detail = (
+                                f"Clocked in at {now.strftime('%H:%M')} against shift start {work_start.strftime('%H:%M')} "
+                                f"(delay {int(delay)} min, grace {late_minutes} min)."
+                            )
+                            recommendation = "Review punctuality trend, issue coaching note, and enforce branch start-time compliance plan."
+                            _notify_super_admin_policy_breach(
+                                conn,
+                                org,
+                                branch,
+                                user,
+                                user_role,
+                                "admin_late_clockin",
+                                f"Admin late clock-in detected: {user}",
+                                detail,
+                                recommendation,
+                            )
+                            st.warning(f"⚠ Late by {int(delay)} minutes. This has been reported to super admin.")
+                        elif approved_lateness_request.empty:
                             status = "LATE"
                             st.warning(f"⚠ Late by {int(delay)} minutes")
                         else:
@@ -993,7 +1156,7 @@ def kiosk_dashboard():
                     VALUES (?,?,?,?,?,?,?)
                     """, (user, branch, org, now, status, today, filepath))
 
-                    if not approved_lateness_request.empty:
+                    if (not is_admin_user) and (not approved_lateness_request.empty):
                         execute_write(
                             conn,
                             "UPDATE lateness_approvals SET status='used', used_at=datetime('now') WHERE id=?",
@@ -1051,7 +1214,10 @@ def kiosk_dashboard():
 
                 if now_time < work_end:
                     st.warning("⚠️ Early clock-out")
-                    if approved_early_request.empty:
+                    if is_admin_user:
+                        st.info("Admin early clock-out does not require approval. The event will be reported to super admin.")
+                        st.session_state["kiosk_show_early_request"] = False
+                    elif approved_early_request.empty:
                         st.error("❌ Early clock-out is blocked until admin approves it for today.")
                         if "kiosk_show_early_request" not in st.session_state:
                             st.session_state["kiosk_show_early_request"] = False
@@ -1119,12 +1285,14 @@ def kiosk_dashboard():
                     reason = st.text_area("Enter reason for leaving early", key="kiosk_early_clockout_reason")
 
                 if compact_kiosk_button("🔴 CLOCK OUT", key="kiosk_clock_out"):
-                    if now_time < work_end and not reason.strip():
+                    if now_time < work_end and not reason.strip() and not is_admin_user:
                         st.error("❌ Reason required")
                         return
-                    if now_time < work_end and approved_early_request.empty:
+                    if now_time < work_end and approved_early_request.empty and not is_admin_user:
                         st.error("❌ Admin approval is required before early clock-out.")
                         return
+                    if now_time < work_end and is_admin_user and not reason.strip():
+                        reason = "No reason provided"
 
                     filepath = _save_photo(org, branch, user, photo_bytes)
 
@@ -1134,7 +1302,25 @@ def kiosk_dashboard():
                     WHERE username=? AND branch=? AND organization=? AND date=?
                     """, (now, filepath, user, branch, org, today))
 
-                    if now_time < work_end and not approved_early_request.empty:
+                    if now_time < work_end and is_admin_user:
+                        early_minutes = int((datetime.combine(now.date(), work_end) - now).total_seconds() / 60)
+                        detail = (
+                            f"Clocked out at {now.strftime('%H:%M')} before shift end {work_end.strftime('%H:%M')} "
+                            f"({max(early_minutes, 0)} min early). Reason: {reason.strip() or 'No reason provided'}."
+                        )
+                        recommendation = "Review branch coverage risk, reinforce policy, and apply formal manager accountability follow-up."
+                        _notify_super_admin_policy_breach(
+                            conn,
+                            org,
+                            branch,
+                            user,
+                            user_role,
+                            "admin_early_clockout",
+                            f"Admin early clock-out detected: {user}",
+                            detail,
+                            recommendation,
+                        )
+                    elif now_time < work_end and not approved_early_request.empty:
                         execute_write(
                             conn,
                             "UPDATE early_clockout_approvals SET status='used', actual_reason=?, used_at=datetime('now') WHERE id=?",

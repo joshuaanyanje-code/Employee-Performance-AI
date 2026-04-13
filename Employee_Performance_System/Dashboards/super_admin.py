@@ -2222,6 +2222,8 @@ def super_admin_dashboard():
                 "Frequent Latecomer": "Attendance",
                 "Frequent Approved Lateness": "Attendance",
                 "Low Attendance Input": "Attendance",
+                "admin_absent_no_clockin": "Attendance",
+                "admin_no_clockout": "Attendance",
                 "Non-improving Manager": "Management",
             }
 
@@ -2234,6 +2236,17 @@ def super_admin_dashboard():
             c2.metric("Unique Users", warns_view["username"].astype(str).nunique())
             c3.metric("Categories", warns_view["category"].astype(str).nunique())
 
+            quick_admin_filter_on = bool(st.session_state.get("risk_warn_quick_admin_monitor", False))
+            qa1, qa2 = st.columns(2)
+            if qa1.button("Show Admin Monitoring Only", key="risk_warn_admin_monitor_only_btn"):
+                st.session_state["risk_warn_quick_admin_monitor"] = True
+                st.rerun()
+            if qa2.button("Clear Quick Filter", key="risk_warn_admin_monitor_clear_btn"):
+                st.session_state["risk_warn_quick_admin_monitor"] = False
+                st.rerun()
+            if quick_admin_filter_on:
+                st.caption("Quick filter active: showing admin absence and admin no clock-out warnings only.")
+
             cat_options = ["All"] + sorted(warns_view["category"].dropna().astype(str).unique().tolist())
             selected_category = nav_selectbox("Filter by Category", cat_options, key="risk_warn_cat")
             type_options = ["All"] + sorted(warns_view["warning_type"].dropna().astype(str).unique().tolist())
@@ -2244,6 +2257,10 @@ def super_admin_dashboard():
                 filtered = filtered[filtered["category"] == selected_category]
             if selected_type != "All":
                 filtered = filtered[filtered["warning_type"] == selected_type]
+            if quick_admin_filter_on:
+                filtered = filtered[
+                    filtered["warning_type"].astype(str).isin(["admin_absent_no_clockin", "admin_no_clockout"])
+                ]
 
             st.markdown("**Warnings by Category**")
             cat_df = (
@@ -5050,14 +5067,226 @@ def super_admin_dashboard():
 
                 adm_att = annotate_attendance_lateness(adm_att, all_lateness)
 
-                aa1, aa2, aa3 = st.columns(3)
+                today_tag = date.today().strftime("%Y-%m-%d")
+                admin_users_df = apply_branch_scope(
+                    safe_read(
+                        """
+                        SELECT username, branch
+                        FROM users
+                        WHERE organization=? AND role='admin'
+                        """,
+                        conn,
+                        params=(org,),
+                    )
+                )
+                admin_users_df["username"] = admin_users_df.get("username", pd.Series(dtype="object")).astype(str)
+                today_day_name = date.today().strftime("%A")
+                admin_offday_df = apply_branch_scope(
+                    safe_read(
+                        """
+                        SELECT username, branch
+                        FROM schedules
+                        WHERE organization=? AND day=? AND off_day=1
+                        """,
+                        conn,
+                        params=(org, today_day_name),
+                    )
+                )
+                admin_offday_df["username"] = admin_offday_df.get("username", pd.Series(dtype="object")).astype(str)
+                admins_on_offday = set(admin_offday_df["username"].tolist())
+                expected_admins = set(admin_users_df["username"].tolist())
+                expected_working_admins = expected_admins - admins_on_offday
+
+                today_admin_att = adm_att[adm_att["date"].dt.strftime("%Y-%m-%d") == today_tag].copy()
+                today_admin_att["username"] = today_admin_att["username"].astype(str)
+                clocked_in_today = set(
+                    today_admin_att[
+                        today_admin_att["clock_in"].astype(str).str.strip().ne("")
+                    ]["username"].tolist()
+                )
+                absent_admins = sorted(list(expected_working_admins - clocked_in_today))
+                no_clock_out_today = today_admin_att[
+                    today_admin_att["clock_in"].astype(str).str.strip().ne("")
+                    & today_admin_att["clock_out"].astype(str).str.strip().eq("")
+                ].copy()
+
+                # Persist attendance-monitoring findings for super admin audit trail.
+                persisted_monitor_rows = 0
+                monitor_branch = str(branch_scope or "").strip()
+                branch_label = monitor_branch if monitor_branch else "All Branches"
+                absent_names_text = ", ".join(absent_admins[:8])
+                missing_clockout_names = sorted(no_clock_out_today["username"].astype(str).tolist()) if not no_clock_out_today.empty else []
+                missing_clockout_text = ", ".join(missing_clockout_names[:8])
+
+                if absent_admins:
+                    absent_subject = f"Admin absent/no clock-in alert ({today_tag})"
+                    absent_body = (
+                        f"{len(absent_admins)} admin(s) have no clock-in today in {branch_label}. "
+                        f"Names: {absent_names_text if absent_names_text else '-'}"
+                    )
+                    existing_absent_msg = safe_read(
+                        """
+                        SELECT id FROM system_messages
+                        WHERE organization=? AND to_user=? AND message_type=? AND subject=?
+                          AND created_at >= datetime('now','-12 hours')
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        conn,
+                        params=(org, user, "admin_absent_monitor", absent_subject),
+                    )
+                    if existing_absent_msg.empty:
+                        conn.execute(
+                            """
+                            INSERT INTO system_messages(
+                                from_user, to_user, organization, branch,
+                                message_type, subject, body, priority, created_at
+                            )
+                            VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+                            """,
+                            ("system", user, org, monitor_branch, "admin_absent_monitor", absent_subject, absent_body, "high"),
+                        )
+                        persisted_monitor_rows += 1
+
+                    existing_absent_warn = safe_read(
+                        """
+                        SELECT id FROM warnings
+                        WHERE organization=? AND branch=? AND type=? AND message=?
+                          AND created_at >= datetime('now','-12 hours')
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        conn,
+                        params=(org, monitor_branch, "admin_absent_no_clockin", absent_body),
+                    )
+                    if existing_absent_warn.empty:
+                        conn.execute(
+                            """
+                            INSERT INTO warnings(username, organization, branch, type, message, created_at)
+                            VALUES(?,?,?,?,?,datetime('now'))
+                            """,
+                            ("system", org, monitor_branch, "admin_absent_no_clockin", absent_body),
+                        )
+                        persisted_monitor_rows += 1
+
+                if not no_clock_out_today.empty:
+                    missing_subject = f"Admin no clock-out alert ({today_tag})"
+                    missing_body = (
+                        f"{len(no_clock_out_today)} admin(s) clocked in without clock-out in {branch_label}. "
+                        f"Names: {missing_clockout_text if missing_clockout_text else '-'}"
+                    )
+                    existing_missing_msg = safe_read(
+                        """
+                        SELECT id FROM system_messages
+                        WHERE organization=? AND to_user=? AND message_type=? AND subject=?
+                          AND created_at >= datetime('now','-12 hours')
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        conn,
+                        params=(org, user, "admin_no_clockout_monitor", missing_subject),
+                    )
+                    if existing_missing_msg.empty:
+                        conn.execute(
+                            """
+                            INSERT INTO system_messages(
+                                from_user, to_user, organization, branch,
+                                message_type, subject, body, priority, created_at
+                            )
+                            VALUES(?,?,?,?,?,?,?,?,datetime('now'))
+                            """,
+                            ("system", user, org, monitor_branch, "admin_no_clockout_monitor", missing_subject, missing_body, "high"),
+                        )
+                        persisted_monitor_rows += 1
+
+                    existing_missing_warn = safe_read(
+                        """
+                        SELECT id FROM warnings
+                        WHERE organization=? AND branch=? AND type=? AND message=?
+                          AND created_at >= datetime('now','-12 hours')
+                        ORDER BY id DESC LIMIT 1
+                        """,
+                        conn,
+                        params=(org, monitor_branch, "admin_no_clockout", missing_body),
+                    )
+                    if existing_missing_warn.empty:
+                        conn.execute(
+                            """
+                            INSERT INTO warnings(username, organization, branch, type, message, created_at)
+                            VALUES(?,?,?,?,?,datetime('now'))
+                            """,
+                            ("system", org, monitor_branch, "admin_no_clockout", missing_body),
+                        )
+                        persisted_monitor_rows += 1
+
+                if persisted_monitor_rows > 0:
+                    conn.commit()
+
+                aa1, aa2, aa3, aa4 = st.columns(4)
                 aa1.metric("Records", len(adm_att))
                 aa2.metric("True Late", int(adm_att["true_late"].sum()) if not adm_att.empty else 0)
-                aa3.metric("Approved Late", int(adm_att["approved_late"].sum()) if not adm_att.empty else 0)
-                st.dataframe(
-                    adm_att[[c for c in ["username", "branch", "date", "clock_in", "clock_out", "late_status_label", "lateness_request_status", "lateness_reason", "lateness_approved_by"] if c in adm_att.columns]],
-                    use_container_width=True,
-                )
+                aa3.metric("Absent Admins Today", len(absent_admins))
+                aa4.metric("Admins No Clock-Out Today", len(no_clock_out_today))
+                st.caption(f"Admins on scheduled off-day today: {len(admins_on_offday)}")
+
+                st.markdown("**Admin Monitoring Summary (Today)**")
+                if not admin_users_df.empty:
+                    summary_df = (
+                        admin_users_df.groupby("branch", dropna=False)
+                        .agg(Expected_Admins=("username", "nunique"))
+                        .reset_index()
+                    )
+                    if not admin_offday_df.empty:
+                        offday_summary = (
+                            admin_offday_df.groupby("branch", dropna=False)
+                            .agg(Admins_On_Scheduled_OffDay=("username", "nunique"))
+                            .reset_index()
+                        )
+                        summary_df = summary_df.merge(offday_summary, on="branch", how="left")
+                    else:
+                        summary_df["Admins_On_Scheduled_OffDay"] = 0
+                    if not no_clock_out_today.empty:
+                        missing_out_summary = (
+                            no_clock_out_today.groupby("branch", dropna=False)
+                            .agg(Admins_No_Clock_Out=("username", "nunique"))
+                            .reset_index()
+                        )
+                        summary_df = summary_df.merge(missing_out_summary, on="branch", how="left")
+                    else:
+                        summary_df["Admins_No_Clock_Out"] = 0
+
+                    if absent_admins:
+                        absent_df = admin_users_df[admin_users_df["username"].isin(absent_admins)].copy()
+                        absent_summary = (
+                            absent_df.groupby("branch", dropna=False)
+                            .agg(Admins_Absent_No_ClockIn=("username", "nunique"))
+                            .reset_index()
+                        )
+                        summary_df = summary_df.merge(absent_summary, on="branch", how="left")
+                    else:
+                        summary_df["Admins_Absent_No_ClockIn"] = 0
+
+                    summary_df["Admins_No_Clock_Out"] = pd.to_numeric(summary_df.get("Admins_No_Clock_Out"), errors="coerce").fillna(0).astype(int)
+                    summary_df["Admins_Absent_No_ClockIn"] = pd.to_numeric(summary_df.get("Admins_Absent_No_ClockIn"), errors="coerce").fillna(0).astype(int)
+                    summary_df["Admins_On_Scheduled_OffDay"] = pd.to_numeric(summary_df.get("Admins_On_Scheduled_OffDay"), errors="coerce").fillna(0).astype(int)
+                    summary_df["branch"] = summary_df["branch"].fillna("").astype(str).replace({"": "Unassigned"})
+                    st.dataframe(summary_df, use_container_width=True, hide_index=True)
+                else:
+                    st.info("No admin users found in this scope.")
+
+                st.markdown("**Admin Monitoring Recommendations**")
+                if len(absent_admins) == 0 and len(no_clock_out_today) == 0:
+                    st.success("Admin attendance health is stable today. Keep monitoring trend consistency across branches.")
+                else:
+                    if len(absent_admins) > 0:
+                        st.warning(
+                            f"Absent admins detected ({len(absent_admins)}). Recommendation: request immediate branch justification and assign temporary oversight for unattended shifts."
+                        )
+                    if len(no_clock_out_today) > 0:
+                        st.warning(
+                            f"Open admin shifts detected ({len(no_clock_out_today)}). Recommendation: enforce same-day clock-out closure and add end-of-shift reminder controls on kiosk devices."
+                        )
+                    if len(absent_admins) + len(no_clock_out_today) >= 3:
+                        st.error(
+                            "Risk is elevated today. Recommendation: trigger focused branch audit and require next-day correction plan from affected managers."
+                        )
 
     # =========================================================
     # KIOSK
