@@ -490,7 +490,7 @@ def kiosk_dashboard():
         }
         .home-kiosk-title .manager-name {
             font-size: 1rem;
-            font-weight: 500;
+            font-weight: 600;
             color: #1d1d1f;
             margin-top: 0.45rem;
         }
