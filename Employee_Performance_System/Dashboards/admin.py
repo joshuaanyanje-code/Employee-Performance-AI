@@ -224,30 +224,6 @@ def admin_dashboard():
             background: #f8fafc !important;
             color: #0f172a !important;
         }
-
-        /* Fix time input fields so text is always readable */
-        div[data-baseweb="time-picker"],
-        div[data-baseweb="time-picker"] input,
-        div[data-baseweb="input"] input[type="time"],
-        input[type="time"] {
-            background: #ffffff !important;
-            color: #0f172a !important;
-            border-color: rgba(15, 23, 42, 0.20) !important;
-        }
-
-        div[data-testid="stTimeInput"] input,
-        div[data-testid="stTimeInput"] div[data-baseweb="input"],
-        div[data-testid="stTimeInput"] div[data-baseweb="base-input"] {
-            background: #ffffff !important;
-            color: #0f172a !important;
-        }
-
-        /* Spinbutton segments inside the time picker (hours / minutes) */
-        div[data-baseweb="time-picker"] [role="spinbutton"],
-        div[data-testid="stTimeInput"] [role="spinbutton"] {
-            background: #ffffff !important;
-            color: #0f172a !important;
-        }
         </style>
         """,
         unsafe_allow_html=True,
@@ -746,16 +722,16 @@ def admin_dashboard():
             day_inputs = {}
             for day in days:
                 ex = sched_map.get(day)
-                def_start = _parse_t(ex["work_start"]) if ex is not None else time(9, 0)
-                def_end = _parse_t(ex["work_end"], 18, 0) if ex is not None else time(18, 0)
+                def_start = str(ex["work_start"]) if ex is not None else "09:00"
+                def_end = str(ex["work_end"]) if ex is not None else "18:00"
                 def_off = bool(int(ex["off_day"])) if ex is not None else False
 
                 row_cols = st.columns([2, 2, 2, 1])
                 row_cols[0].markdown(f"**{day}**")
                 with row_cols[1]:
-                    s_start = st.time_input("Start", value=def_start, key=f"sched_start_{day}", label_visibility="collapsed")
+                    s_start = st.text_input("Start", value=def_start, key=f"sched_start_{day}", label_visibility="collapsed", placeholder="HH:MM")
                 with row_cols[2]:
-                    s_end = st.time_input("End", value=def_end, key=f"sched_end_{day}", label_visibility="collapsed")
+                    s_end = st.text_input("End", value=def_end, key=f"sched_end_{day}", label_visibility="collapsed", placeholder="HH:MM")
                 with row_cols[3]:
                     s_off = st.checkbox("Off", value=def_off, key=f"sched_off_{day}", label_visibility="collapsed")
 
@@ -764,22 +740,33 @@ def admin_dashboard():
             save_all = st.form_submit_button("💾 Save Full Week Schedule", use_container_width=True)
 
             if save_all:
+                errors = []
                 for day, (d_start, d_end, d_off) in day_inputs.items():
-                    existing_row = safe_read(
-                        "SELECT id FROM schedules WHERE username=? AND organization=? AND branch=? AND day=?",
-                        conn,
-                        params=(s_user, org, admin_branch, day),
-                    )
-                    if existing_row.empty:
-                        conn.execute(
-                            "INSERT INTO schedules(username,branch,organization,day,work_start,work_end,off_day) VALUES (?,?,?,?,?,?,?)",
-                            (s_user, admin_branch, org, day, d_start.strftime("%H:%M"), d_end.strftime("%H:%M"), int(d_off)),
+                    try:
+                        time.fromisoformat(d_start.strip())
+                        time.fromisoformat(d_end.strip())
+                    except ValueError:
+                        errors.append(f"{day}: invalid time format (use HH:MM)")
+                if errors:
+                    for e in errors:
+                        st.error(e)
+                else:
+                    for day, (d_start, d_end, d_off) in day_inputs.items():
+                        existing_row = safe_read(
+                            "SELECT id FROM schedules WHERE username=? AND organization=? AND branch=? AND day=?",
+                            conn,
+                            params=(s_user, org, admin_branch, day),
                         )
-                    else:
-                        conn.execute(
-                            "UPDATE schedules SET work_start=?, work_end=?, off_day=? WHERE username=? AND organization=? AND branch=? AND day=?",
-                            (d_start.strftime("%H:%M"), d_end.strftime("%H:%M"), int(d_off), s_user, org, admin_branch, day),
-                        )
+                        if existing_row.empty:
+                            conn.execute(
+                                "INSERT INTO schedules(username,branch,organization,day,work_start,work_end,off_day) VALUES (?,?,?,?,?,?,?)",
+                                (s_user, admin_branch, org, day, d_start.strip(), d_end.strip(), int(d_off)),
+                            )
+                        else:
+                            conn.execute(
+                                "UPDATE schedules SET work_start=?, work_end=?, off_day=? WHERE username=? AND organization=? AND branch=? AND day=?",
+                                (d_start.strip(), d_end.strip(), int(d_off), s_user, org, admin_branch, day),
+                            )
                 conn.commit()
                 log_action(conn, username, "SET WEEK SCHEDULE", s_user, org)
                 refresh_with_message(f"Full week schedule saved for {s_user}.")
