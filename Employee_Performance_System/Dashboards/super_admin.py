@@ -1102,9 +1102,27 @@ def build_executive_bi_report(intel):
 # ==============================
 # MAIN DASHBOARD
 # ==============================
+
+# Save the real st.dataframe once at import time so repeated reruns
+# never accidentally wrap an already-patched version.
+_SA_ORIG_DATAFRAME = st.dataframe
+
+
 def super_admin_dashboard():
 
     apply_responsive_ui("default")
+
+    # Auto-wrap every st.dataframe in this dashboard inside a collapsed
+    # expander so tables are hidden until the user needs them.
+    def _auto_table(data, *args, **kwargs):
+        try:
+            label = f"View Table  ({len(data)} rows)"
+        except Exception:
+            label = "View Table"
+        with st.expander(label, expanded=False):
+            _SA_ORIG_DATAFRAME(data, *args, **kwargs)
+
+    st.dataframe = _auto_table
 
     conn = get_connection()
     ensure_poll_tables(conn)
