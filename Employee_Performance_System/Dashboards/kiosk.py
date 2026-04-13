@@ -491,7 +491,7 @@ def kiosk_dashboard():
         .home-kiosk-title .manager-name {
             font-size: 1rem;
             font-weight: 500;
-            color: #6e6e73;
+            color: #1d1d1f;
             margin-top: 0.45rem;
         }
         .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
