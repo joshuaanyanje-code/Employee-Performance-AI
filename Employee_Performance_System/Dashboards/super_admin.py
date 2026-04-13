@@ -1,7 +1,6 @@
 ﻿import os
 import time as pytime
 import streamlit as st
-from streamlit.errors import StreamlitAPIException
 import pandas as pd
 import json
 import re
@@ -1123,7 +1122,7 @@ def super_admin_dashboard():
         try:
             with st.expander(label, expanded=False):
                 _SA_ORIG_DATAFRAME(data, *args, **kwargs)
-        except StreamlitAPIException:
+        except Exception:
             # Streamlit disallows some nested container combinations
             # (for example expander inside expander); render normally then.
             _SA_ORIG_DATAFRAME(data, *args, **kwargs)
