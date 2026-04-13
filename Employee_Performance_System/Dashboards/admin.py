@@ -649,7 +649,7 @@ def admin_dashboard():
     # =====================================================
     elif menu == "Schedules":
         st.subheader("Schedules")
-        st.caption("Set different working hours by day and mark off-days.")
+        st.caption("Set working hours for each day of the week and mark off-days.")
 
         users_df = safe_read(
             "SELECT username FROM users WHERE organization=? AND branch=? AND role='employee' ORDER BY username",
@@ -680,78 +680,97 @@ def admin_dashboard():
             params=(org, admin_branch),
         )
 
-        st.dataframe(schedules_df if not schedules_df.empty else pd.DataFrame({"Info": ["No schedules set"]}), use_container_width=True)
+        st.dataframe(
+            schedules_df if not schedules_df.empty else pd.DataFrame({"Info": ["No schedules set"]}),
+            use_container_width=True,
+        )
+
+        st.markdown("---")
+        st.markdown("#### Set / Update Full Week Schedule")
 
         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
 
-        with st.form("schedule_form", clear_on_submit=False):
-            s_user = st.selectbox("Employee", users_df["username"].tolist())
-            s_day = st.selectbox("Day", days)
-            s_start = st.time_input("Start Time", value=time(9, 0))
-            s_end = st.time_input("End Time", value=time(18, 0))
-            s_off = st.checkbox("Off Day")
-            s_save = st.form_submit_button("Save / Update")
+        def _parse_t(t_str, default_h=9, default_m=0):
+            try:
+                parts = str(t_str).split(":")
+                return time(int(parts[0]), int(parts[1]))
+            except Exception:
+                return time(default_h, default_m)
 
-            if s_save:
-                existing = safe_read(
-                    """
-                    SELECT id FROM schedules
-                    WHERE username=? AND organization=? AND branch=? AND day=?
-                    """,
-                    conn,
-                    params=(s_user, org, admin_branch, s_day),
-                )
+        # Employee selector OUTSIDE form so existing values pre-fill on change
+        s_user = st.selectbox("Select Employee", users_df["username"].tolist(), key="sched_emp_select")
 
-                if existing.empty:
-                    conn.execute(
-                        """
-                        INSERT INTO schedules(username,branch,organization,day,work_start,work_end,off_day)
-                        VALUES (?,?,?,?,?,?,?)
-                        """,
-                        (
-                            s_user,
-                            admin_branch,
-                            org,
-                            s_day,
-                            s_start.strftime("%H:%M"),
-                            s_end.strftime("%H:%M"),
-                            int(s_off),
-                        ),
+        # Load existing schedule for the selected employee
+        emp_sched = safe_read(
+            "SELECT day, work_start, work_end, off_day FROM schedules WHERE username=? AND organization=? AND branch=?",
+            conn,
+            params=(s_user, org, admin_branch),
+        )
+        sched_map = {}
+        if not emp_sched.empty:
+            for _, row in emp_sched.iterrows():
+                sched_map[row["day"]] = row
+
+        with st.form("schedule_week_form", clear_on_submit=False):
+            # Header row
+            hcols = st.columns([2, 2, 2, 1])
+            hcols[0].markdown("**Day**")
+            hcols[1].markdown("**Start Time**")
+            hcols[2].markdown("**End Time**")
+            hcols[3].markdown("**Off Day**")
+
+            day_inputs = {}
+            for day in days:
+                ex = sched_map.get(day)
+                def_start = _parse_t(ex["work_start"]) if ex is not None else time(9, 0)
+                def_end = _parse_t(ex["work_end"], 18, 0) if ex is not None else time(18, 0)
+                def_off = bool(int(ex["off_day"])) if ex is not None else False
+
+                row_cols = st.columns([2, 2, 2, 1])
+                row_cols[0].markdown(f"**{day}**")
+                with row_cols[1]:
+                    s_start = st.time_input("Start", value=def_start, key=f"sched_start_{day}", label_visibility="collapsed")
+                with row_cols[2]:
+                    s_end = st.time_input("End", value=def_end, key=f"sched_end_{day}", label_visibility="collapsed")
+                with row_cols[3]:
+                    s_off = st.checkbox("Off", value=def_off, key=f"sched_off_{day}", label_visibility="collapsed")
+
+                day_inputs[day] = (s_start, s_end, s_off)
+
+            save_all = st.form_submit_button("💾 Save Full Week Schedule", use_container_width=True)
+
+            if save_all:
+                for day, (d_start, d_end, d_off) in day_inputs.items():
+                    existing_row = safe_read(
+                        "SELECT id FROM schedules WHERE username=? AND organization=? AND branch=? AND day=?",
+                        conn,
+                        params=(s_user, org, admin_branch, day),
                     )
-                    action = "CREATE SCHEDULE"
-                else:
-                    conn.execute(
-                        """
-                        UPDATE schedules
-                        SET work_start=?, work_end=?, off_day=?
-                        WHERE username=? AND organization=? AND branch=? AND day=?
-                        """,
-                        (
-                            s_start.strftime("%H:%M"),
-                            s_end.strftime("%H:%M"),
-                            int(s_off),
-                            s_user,
-                            org,
-                            admin_branch,
-                            s_day,
-                        ),
-                    )
-                    action = "UPDATE SCHEDULE"
-
+                    if existing_row.empty:
+                        conn.execute(
+                            "INSERT INTO schedules(username,branch,organization,day,work_start,work_end,off_day) VALUES (?,?,?,?,?,?,?)",
+                            (s_user, admin_branch, org, day, d_start.strftime("%H:%M"), d_end.strftime("%H:%M"), int(d_off)),
+                        )
+                    else:
+                        conn.execute(
+                            "UPDATE schedules SET work_start=?, work_end=?, off_day=? WHERE username=? AND organization=? AND branch=? AND day=?",
+                            (d_start.strftime("%H:%M"), d_end.strftime("%H:%M"), int(d_off), s_user, org, admin_branch, day),
+                        )
                 conn.commit()
-                log_action(conn, username, action, s_user, org)
-                refresh_with_message("Schedule saved.")
+                log_action(conn, username, "SET WEEK SCHEDULE", s_user, org)
+                refresh_with_message(f"Full week schedule saved for {s_user}.")
 
         if not schedules_df.empty:
+            st.markdown("---")
             del_id = st.selectbox("Delete Schedule Row", schedules_df["id"].tolist(), key="delete_schedule_id")
-            if st.button("Delete Schedule", key="delete_schedule_btn"):
+            if st.button("Delete Schedule Row", key="delete_schedule_btn"):
                 conn.execute(
                     "DELETE FROM schedules WHERE id=? AND organization=? AND branch=?",
                     (int(del_id), org, admin_branch),
                 )
                 conn.commit()
                 log_action(conn, username, "DELETE SCHEDULE", str(del_id), org)
-                refresh_with_message("Schedule deleted.", level="warning")
+                refresh_with_message("Schedule row deleted.", level="warning")
 
     # =====================================================
     # ATTENDANCE
