@@ -689,6 +689,13 @@ def admin_dashboard():
         st.markdown("#### Set / Update Full Week Schedule")
 
         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"]
+        time_options = [f"{hour:02d}:{minute:02d}" for hour in range(24) for minute in (0, 15, 30, 45)]
+
+        def _schedule_time_value(raw_value, fallback):
+            raw_text = str(raw_value or fallback).strip()
+            if len(raw_text) >= 5:
+                raw_text = raw_text[:5]
+            return raw_text if raw_text in time_options else fallback
 
         # Employee selector OUTSIDE form so existing values pre-fill on change
         s_user = st.selectbox("Select Employee", users_df["username"].tolist(), key="sched_emp_select")
@@ -715,16 +722,28 @@ def admin_dashboard():
             day_inputs = {}
             for day in days:
                 ex = sched_map.get(day)
-                def_start = str(ex["work_start"]) if ex is not None else "09:00"
-                def_end = str(ex["work_end"]) if ex is not None else "18:00"
+                def_start = _schedule_time_value(ex["work_start"] if ex is not None else None, "09:00")
+                def_end = _schedule_time_value(ex["work_end"] if ex is not None else None, "18:00")
                 def_off = bool(int(ex["off_day"])) if ex is not None else False
 
                 row_cols = st.columns([2, 2, 2, 1])
                 row_cols[0].markdown(f"**{day}**")
                 with row_cols[1]:
-                    s_start = st.text_input("Start", value=def_start, key=f"sched_start_{day}", label_visibility="collapsed", placeholder="HH:MM")
+                    s_start = st.selectbox(
+                        "Start",
+                        time_options,
+                        index=time_options.index(def_start),
+                        key=f"sched_start_{day}",
+                        label_visibility="collapsed",
+                    )
                 with row_cols[2]:
-                    s_end = st.text_input("End", value=def_end, key=f"sched_end_{day}", label_visibility="collapsed", placeholder="HH:MM")
+                    s_end = st.selectbox(
+                        "End",
+                        time_options,
+                        index=time_options.index(def_end),
+                        key=f"sched_end_{day}",
+                        label_visibility="collapsed",
+                    )
                 with row_cols[3]:
                     s_off = st.checkbox("Off", value=def_off, key=f"sched_off_{day}", label_visibility="collapsed")
 
@@ -733,16 +752,10 @@ def admin_dashboard():
             save_all = st.form_submit_button("💾 Save Full Week Schedule", use_container_width=True)
 
             if save_all:
-                errors = []
                 for day, (d_start, d_end, d_off) in day_inputs.items():
-                    try:
-                        time.fromisoformat(d_start.strip())
-                        time.fromisoformat(d_end.strip())
-                    except ValueError:
-                        errors.append(f"{day}: invalid time format (use HH:MM)")
-                if errors:
-                    for e in errors:
-                        st.error(e)
+                    if d_end <= d_start and not d_off:
+                        st.error(f"{day}: end time must be later than start time unless it is marked as an off day.")
+                        break
                 else:
                     for day, (d_start, d_end, d_off) in day_inputs.items():
                         existing_row = safe_read(
@@ -753,16 +766,16 @@ def admin_dashboard():
                         if existing_row.empty:
                             conn.execute(
                                 "INSERT INTO schedules(username,branch,organization,day,work_start,work_end,off_day) VALUES (?,?,?,?,?,?,?)",
-                                (s_user, admin_branch, org, day, d_start.strip(), d_end.strip(), int(d_off)),
+                                (s_user, admin_branch, org, day, d_start, d_end, int(d_off)),
                             )
                         else:
                             conn.execute(
                                 "UPDATE schedules SET work_start=?, work_end=?, off_day=? WHERE username=? AND organization=? AND branch=? AND day=?",
-                                (d_start.strip(), d_end.strip(), int(d_off), s_user, org, admin_branch, day),
+                                (d_start, d_end, int(d_off), s_user, org, admin_branch, day),
                             )
-                conn.commit()
-                log_action(conn, username, "SET WEEK SCHEDULE", s_user, org)
-                refresh_with_message(f"Full week schedule saved for {s_user}.")
+                    conn.commit()
+                    log_action(conn, username, "SET WEEK SCHEDULE", s_user, org)
+                    refresh_with_message(f"Full week schedule saved for {s_user}.")
 
         if not schedules_df.empty:
             st.markdown("---")
