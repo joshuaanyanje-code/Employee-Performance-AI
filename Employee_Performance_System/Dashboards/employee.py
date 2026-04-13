@@ -1,6 +1,5 @@
 import os
 import time as pytime
-from calendar import monthrange
 import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
@@ -90,107 +89,6 @@ def show_flash_message():
         _clear_action_widgets()
         payload["widgets_cleared"] = True
         st.session_state["_employee_flash"] = payload
-
-
-def _coerce_date_value(value, fallback=None):
-    default_value = fallback or date.today()
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value)
-        except ValueError:
-            return default_value
-    return default_value
-
-
-def render_date_selector(label, key, value=None, disabled=False, on_change=None):
-    current_value = _coerce_date_value(st.session_state.get(key, value), _coerce_date_value(value, date.today()))
-    sync_key = f"{key}_sync"
-    current_token = current_value.isoformat()
-    if st.session_state.get(sync_key) != current_token:
-        st.session_state[f"{key}_year"] = current_value.year
-        st.session_state[f"{key}_month"] = current_value.month
-        st.session_state[f"{key}_day"] = current_value.day
-        st.session_state[sync_key] = current_token
-
-    year_options = list(range(date.today().year - 2, date.today().year + 6))
-    month_options = list(range(1, 13))
-
-    st.markdown(label)
-    col_year, col_month, col_day = st.columns(3)
-    with col_year:
-        selected_year = st.selectbox(
-            "Year",
-            year_options,
-            index=year_options.index(st.session_state.get(f"{key}_year", current_value.year)),
-            key=f"{key}_year",
-            disabled=disabled,
-            label_visibility="collapsed",
-            on_change=on_change,
-        )
-    with col_month:
-        selected_month = st.selectbox(
-            "Month",
-            month_options,
-            index=month_options.index(st.session_state.get(f"{key}_month", current_value.month)),
-            key=f"{key}_month",
-            disabled=disabled,
-            label_visibility="collapsed",
-            format_func=lambda month_num: datetime(2000, month_num, 1).strftime("%b"),
-            on_change=on_change,
-        )
-
-    max_day = monthrange(selected_year, selected_month)[1]
-    day_options = list(range(1, max_day + 1))
-    stored_day = st.session_state.get(f"{key}_day", current_value.day)
-    normalized_day = stored_day if stored_day in day_options else max_day
-    st.session_state[f"{key}_day"] = normalized_day
-    with col_day:
-        selected_day = st.selectbox(
-            "Day",
-            day_options,
-            index=day_options.index(normalized_day),
-            key=f"{key}_day",
-            disabled=disabled,
-            label_visibility="collapsed",
-            on_change=on_change,
-        )
-
-    selected_value = date(selected_year, selected_month, selected_day)
-    st.session_state[key] = selected_value
-    st.session_state[sync_key] = selected_value.isoformat()
-    return selected_value
-
-
-def render_date_range_selector(label, key, value=None, on_change=None):
-    if isinstance(value, tuple) and len(value) == 2:
-        default_start = _coerce_date_value(value[0])
-        default_end = _coerce_date_value(value[1])
-    else:
-        single_value = _coerce_date_value(value, date.today())
-        default_start = single_value
-        default_end = single_value
-
-    current_value = st.session_state.get(key, value)
-    if isinstance(current_value, tuple) and len(current_value) == 2:
-        start_value = _coerce_date_value(current_value[0], default_start)
-        end_value = _coerce_date_value(current_value[1], default_end)
-    else:
-        start_value = default_start
-        end_value = default_end
-
-    st.markdown(label)
-    start_col, end_col = st.columns(2)
-    with start_col:
-        start_date = render_date_selector("Start Date", f"{key}_start", value=start_value, on_change=on_change)
-    with end_col:
-        end_date = render_date_selector("End Date", f"{key}_end", value=end_value, on_change=on_change)
-
-    st.session_state[key] = (start_date, end_date)
-    return start_date, end_date
 
 
 def _safe_read(conn, query, params=None):
@@ -413,10 +311,10 @@ def employee_dashboard():
             st.session_state["employee_nav_open"] = True
             st.rerun()
         with st.expander("Navigation and Filter", expanded=bool(st.session_state.get("employee_nav_open", True))):
-            date_range = render_date_range_selector(
+            date_range = st.date_input(
                 "Select Range",
-                key="employee_date_range",
                 value=(date.today(), date.today()),
+                key="employee_date_range",
                 on_change=_collapse_employee_mobile_nav,
             )
             page = st.radio(
@@ -428,10 +326,10 @@ def employee_dashboard():
     else:
         with st.sidebar:
             st.markdown("### Navigation")
-            date_range = render_date_range_selector(
+            date_range = st.date_input(
                 "Select Range",
-                key="employee_date_range",
                 value=(date.today(), date.today()),
+                key="employee_date_range",
             )
             page = st.radio(f"Menu 🔔({notif_count})", page_items, key="employee_menu")
 
@@ -674,8 +572,8 @@ def employee_dashboard():
         st.session_state.setdefault("leave_reason", "")
 
         with st.form("leave_form", clear_on_submit=False):
-            start = render_date_selector("Start", key="leave_start", value=st.session_state.get("leave_start", date.today()))
-            end = render_date_selector("End", key="leave_end", value=st.session_state.get("leave_end", date.today()))
+            start = st.date_input("Start", key="leave_start")
+            end = st.date_input("End", key="leave_end")
             reason = st.text_area("Reason", key="leave_reason")
             leave_submit = st.form_submit_button("Submit")
 

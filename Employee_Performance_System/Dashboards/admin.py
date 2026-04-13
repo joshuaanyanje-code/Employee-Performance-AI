@@ -1,7 +1,6 @@
 import streamlit as st
 import pandas as pd
 import time as pytime
-from calendar import monthrange
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
@@ -142,109 +141,6 @@ def safe_read(query, conn, params=None):
         return pd.DataFrame()
 
 
-def _coerce_date_value(value, fallback=None):
-    default_value = fallback or date.today()
-    if isinstance(value, datetime):
-        return value.date()
-    if isinstance(value, date):
-        return value
-    if isinstance(value, str):
-        try:
-            return date.fromisoformat(value)
-        except ValueError:
-            return default_value
-    return default_value
-
-
-def render_date_selector(label, key, value=None, disabled=False, on_change=None):
-    current_value = _coerce_date_value(st.session_state.get(key, value), _coerce_date_value(value, date.today()))
-    sync_key = f"{key}_sync"
-    current_token = current_value.isoformat()
-    if st.session_state.get(sync_key) != current_token:
-        st.session_state[f"{key}_year"] = current_value.year
-        st.session_state[f"{key}_month"] = current_value.month
-        st.session_state[f"{key}_day"] = current_value.day
-        st.session_state[sync_key] = current_token
-
-    year_options = list(range(date.today().year - 2, date.today().year + 6))
-    month_options = list(range(1, 13))
-
-    st.markdown(label)
-    col_year, col_month, col_day = st.columns(3)
-    with col_year:
-        selected_year = st.selectbox(
-            "Year",
-            year_options,
-            index=year_options.index(st.session_state.get(f"{key}_year", current_value.year)),
-            key=f"{key}_year",
-            disabled=disabled,
-            label_visibility="collapsed",
-            on_change=on_change,
-        )
-    with col_month:
-        selected_month = st.selectbox(
-            "Month",
-            month_options,
-            index=month_options.index(st.session_state.get(f"{key}_month", current_value.month)),
-            key=f"{key}_month",
-            disabled=disabled,
-            label_visibility="collapsed",
-            format_func=lambda month_num: datetime(2000, month_num, 1).strftime("%b"),
-            on_change=on_change,
-        )
-
-    max_day = monthrange(selected_year, selected_month)[1]
-    day_options = list(range(1, max_day + 1))
-    stored_day = st.session_state.get(f"{key}_day", current_value.day)
-    normalized_day = stored_day if stored_day in day_options else max_day
-    st.session_state[f"{key}_day"] = normalized_day
-    with col_day:
-        selected_day = st.selectbox(
-            "Day",
-            day_options,
-            index=day_options.index(normalized_day),
-            key=f"{key}_day",
-            disabled=disabled,
-            label_visibility="collapsed",
-            on_change=on_change,
-        )
-
-    selected_value = date(selected_year, selected_month, selected_day)
-    st.session_state[key] = selected_value
-    st.session_state[sync_key] = selected_value.isoformat()
-    return selected_value
-
-
-def render_date_range_selector(label, key, value=None, on_change=None):
-    if isinstance(value, tuple) and len(value) == 2:
-        default_start = _coerce_date_value(value[0])
-        default_end = _coerce_date_value(value[1])
-    else:
-        single_value = _coerce_date_value(value, date.today())
-        default_start = single_value
-        default_end = single_value
-
-    current_value = st.session_state.get(key, value)
-    if isinstance(current_value, tuple) and len(current_value) == 2:
-        start_value = _coerce_date_value(current_value[0], default_start)
-        end_value = _coerce_date_value(current_value[1], default_end)
-    else:
-        start_value = default_start
-        end_value = default_end
-
-    st.markdown(label)
-    start_col, end_col = st.columns(2)
-    with start_col:
-        start_date = render_date_selector("Start Date", f"{key}_start", value=start_value, on_change=on_change)
-    with end_col:
-        end_date = render_date_selector("End Date", f"{key}_end", value=end_value, on_change=on_change)
-
-    st.session_state[key] = (start_date, end_date)
-    return start_date, end_date
-
-
-
-
 def parse_hhmm(value, fallback="09:00"):
     txt = str(value or fallback)
     try:
@@ -282,13 +178,20 @@ def apply_date_range(df, col, range_sel, start_date, end_date):
     if range_sel == "Day":
         return out[out[col].dt.date == date.today()]
     if range_sel == "Week":
-        return out[out[col] >= (now - pd.Timedelta(days=6))]
+        start = (now - pd.Timedelta(days=6)).normalize()
+        return out[out[col] >= start]
     if range_sel == "Month":
-        return out[out[col] >= (now - pd.Timedelta(days=29))]
+        start = now.replace(day=1).normalize()
+        return out[out[col] >= start]
+    if range_sel == "Year":
+        start = now.replace(month=1, day=1).normalize()
+        return out[out[col] >= start]
 
-    start_ts = pd.to_datetime(start_date)
-    end_ts = pd.to_datetime(end_date) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
-    return out[(out[col] >= start_ts) & (out[col] <= end_ts)]
+    sd = pd.to_datetime(start_date, errors="coerce")
+    ed = pd.to_datetime(end_date, errors="coerce")
+    if pd.isna(sd) or pd.isna(ed):
+        return out
+    return out[(out[col] >= sd) & (out[col] <= ed + pd.Timedelta(days=1) - pd.Timedelta(seconds=1))]
 
 
 def admin_dashboard():
@@ -326,7 +229,6 @@ def admin_dashboard():
             background: #f8fafc !important;
             color: #0f172a !important;
         }
-
         </style>
         """,
         unsafe_allow_html=True,
@@ -457,10 +359,10 @@ def admin_dashboard():
             st.session_state["admin_nav_open"] = True
             st.rerun()
         with st.expander("Navigation and Filter", expanded=bool(st.session_state.get("admin_nav_open", True))):
-            date_range = render_date_range_selector(
+            date_range = st.date_input(
                 "Select Range",
-                key="admin_sidebar_date",
                 value=(date.today(), date.today()),
+                key="admin_sidebar_date",
                 on_change=_collapse_admin_mobile_nav,
             )
             menu = st.radio(
@@ -472,10 +374,10 @@ def admin_dashboard():
     else:
         with st.sidebar:
             st.markdown("### Navigation")
-            date_range = render_date_range_selector(
+            date_range = st.date_input(
                 "Select Range",
-                key="admin_sidebar_date",
                 value=(date.today(), date.today()),
+                key="admin_sidebar_date",
             )
             menu = st.radio("Menu", menu_items, key="admin_menu")
 
@@ -1146,7 +1048,7 @@ def admin_dashboard():
                     st.info("No employees available for early clock-out approval.")
                 else:
                     target_user = st.selectbox("Employee", employees_for_approval["username"].tolist())
-                    approve_date = render_date_selector("Approved For Date", key="admin_approve_early_date", value=date.today())
+                    approve_date = st.date_input("Approved For Date", value=date.today(), key="admin_approve_early_date")
                     reason = st.text_area("Approval Reason")
                     approve = st.form_submit_button("Pre-Approve Early Clock Out")
 
@@ -1194,7 +1096,7 @@ def admin_dashboard():
                     st.info("No employees available for lateness approval.")
                 else:
                     target_late_user = st.selectbox("Employee for lateness", employees_for_approval["username"].tolist())
-                    lateness_date = render_date_selector("Approved Lateness Date", key="admin_approve_lateness_date", value=date.today())
+                    lateness_date = st.date_input("Approved Lateness Date", value=date.today(), key="admin_approve_lateness_date")
                     lateness_reason = st.text_area("Lateness Approval Reason")
                     approve_lateness = st.form_submit_button("Pre-Approve Lateness")
 
@@ -1390,8 +1292,8 @@ def admin_dashboard():
             st.session_state.setdefault("admin_leave_reason", "")
 
             with st.form("admin_leave_request", clear_on_submit=False):
-                lv_start = render_date_selector("Start Date", key="admin_leave_start", value=st.session_state.get("admin_leave_start", date.today()))
-                lv_end = render_date_selector("End Date", key="admin_leave_end", value=st.session_state.get("admin_leave_end", date.today()))
+                lv_start = st.date_input("Start Date", key="admin_leave_start")
+                lv_end = st.date_input("End Date", key="admin_leave_end")
                 lv_reason = st.text_area("Reason", key="admin_leave_reason")
                 lv_sub = st.form_submit_button("Submit Leave Request")
 
@@ -2144,11 +2046,11 @@ def admin_dashboard():
             use_deadline = st.checkbox("Set deadline / expiry", value=False, key="admin_poll_use_deadline")
             exp_col1, exp_col2 = st.columns(2)
             with exp_col1:
-                expiry_date = render_date_selector(
+                expiry_date = st.date_input(
                     "Expiry Date",
-                    key="admin_poll_expiry_date",
                     value=date.today() + timedelta(days=1),
                     disabled=not use_deadline,
+                    key="admin_poll_expiry_date",
                 )
             with exp_col2:
                 expiry_time = st.time_input(
