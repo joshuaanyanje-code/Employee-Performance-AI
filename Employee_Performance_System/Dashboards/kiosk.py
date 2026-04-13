@@ -525,9 +525,9 @@ def kiosk_dashboard():
         @media (max-width: 640px) {
             .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
             button {height: 54px; font-size: 17px;}
-            .home-kiosk-title .org-name {font-size: 2rem;}
-            .home-kiosk-title .branch-name {font-size: 1.35rem;}
-            .home-kiosk-title .manager-name {font-size: 0.98rem;}
+            .home-kiosk-title .org-name {font-size: 2.25rem;}
+            .home-kiosk-title .branch-name {font-size: 1.5rem;}
+            .home-kiosk-title .manager-name {font-size: 1rem;}
         }
         </style>
     """, unsafe_allow_html=True)
