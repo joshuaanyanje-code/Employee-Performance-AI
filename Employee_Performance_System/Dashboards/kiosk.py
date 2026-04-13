@@ -504,17 +504,22 @@ def kiosk_dashboard():
         }
 
         [data-testid="stCameraInput"] {
-            width: 100% !important;
+            width: 80% !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
         }
 
         [data-testid="stCameraInput"] video,
         [data-testid="stCameraInput"] img,
         [data-testid="stImage"] img {
-            width: 100% !important;
-            max-width: 100% !important;
+            width: 80% !important;
+            max-width: 80% !important;
             max-height: 60vh !important;
             object-fit: cover !important;
             border-radius: 14px;
+            display: block !important;
+            margin-left: auto !important;
+            margin-right: auto !important;
         }
 
         @media (max-width: 640px) {
