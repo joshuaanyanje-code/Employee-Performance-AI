@@ -224,6 +224,24 @@ def admin_dashboard():
             background: #f8fafc !important;
             color: #0f172a !important;
         }
+
+        /* Make Streamlit date pickers and calendar popups always readable */
+        div[data-baseweb="datepicker-popover"],
+        div[data-baseweb="calendar-header"],
+        div[data-baseweb="calendar-header"] *,
+        div[data-baseweb="calendar-grid"],
+        div[data-baseweb="calendar-grid"] *,
+        div[data-baseweb="datepicker-popover"] input,
+        div[data-baseweb="datepicker-popover"] button,
+        div[data-baseweb="datepicker-popover"] [role="option"] {
+            background: #ffffff !important;
+            color: #111827 !important;
+        }
+        div[data-baseweb="datepicker-popover"] [aria-selected="true"],
+        div[data-baseweb="datepicker-popover"] [aria-selected="true"] * {
+            background: rgba(0, 113, 227, 0.14) !important;
+            color: #0b4f9c !important;
+        }
         </style>
         """,
         unsafe_allow_html=True,
