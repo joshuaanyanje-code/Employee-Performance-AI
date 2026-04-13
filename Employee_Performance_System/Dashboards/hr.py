@@ -8,7 +8,7 @@ import pandas as pd
 import streamlit as st
 
 from database.db import cached_read_sql, get_connection, get_hr_config, log_action
-from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner, render_date_selector
+from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
 
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -613,7 +613,7 @@ def hr_dashboard():
                         transfer_branches or [current_branch or "No other branch available"],
                         disabled=change_type != "Transfer to another branch",
                     )
-                    effective_date = render_date_selector("Requested effective date", key="hr_workforce_change_effective_date", value=date.today())
+                    effective_date = st.date_input("Requested effective date", value=date.today())
                     change_note = st.text_area(
                         "HR note / recommendation",
                         placeholder="Explain the onboarding, exit, transfer, or promotion recommendation for super admin review.",
@@ -863,7 +863,7 @@ def hr_dashboard():
                     selected_label = st.selectbox("Staff profile", labels, key="hr_onboarding_user")
                     board_row = onboard_people_df.iloc[labels.index(selected_label)]
                     checklist_name = st.text_input("Checklist name", value="Standard Onboarding")
-                    due_date = render_date_selector("Target completion date", key="hr_onboarding_due_date", value=date.today())
+                    due_date = st.date_input("Target completion date", value=date.today())
                     generate_sub = st.form_submit_button("Generate Default Checklist")
 
                     if generate_sub:

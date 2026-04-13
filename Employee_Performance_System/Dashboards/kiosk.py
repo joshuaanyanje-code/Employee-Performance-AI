@@ -13,7 +13,7 @@ except Exception:
     holiday_lib = None
 
 from database.db import get_connection, execute_write
-from Dashboards.ui_responsive import apply_responsive_ui, render_date_selector
+from Dashboards.ui_responsive import apply_responsive_ui
 
 # ==============================
 # REFRESH
@@ -736,12 +736,12 @@ def kiosk_dashboard():
                     )
 
                 with st.form("kiosk_lateness_request_form", clear_on_submit=False):
-                    lateness_request_date = render_date_selector(
+                    lateness_request_date = st.date_input(
                         "Request lateness for",
-                        key="kiosk_lateness_request_date",
                         value=datetime.now().date(),
                         min_value=datetime.now().date(),
                         max_value=(datetime.now() + timedelta(days=2)).date(),
+                        key="kiosk_lateness_request_date",
                     )
                     lateness_reason = st.text_area(
                         "Reason for lateness request",
