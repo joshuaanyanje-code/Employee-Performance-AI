@@ -17,7 +17,7 @@ except Exception:
     HOLIDAYS_OK = False
 
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
-from Dashboards.ui_responsive import apply_responsive_ui
+from Dashboards.ui_responsive import apply_responsive_ui, render_date_selector
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -1171,9 +1171,9 @@ def super_admin_dashboard():
 
     def nav_date_input(label, value, key, **kwargs):
         if is_mobile:
-            return st.date_input(label, value=value, key=key, **kwargs)
+            return render_date_selector(label, key=key, value=value, **kwargs)
         with st.sidebar:
-            return st.date_input(label, value=value, key=key, **kwargs)
+            return render_date_selector(label, key=key, value=value, **kwargs)
 
     nav_items = [
         "Overview",
@@ -3375,11 +3375,11 @@ def super_admin_dashboard():
                     use_deadline = st.checkbox("Set deadline / expiry", value=False, key="sa_poll_use_deadline")
                     exp_col1, exp_col2 = st.columns(2)
                     with exp_col1:
-                        expiry_date = st.date_input(
+                        expiry_date = render_date_selector(
                             "Expiry Date",
+                            key="sa_poll_expiry_date",
                             value=date.today() + timedelta(days=1),
                             disabled=not use_deadline,
-                            key="sa_poll_expiry_date",
                         )
                     with exp_col2:
                         expiry_time = st.time_input(
@@ -4572,7 +4572,7 @@ def super_admin_dashboard():
             with c4:
                 priority = st.selectbox("Priority", ["low", "medium", "high", "critical"])
             with c5:
-                due_date = st.date_input("Due Date", value=date.today() + timedelta(days=30))
+                due_date = render_date_selector("Due Date", key="sa_goal_due_date", value=date.today() + timedelta(days=30))
             goal_note = st.text_area("Goal Definition / Success Note")
             create_goal = st.form_submit_button("Create KPI Goal")
 
@@ -5607,7 +5607,7 @@ def super_admin_dashboard():
             holiday_scope_options = ["All Branches"] + branches if branches else ["All Branches"]
             with st.form("holiday_settings_form", clear_on_submit=False):
                 holiday_scope = st.selectbox("Holiday Scope", holiday_scope_options, key="holiday_scope")
-                holiday_dt = st.date_input("Date", value=date.today(), key="holiday_date")
+                holiday_dt = render_date_selector("Date", key="holiday_date", value=date.today())
                 holiday_name = st.text_input("Holiday Or Event Name", key="holiday_name")
                 holiday_closed = st.toggle("Closed For The Day", value=True, key="holiday_closed")
                 holiday_start = st.text_input("Working Start (if open)", value=str(s.get("work_start", "09:00")), key="holiday_start")

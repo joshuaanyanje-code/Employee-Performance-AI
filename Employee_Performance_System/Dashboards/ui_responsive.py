@@ -1,5 +1,7 @@
 import streamlit as st
 from html import escape
+from calendar import monthrange
+from datetime import date, datetime
 
 
 def is_mobile_device():
@@ -40,6 +42,131 @@ def render_dashboard_banner(eyebrow, title, subtitle="", pills=None):
         """,
         unsafe_allow_html=True,
     )
+
+
+def _coerce_date_value(value, fallback=None):
+    default_value = fallback or date.today()
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            return default_value
+    return default_value
+
+
+def render_date_selector(label, key, value=None, disabled=False, on_change=None, min_value=None, max_value=None):
+    fallback_value = _coerce_date_value(value, date.today())
+    current_value = _coerce_date_value(st.session_state.get(key, value), fallback_value)
+    min_date = _coerce_date_value(min_value, current_value) if min_value is not None else None
+    max_date = _coerce_date_value(max_value, current_value) if max_value is not None else None
+    if min_date is not None and current_value < min_date:
+        current_value = min_date
+    if max_date is not None and current_value > max_date:
+        current_value = max_date
+
+    sync_key = f"{key}_sync"
+    current_token = current_value.isoformat()
+    if st.session_state.get(sync_key) != current_token:
+        st.session_state[f"{key}_year"] = current_value.year
+        st.session_state[f"{key}_month"] = current_value.month
+        st.session_state[f"{key}_day"] = current_value.day
+        st.session_state[sync_key] = current_token
+
+    base_year = (min_date.year if min_date is not None else date.today().year - 2)
+    max_year = (max_date.year if max_date is not None else date.today().year + 6)
+    year_options = list(range(base_year, max_year + 1))
+    current_year = st.session_state.get(f"{key}_year", current_value.year)
+    if current_year not in year_options:
+        current_year = min(max(current_year, year_options[0]), year_options[-1])
+        st.session_state[f"{key}_year"] = current_year
+
+    st.markdown(label)
+    col_year, col_month, col_day = st.columns(3)
+    with col_year:
+        selected_year = st.selectbox(
+            "Year",
+            year_options,
+            index=year_options.index(current_year),
+            key=f"{key}_year",
+            disabled=disabled,
+            label_visibility="collapsed",
+            on_change=on_change,
+        )
+
+    month_start = min_date.month if min_date is not None and selected_year == min_date.year else 1
+    month_end = max_date.month if max_date is not None and selected_year == max_date.year else 12
+    month_options = list(range(month_start, month_end + 1))
+    current_month = st.session_state.get(f"{key}_month", current_value.month)
+    if current_month not in month_options:
+        current_month = month_options[0]
+        st.session_state[f"{key}_month"] = current_month
+    with col_month:
+        selected_month = st.selectbox(
+            "Month",
+            month_options,
+            index=month_options.index(current_month),
+            key=f"{key}_month",
+            disabled=disabled,
+            label_visibility="collapsed",
+            format_func=lambda month_num: datetime(2000, month_num, 1).strftime("%b"),
+            on_change=on_change,
+        )
+
+    max_day = monthrange(selected_year, selected_month)[1]
+    day_start = min_date.day if min_date is not None and selected_year == min_date.year and selected_month == min_date.month else 1
+    day_end = max_date.day if max_date is not None and selected_year == max_date.year and selected_month == max_date.month else max_day
+    day_options = list(range(day_start, day_end + 1))
+    current_day = st.session_state.get(f"{key}_day", current_value.day)
+    if current_day not in day_options:
+        current_day = day_options[0]
+        st.session_state[f"{key}_day"] = current_day
+    with col_day:
+        selected_day = st.selectbox(
+            "Day",
+            day_options,
+            index=day_options.index(current_day),
+            key=f"{key}_day",
+            disabled=disabled,
+            label_visibility="collapsed",
+            on_change=on_change,
+        )
+
+    selected_value = date(selected_year, selected_month, selected_day)
+    st.session_state[key] = selected_value
+    st.session_state[sync_key] = selected_value.isoformat()
+    return selected_value
+
+
+def render_date_range_selector(label, key, value=None, on_change=None):
+    if isinstance(value, tuple) and len(value) == 2:
+        default_start = _coerce_date_value(value[0])
+        default_end = _coerce_date_value(value[1])
+    else:
+        single_value = _coerce_date_value(value, date.today())
+        default_start = single_value
+        default_end = single_value
+
+    current_value = st.session_state.get(key, value)
+    if isinstance(current_value, tuple) and len(current_value) == 2:
+        start_value = _coerce_date_value(current_value[0], default_start)
+        end_value = _coerce_date_value(current_value[1], default_end)
+    else:
+        start_value = default_start
+        end_value = default_end
+
+    st.markdown(label)
+    start_col, end_col = st.columns(2)
+    with start_col:
+        start_date = render_date_selector("Start Date", f"{key}_start", value=start_value, on_change=on_change)
+    with end_col:
+        end_date = render_date_selector("End Date", f"{key}_end", value=end_value, on_change=on_change)
+
+    st.session_state[key] = (start_date, end_date)
+    return start_date, end_date
 
 
 def apply_responsive_ui(mode="default"):

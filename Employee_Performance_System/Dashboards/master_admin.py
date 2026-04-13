@@ -13,7 +13,7 @@ from database.db import (
     get_phone_uniqueness_error,
     DB_PATH as MAIN_DB_PATH,
 )
-from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
+from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner, render_date_selector
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -1787,9 +1787,9 @@ def master_admin_dashboard():
             else:
                 col_f1, col_f2 = st.columns(2)
                 with col_f1:
-                    date_from = st.date_input("From", value=datetime.now().replace(day=1).date(), key="pay_from")
+                    date_from = render_date_selector("From", key="pay_from", value=datetime.now().replace(day=1).date())
                 with col_f2:
-                    date_to = st.date_input("To", value=datetime.now().date(), key="pay_to")
+                    date_to = render_date_selector("To", key="pay_to", value=datetime.now().date())
 
                 try:
                     df_pay["_dt"] = pd.to_datetime(df_pay["created_at"], errors="coerce")
