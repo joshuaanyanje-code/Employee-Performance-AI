@@ -4703,7 +4703,7 @@ def super_admin_dashboard():
             service_score = None if avg_stars is None else max(0.0, min(100.0, (float(avg_stars) / 5.0) * 100.0))
             health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
 
-            s1, s2, s3, s4, s5 = st.columns(5)
+            st.columns (5)=s1, s2, s3, s4, s5
             s1.metric("KPI Goals", len(kpi_view))
             s2.metric("Avg Completion", f"{avg_completion:.0f}%")
             s3.metric("Guest Stars", f"{avg_stars:.1f}" if avg_stars is not None else "-")
