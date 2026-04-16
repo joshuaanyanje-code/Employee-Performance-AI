@@ -743,8 +743,8 @@ def create_tables():
         organization TEXT,
         branch TEXT,
         day_name TEXT,
-        work_start TEXT DEFAULT '09:00',
-        work_end TEXT DEFAULT '18:00',
+        work_start TEXT DEFAULT '08:00',
+        work_end TEXT DEFAULT '21:00',
         off_day INTEGER DEFAULT 0,
         updated_at TEXT,
         UNIQUE(organization, branch, day_name)

@@ -5909,8 +5909,8 @@ def super_admin_dashboard():
                             holiday_dt.strftime("%Y-%m-%d"),
                             holiday_name.strip(),
                             int(holiday_closed),
-                            holiday_start.strip() or str(s.get("work_start", "09:00")),
-                            holiday_end.strip() or str(s.get("work_end", "18:00")),
+                            holiday_start.strip() or str(s.get("work_start", "08:30")),
+                            holiday_end.strip() or str(s.get("work_end", "20:00")),
                         ),
                     )
                     conn.commit()
