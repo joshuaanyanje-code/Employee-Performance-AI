@@ -447,14 +447,14 @@ def _restore_session_from_token(conn, token):
     if not token:
         return False
 
-    sess = pd.read_sql(
+    sess = _safe_read(
+        conn,
         """
         SELECT token, username, role, organization, expires_at, active
         FROM user_sessions
         WHERE token=?
         LIMIT 1
         """,
-        conn,
         params=(token,),
     )
 
@@ -484,16 +484,14 @@ def _restore_session_from_token(conn, token):
         })
         return True
 
-    user_df = pd.read_sql(
-        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
+    urow = _fetch_single_db_row(
         conn,
-        params=(username, org),
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
+        (username, org),
     )
-    if user_df.empty:
+    if not urow:
         _invalidate_login_session(conn, token)
         return False
-
-    urow = user_df.iloc[0]
     user_status = str(urow.get("status", "active") or "active").lower()
     if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
         _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
@@ -542,15 +540,14 @@ def _get_access_block_reason(conn, organization, branch=""):
     if not org_name or org_name.upper() == "MASTER":
         return ""
 
-    org_df = pd.read_sql(
-        "SELECT name, status, expires_at FROM organizations WHERE name=? LIMIT 1",
+    org_row = _fetch_single_db_row(
         conn,
-        params=(org_name,),
+        "SELECT name, status, expires_at FROM organizations WHERE name=? LIMIT 1",
+        (org_name,),
     )
-    if org_df.empty:
+    if not org_row:
         return f"Organization '{org_name}' is not authorized or no longer exists."
 
-    org_row = org_df.iloc[0]
     org_status = str(org_row.get("status", "active") or "active").strip().lower()
     expires_at = pd.to_datetime(org_row.get("expires_at"), errors="coerce")
 
@@ -561,19 +558,59 @@ def _get_access_block_reason(conn, organization, branch=""):
         return f"Organization '{org_name}' is currently {org_status}. Access is not authorized."
 
     if branch_name:
-        branch_df = pd.read_sql(
-            "SELECT name, status FROM branches WHERE organization=? AND name=? LIMIT 1",
+        branch_row = _fetch_single_db_row(
             conn,
-            params=(org_name, branch_name),
+            "SELECT name, status FROM branches WHERE organization=? AND name=? LIMIT 1",
+            (org_name, branch_name),
         )
-        if branch_df.empty:
+        if not branch_row:
             return f"Branch '{branch_name}' is not authorized for organization '{org_name}'."
 
-        branch_status = str(branch_df.iloc[0].get("status", "active") or "active").strip().lower()
+        branch_status = str(branch_row.get("status", "active") or "active").strip().lower()
         if branch_status in {"inactive", "disabled", "suspended", "deactivated", "blocked", "locked"}:
             return f"Branch '{branch_name}' is currently {branch_status}. Access is not authorized."
 
     return ""
+
+
+def _fetch_single_db_row(conn, query, params=()):
+    try:
+        if params is None:
+            params_tuple = ()
+        elif isinstance(params, tuple):
+            params_tuple = params
+        elif isinstance(params, list):
+            params_tuple = tuple(params)
+        else:
+            params_tuple = (params,)
+
+        cur = conn.execute(query, params_tuple)
+        row = cur.fetchone()
+    except Exception:
+        return None
+
+    if row is None:
+        return None
+
+    columns = [col[0] for col in cur.description] if cur.description else []
+    return dict(zip(columns, row))
+
+
+def _safe_read(conn, query, params=None):
+    try:
+        if params is None:
+            return pd.read_sql(query, conn)
+        normalized_params = tuple(params) if isinstance(params, (list, tuple)) else (params,)
+        return pd.read_sql(query, conn, params=normalized_params)
+    except Exception:
+        try:
+            normalized_params = tuple(params) if isinstance(params, (list, tuple)) else ((params,) if params is not None else ())
+            cur = conn.execute(query, normalized_params)
+            rows = cur.fetchall()
+            columns = [col[0] for col in cur.description] if cur.description else []
+            return pd.DataFrame(rows, columns=columns)
+        except Exception:
+            return pd.DataFrame()
 
 
 def _enforce_logged_in_access(conn):
@@ -589,15 +626,14 @@ def _enforce_logged_in_access(conn):
     if not username or not org:
         return False
 
-    user_df = pd.read_sql(
-        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
+    urow = _fetch_single_db_row(
         conn,
-        params=(username, org),
+        "SELECT username, role, organization, branch, status FROM users WHERE username=? AND organization=? LIMIT 1",
+        (username, org),
     )
-    if user_df.empty:
+    if not urow:
         _set_login_blocked_message("Your account was not found. Please log in again.")
     else:
-        urow = user_df.iloc[0]
         user_status = str(urow.get("status", "active") or "active").strip().lower()
         if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
             _set_login_blocked_message(f"Your account is currently {user_status}. Access is not authorized.")
@@ -665,7 +701,7 @@ def log_navigation_once(conn, menu_label):
 # =====================================================
 def check_subscriptions(conn):
     try:
-        orgs = pd.read_sql("SELECT * FROM organizations", conn)
+        orgs = _safe_read(conn, "SELECT * FROM organizations")
 
         for _, row in orgs.iterrows():
             try:
@@ -794,10 +830,10 @@ def login():
         # Get available organizations for the username (if it exists)
         potential_orgs = []
         if username and username.lower() != "master":
-            potential_orgs_df = pd.read_sql(
-                "SELECT DISTINCT organization FROM users WHERE lower(trim(username)) = lower(trim(?)) ORDER BY organization",
+            potential_orgs_df = _safe_read(
                 conn,
-                params=(username,)
+                "SELECT DISTINCT organization FROM users WHERE lower(trim(username)) = lower(trim(?)) ORDER BY organization",
+                params=(username,),
             )
             if not potential_orgs_df.empty:
                 potential_orgs = potential_orgs_df["organization"].tolist()
@@ -839,7 +875,7 @@ def login():
                 query += " AND organization = ?"
                 params.append(org_selector)
             
-            user_df = pd.read_sql(query, conn, params=params)
+            user_df = _safe_read(conn, query, params=params)
 
             if user_df.empty:
                 st.error("User not found in the selected organization" if org_selector else "User not found")
