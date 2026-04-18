@@ -4484,7 +4484,7 @@ def super_admin_dashboard():
                 horizontal=True,
             )
 
-            view_df == feedback_df.copy()
+            view_df = feedback_df.copy()
             if view_mode == "By Branch":
                 branch_options = sorted([b for b in view_df["branch"].dropna().astype(str).unique().tolist() if b])
                 if branch_options:
