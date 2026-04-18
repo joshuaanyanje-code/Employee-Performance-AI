@@ -45,6 +45,24 @@ try:
     ANALYTICS_OK = True
 except Exception as _ae:
     ANALYTICS_OK = False
+    def reports_panel(*args, **kwargs): pass
+    def generate_insights(*args, **kwargs): pass
+    def detect_leaders(*args, **kwargs): pass
+    def display_powermap(*args, **kwargs): pass
+    def predict_future(*args, **kwargs): pass
+    def stability_analysis(*args, **kwargs): pass
+    def management_recommendations(*args, **kwargs): pass
+    def get_super_admin_dashboard(*args, **kwargs): pass
+    def get_unread_alerts(*args, **kwargs): pass
+    def resolve_alert(*args, **kwargs): pass
+    def get_alert_statistics(*args, **kwargs): pass
+    def analyze_group_demographics(*args, **kwargs): pass
+    def get_demographic_statistics(*args, **kwargs): pass
+    def get_group_details_for_super_admin(*args, **kwargs): pass
+    def filter_ratings_by_role(*args, **kwargs): pass
+    def filter_users_by_role(*args, **kwargs): pass
+    def compute_badge_summary_for_super_admin(*args, **kwargs): pass
+    def get_badge_holders_table(*args, **kwargs): pass
     def get_cached_recommendations():
         return {"articles": [], "fetched_at": "", "sources_ok": 0, "error": "Analytics module unavailable."}
 
@@ -1679,7 +1697,7 @@ def super_admin_dashboard():
 
                 # --- DOWNLOADABLE EXECUTIVE REPORTS ---
                 st.divider()
-                st.markdown("### â¬‡ Executive Downloads")
+                st.markdown("Executive Downloads")
 
                 executive_report_text = build_executive_bi_report(intel)
                 report_json = json.dumps(intel, indent=2, default=str)
@@ -4466,7 +4484,7 @@ def super_admin_dashboard():
                 horizontal=True,
             )
 
-            view_df = feedback_df.copy()
+            view_df == feedback_df.copy()
             if view_mode == "By Branch":
                 branch_options = sorted([b for b in view_df["branch"].dropna().astype(str).unique().tolist() if b])
                 if branch_options:
@@ -4505,7 +4523,7 @@ def super_admin_dashboard():
 
             # --- Branch Summary ---
             st.markdown("---")
-            st.markdown("#### Branch Summary")
+            st.markdown("Branch Summary")
             branch_summary = (
                 view_df.groupby("branch", dropna=False)
                 .agg(feedback_count=("id", "count"), avg_stars=("stars", "mean"))
@@ -4552,7 +4570,7 @@ def super_admin_dashboard():
         st.subheader("KPI & Service AI")
         st.caption("Create measurable targets, link them to guest experience, and use AI-style signals to know where to coach, reward, or intervene next.")
 
-        kpi_weight = float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
+        kpi_weight == float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
         service_weight = float(kpi_ai_config.get("service_weight_pct", 40.0) or 40.0)
         warning_threshold = float(kpi_ai_config.get("warning_health_score", 65.0) or 65.0)
         critical_threshold = float(kpi_ai_config.get("critical_health_score", 45.0) or 45.0)
@@ -4695,7 +4713,7 @@ def super_admin_dashboard():
                 axis=1,
             )
 
-            avg_completion = float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
+            avg_completion == float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
             avg_stars = float(pd.to_numeric(feedback_df["stars"], errors="coerce").mean()) if not feedback_df.empty else None
             feedback_count = int(len(feedback_df))
             overdue = int((pd.to_datetime(kpi_view["due_date"], errors="coerce") < pd.Timestamp.now().normalize()).fillna(False).sum()) if "due_date" in kpi_view.columns else 0
@@ -4703,7 +4721,7 @@ def super_admin_dashboard():
             service_score = None if avg_stars is None else max(0.0, min(100.0, (float(avg_stars) / 5.0) * 100.0))
             health_score = completion_score if service_score is None else ((completion_score * kpi_weight) + (service_score * service_weight)) / max(1.0, (kpi_weight + service_weight))
 
-            st.columns (5)==s1, s2, s3, s4, s5
+            s1, s2, s3, s4, s5 = st.columns(5)
             s1.metric("KPI Goals", len(kpi_view))
             s2.metric("Avg Completion", f"{avg_completion:.0f}%")
             s3.metric("Guest Stars", f"{avg_stars:.1f}" if avg_stars is not None else "-")
