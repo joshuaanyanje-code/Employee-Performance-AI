@@ -299,6 +299,11 @@ def reports_panel():
     # =====================================================
     elif report == "Leadership":
 
+        st.info(
+            "Leadership scoring now includes monthly leader attendance risk: few grace check-ins, "
+            "frequent after-hours check-outs, and low formal early/lateness request activity."
+        )
+
         leaders_result = detect_leaders(ratings, attendance, None, users, None)
 
         if isinstance(leaders_result, tuple):

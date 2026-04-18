@@ -37,6 +37,52 @@ def _build_consistency_summary(ratings_df, recent_days=None):
     ).reset_index(drop=True)
 
 
+def _compute_monthly_leader_attendance_summary(attendance_df, username):
+    if attendance_df is None or attendance_df.empty:
+        return {
+            "grace_checkins": 0,
+            "late_checkouts": 0,
+            "early_exits": 0,
+            "lateness_requests": 0,
+        }
+
+    df = attendance_df.copy()
+    df["date"] = pd.to_datetime(df.get("date"), errors="coerce")
+    df["clock_in"] = pd.to_datetime(df.get("clock_in"), errors="coerce")
+    df["clock_out"] = pd.to_datetime(df.get("clock_out"), errors="coerce")
+    df = df[df["username"] == username]
+    df = df[df["date"].dt.month == datetime.now().month]
+
+    grace_checkins = len(
+        df[
+            (df["clock_in"].dt.hour == 9)
+            & (df["clock_in"].dt.minute <= 15)
+        ]
+    )
+
+    late_checkouts = len(df[df["clock_out"].dt.hour > 18])
+    early_exits = len(df[df["clock_out"].dt.hour < 18])
+
+    lateness_requests = 0
+    if "lateness_request_status" in df.columns:
+        lateness_requests = len(
+            df[
+                df["lateness_request_status"].astype(str).str.lower().isin(
+                    ["pending", "approved", "used"]
+                )
+            ]
+        )
+    elif "approved_late" in df.columns:
+        lateness_requests = int(df["approved_late"].fillna(False).astype(bool).sum())
+
+    return {
+        "grace_checkins": grace_checkins,
+        "late_checkouts": late_checkouts,
+        "early_exits": early_exits,
+        "lateness_requests": lateness_requests,
+    }
+
+
 def detect_leaders(ratings_df, attendance_df=None, leaves_df=None, users_df=None, messages_df=None):
 
     if ratings_df.empty:
@@ -136,6 +182,20 @@ def detect_leaders(ratings_df, attendance_df=None, leaves_df=None, users_df=None
 
             elif score >= 75:
                 insights.append(f"👑 Admin {name} is performing well")
+
+        if attendance_df is not None and not attendance_df.empty:
+            for admin in admins.unique():
+                attendance_flags = _compute_monthly_leader_attendance_summary(attendance_df, admin)
+                if (
+                    attendance_flags["grace_checkins"] < 4
+                    and attendance_flags["late_checkouts"] > 6
+                    and attendance_flags["early_exits"] <= 1
+                    and attendance_flags["lateness_requests"] <= 1
+                ):
+                    insights.append(
+                        f"⚠ Admin {admin} leadership alert: very few monthly grace check-ins ({attendance_flags['grace_checkins']}), "
+                        f"many after-hours check-outs ({attendance_flags['late_checkouts']}), and low formal request activity ({attendance_flags['lateness_requests']})."
+                    )
 
     # =====================================================
     # 🏢 BRANCH STABILITY SCORE
@@ -320,6 +380,18 @@ def detect_bad_managers(ratings_df, users_df=None, attendance_df=None, messages_
             
             if (late >= 5 and early >= 5) and admin_avg < 60:
                 insights.append(f"🚨 BAD MANAGER PATTERN: {admin} - poor attendance (late {late}x, early {early}x) + low rating ({admin_avg:.0f}%) - not setting example")
+
+            attendance_flags = _compute_monthly_leader_attendance_summary(attendance_df, admin)
+            if (
+                attendance_flags["grace_checkins"] < 4
+                and attendance_flags["late_checkouts"] > 6
+                and attendance_flags["early_exits"] <= 1
+                and attendance_flags["lateness_requests"] <= 1
+            ):
+                insights.append(
+                    f"⚠ LEADER ATTENDANCE SIGNAL: {admin} has very few grace check-ins ({attendance_flags['grace_checkins']} this month), "
+                    f"frequent late departures ({attendance_flags['late_checkouts']} after hours), and minimal formal exception requests ({attendance_flags['lateness_requests']})."
+                )
         
         # RULE 4: Many messages from employees (complaints/fear)
         if messages_df is not None and not messages_df.empty:

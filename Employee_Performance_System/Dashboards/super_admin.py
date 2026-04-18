@@ -4037,6 +4037,10 @@ def super_admin_dashboard():
                         except Exception as e:
                             st.warning(f"Insights unavailable: {e}")
                     with at3:
+                        st.info(
+                            "Leadership scoring includes monthly attendance signals: few grace check-ins, frequent after-hours check-outs, "
+                            "and low formal exception request frequency are flagged as risk."
+                        )
                         try:
                             leaders = detect_leaders(ratings, attendance, leaves_br, users_br, messages_br)
                             if isinstance(leaders, tuple):
@@ -4414,6 +4418,10 @@ def super_admin_dashboard():
 
                 st.divider()
                 st.markdown("### Organization Leadership Intelligence")
+                st.info(
+                    "Organization leadership intelligence now flags branch/org leader attendance risk: "
+                    "very few grace check-ins, many late check-outs, and rare early/lateness requests."
+                )
                 if ANALYTICS_OK:
                     try:
                         leaders = detect_leaders(ratings_all, attendance_all, leaves_all, users_all, messages_all)
@@ -4570,7 +4578,7 @@ def super_admin_dashboard():
         st.subheader("KPI & Service AI")
         st.caption("Create measurable targets, link them to guest experience, and use AI-style signals to know where to coach, reward, or intervene next.")
 
-        kpi_weight == float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
+        kpi_weight = float(kpi_ai_config.get("kpi_weight_pct", 60.0) or 60.0)
         service_weight = float(kpi_ai_config.get("service_weight_pct", 40.0) or 40.0)
         warning_threshold = float(kpi_ai_config.get("warning_health_score", 65.0) or 65.0)
         critical_threshold = float(kpi_ai_config.get("critical_health_score", 45.0) or 45.0)
@@ -4713,7 +4721,7 @@ def super_admin_dashboard():
                 axis=1,
             )
 
-            avg_completion == float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
+            avg_completion = float(kpi_view["completion_pct"].mean()) if not kpi_view.empty else 0.0
             avg_stars = float(pd.to_numeric(feedback_df["stars"], errors="coerce").mean()) if not feedback_df.empty else None
             feedback_count = int(len(feedback_df))
             overdue = int((pd.to_datetime(kpi_view["due_date"], errors="coerce") < pd.Timestamp.now().normalize()).fillna(False).sum()) if "due_date" in kpi_view.columns else 0

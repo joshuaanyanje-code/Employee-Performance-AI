@@ -544,10 +544,43 @@ def management_recommendations(ratings_df, attendance_df, schedules_df=None):
             # YOUR NEW RULES 🔥
             # =========================
 
+            grace_check_ins = len(
+                att[
+                    (att["clock_in"].dt.hour == 9)
+                    & (att["clock_in"].dt.minute <= 15)
+                ]
+            )
+            late_after_hours = len(att[att["clock_out"].dt.hour > 18])
+            early_exit_events = len(att[att["clock_out"].dt.hour < 18])
+
+            lateness_requests = 0
+            if "lateness_request_status" in att.columns:
+                lateness_requests = len(
+                    att[
+                        att["lateness_request_status"].astype(str).str.lower().isin(
+                            ["pending", "approved", "used"]
+                        )
+                    ]
+                )
+            elif "approved_late" in att.columns:
+                lateness_requests = int(att["approved_late"].fillna(False).astype(bool).sum())
+
             # BAD ADMIN PERFORMANCE
             if late >= 3 and early >= 3 and avg < 60:
                 recommendations.append(
                     f"🚨 Admin {admin} poor discipline + low rating → Not performing / possible exit."
+                )
+
+            # BRANCH / ORG LEADER ATTENDANCE SIGNAL
+            if (
+                grace_check_ins < 4
+                and late_after_hours > 6
+                and early_exit_events <= 1
+                and lateness_requests <= 1
+            ):
+                recommendations.append(
+                    f"⚠ Leader {admin} shows a concerning pattern: few grace check-ins ({grace_check_ins}), "
+                    f"frequent after-hours exits ({late_after_hours}), and minimal formal requests ({lateness_requests})."
                 )
 
             # TERMINATION LEVEL
