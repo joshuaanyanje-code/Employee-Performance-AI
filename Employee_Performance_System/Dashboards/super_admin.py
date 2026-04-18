@@ -4625,39 +4625,66 @@ def super_admin_dashboard():
         )
         feedback_df = apply_branch_scope(feedback_df)
 
+        # Initialize session state for KPI form persistence
+        if 'kpi_scope' not in st.session_state:
+            st.session_state.kpi_scope = "Organization"
+        if 'kpi_branch' not in st.session_state:
+            st.session_state.kpi_branch = branch_scope or ""
+        if 'kpi_role' not in st.session_state:
+            st.session_state.kpi_role = "employee"
+        if 'kpi_staff' not in st.session_state:
+            st.session_state.kpi_staff = ""
+        if 'kpi_metric' not in st.session_state:
+            st.session_state.kpi_metric = ""
+        if 'kpi_target' not in st.session_state:
+            st.session_state.kpi_target = 100.0
+        if 'kpi_unit' not in st.session_state:
+            st.session_state.kpi_unit = "points"
+        if 'kpi_period' not in st.session_state:
+            st.session_state.kpi_period = "monthly"
+        if 'kpi_priority' not in st.session_state:
+            st.session_state.kpi_priority = "low"
+        if 'kpi_due' not in st.session_state:
+            st.session_state.kpi_due = date.today() + timedelta(days=30)
+        if 'kpi_note' not in st.session_state:
+            st.session_state.kpi_note = ""
+
         with st.form("sa_create_kpi_goal_form", clear_on_submit=False):
             st.markdown("### Create KPI / Goal")
-            scope_choice = st.selectbox("Scope", ["Organization", "Branch", "Individual Staff"])
+            scope_choice = st.selectbox("Scope", ["Organization", "Branch", "Individual Staff"], key="kpi_scope")
             available_branches = branches if branches else [""]
             branch_choice = st.selectbox(
                 "Target Branch",
                 available_branches if available_branches else [""],
-                index=available_branches.index(branch_scope) if branch_scope in available_branches else 0,
+                index=available_branches.index(st.session_state.kpi_branch) if st.session_state.kpi_branch in available_branches else 0,
                 disabled=scope_choice == "Organization",
+                key="kpi_branch"
             )
-            target_role = st.selectbox("Target Role", ["employee", "admin", "hr", "all"])
+            target_role = st.selectbox("Target Role", ["employee", "admin", "hr", "all"], key="kpi_role")
             user_options_df = target_users_df.copy() if not target_users_df.empty else pd.DataFrame(columns=["username", "role", "branch"])
             if scope_choice == "Branch" and not user_options_df.empty:
                 user_options_df = user_options_df[user_options_df["branch"].astype(str) == str(branch_choice)]
             if target_role != "all" and not user_options_df.empty:
                 user_options_df = user_options_df[user_options_df["role"].astype(str).str.lower() == target_role]
             staff_labels = [f"{row['username']} ({row['role']} | {row['branch'] or 'N/A'})" for _, row in user_options_df.iterrows()] if not user_options_df.empty else ["No staff available"]
-            selected_staff_label = st.selectbox("Target Staff", staff_labels, disabled=scope_choice != "Individual Staff")
-            metric_name = st.text_input("KPI / Goal Name", placeholder="Example: Monthly guest rating target")
+            selected_staff_label = st.selectbox("Target Staff", staff_labels, disabled=scope_choice != "Individual Staff", key="kpi_staff")
+            metric_name = st.text_input("KPI / Goal Name", placeholder="Example: Monthly guest rating target", value=st.session_state.kpi_metric, key="kpi_metric")
             c1, c2, c3 = st.columns(3)
             with c1:
-                target_value = st.number_input("Target Value", min_value=0.0, value=100.0, step=1.0)
+                target_value = st.number_input("Target Value", min_value=0.0, value=st.session_state.kpi_target, step=1.0, key="kpi_target")
             with c2:
-                unit = st.selectbox("Unit", ["points", "%", "tasks", "stars", "sales", "cases", "custom"])
+                unit = st.selectbox("Unit", ["points", "%", "tasks", "stars", "sales", "cases", "custom"], index=["points", "%", "tasks", "stars", "sales", "cases", "custom"].index(st.session_state.kpi_unit) if st.session_state.kpi_unit in ["points", "%", "tasks", "stars", "sales", "cases", "custom"] else 0, key="kpi_unit")
             with c3:
-                period = st.selectbox("Period", ["weekly", "monthly", "quarterly", "annual"])
+                period = st.selectbox("Period", ["weekly", "monthly", "quarterly", "annual"], index=["weekly", "monthly", "quarterly", "annual"].index(st.session_state.kpi_period) if st.session_state.kpi_period in ["weekly", "monthly", "quarterly", "annual"] else 0, key="kpi_period")
             c4, c5 = st.columns(2)
             with c4:
-                priority = st.selectbox("Priority", ["low", "medium", "high", "critical"])
+                priority = st.selectbox("Priority", ["low", "medium", "high", "critical"], index=["low", "medium", "high", "critical"].index(st.session_state.kpi_priority) if st.session_state.kpi_priority in ["low", "medium", "high", "critical"] else 0, key="kpi_priority")
             with c5:
-                due_date = st.date_input("Due Date", value=date.today() + timedelta(days=30))
-            goal_note = st.text_area("Goal Definition / Success Note")
+                due_date = st.date_input("Due Date", value=st.session_state.kpi_due, key="kpi_due")
+            goal_note = st.text_area("Goal Definition / Success Note", value=st.session_state.kpi_note, key="kpi_note")
             create_goal = st.form_submit_button("Create KPI Goal")
+
+            if create_goal:
 
             if create_goal:
                 clean_metric_name = metric_name.strip()
@@ -4704,6 +4731,10 @@ def super_admin_dashboard():
                     conn.commit()
                     log_action(conn, user, "CREATE KPI GOAL", clean_metric_name, org)
                     st.success("KPI goal created.")
+                    # Clear form data from session state after successful creation
+                    for key in ['kpi_scope', 'kpi_branch', 'kpi_role', 'kpi_staff', 'kpi_metric', 'kpi_target', 'kpi_unit', 'kpi_period', 'kpi_priority', 'kpi_due', 'kpi_note']:
+                        if key in st.session_state:
+                            del st.session_state[key]
                     st.rerun()
 
         if all_kpi_df.empty:
