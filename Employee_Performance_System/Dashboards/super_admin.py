@@ -4685,8 +4685,6 @@ def super_admin_dashboard():
             create_goal = st.form_submit_button("Create KPI Goal")
 
             if create_goal:
-
-            if create_goal:
                 clean_metric_name = metric_name.strip()
                 if not clean_metric_name:
                     st.error("A KPI or goal name is required.")
