@@ -5,16 +5,41 @@ import importlib
 import time
 from datetime import datetime, timedelta
 try:
-    from Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+    from Dashboards.ui_responsive import (
+        apply_responsive_ui,
+        inject_global_css,
+        is_mobile_device,
+        render_topbar,
+        render_sidebar_nav,
+        render_app_tabs_strip,
+        render_note,
+    )
 except Exception:
     try:
-        from Employee_Performance_System.Dashboards.ui_responsive import apply_responsive_ui, is_mobile_device
+        from Employee_Performance_System.Dashboards.ui_responsive import (
+            apply_responsive_ui,
+            inject_global_css,
+            is_mobile_device,
+            render_topbar,
+            render_sidebar_nav,
+            render_app_tabs_strip,
+            render_note,
+        )
     except Exception:
         def apply_responsive_ui(mode="default"):
             return None
-
+        def inject_global_css():
+            return None
         def is_mobile_device():
             return False
+        def render_topbar(*a, **kw):
+            return None
+        def render_sidebar_nav(*a, **kw):
+            return ""
+        def render_app_tabs_strip(*a, **kw):
+            return ""
+        def render_note(*a, **kw):
+            return None
 
 # =====================================================
 # PAGE CONFIG
@@ -26,11 +51,14 @@ st.set_page_config(
 )
 
 # =====================================================
-# 🎨 UI STYLE
+# UI STYLE — injected from design system
 # =====================================================
-st.markdown("""
+inject_global_css()
+
+# Legacy CSS block removed — kept as reference only
+_LEGACY_CSS_PLACEHOLDER = """
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900&family=Roboto+Flex:opsz,wght@8..144,400;8..144,500;8..144,700&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700;900');
 
 :root {
     --bg: #f5f5f7;
@@ -285,8 +313,7 @@ div[role="option"][aria-selected="true"] {
         font-size: 1rem;
     }
 }
-</style>
-""", unsafe_allow_html=True)
+"""
 
 
 def render_global_sidebar_toggle_button():
@@ -782,8 +809,8 @@ qp_org = _qp_get_value(qp, "org")
 if qp_kiosk and qp_org:
     kiosk_access_issue = _get_access_block_reason(conn, qp_org, qp_kiosk)
     if kiosk_access_issue:
-        apply_responsive_ui("kiosk")
-        st.error(kiosk_access_issue)
+        inject_global_css()
+        render_note(kiosk_access_issue, kind="err", pin="!")
         st.info("This kiosk is currently disabled. Contact the Organization Administrator or Super Admin.")
         st.stop()
 
@@ -813,114 +840,171 @@ if not st.session_state.logged:
 # =====================================================
 def login():
 
-    apply_responsive_ui("auth")
+    inject_global_css()
 
     blocked_message = str(st.session_state.pop("login_blocked_message", "") or "").strip()
-    if blocked_message:
-        st.error(blocked_message)
 
-    st.markdown('<div class="login-container">', unsafe_allow_html=True)
+    # ── Two-column wireframe layout ──────────────────────────────────────────
+    col_brand, col_form = st.columns([1.4, 1])
 
-    st.title("🔐 Team Intelligence")
+    with col_brand:
+        st.markdown(
+            """
+            <div style="background:var(--fill-2);border:1px solid var(--line);border-radius:6px;
+                        padding:32px;min-height:520px;display:flex;flex-direction:column;gap:14px;">
+                <div style="display:flex;align-items:center;gap:8px;padding-bottom:14px;
+                            border-bottom:1px dashed var(--line);">
+                    <div style="width:22px;height:22px;background:var(--onyx);border-radius:3px;"></div>
+                    <b style="font-size:12.5px;font-family:Inter,sans-serif;color:var(--onyx);">
+                        Team Intelligence
+                    </b>
+                </div>
+                <div style="flex:1;border:1.5px dashed var(--line);
+                            background:repeating-linear-gradient(135deg,#f7f8f9 0 8px,#ffffff 8px 16px);
+                            border-radius:4px;min-height:280px;display:flex;align-items:center;
+                            justify-content:center;font-family:'JetBrains Mono',monospace;
+                            font-size:11.5px;color:var(--smoke);text-align:center;padding:14px;">
+                    Workforce · HR · Analytics · AI
+                </div>
+                <p style="font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--smoke);margin:0;">
+                    EPS · Kenya · KES · M-Pesa
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
 
-    with st.form("login_form"):
-        username = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        
-        # Get available organizations for the username (if it exists)
-        potential_orgs = []
-        if username and username.lower() != "master":
-            potential_orgs_df = _safe_read(
-                conn,
-                "SELECT DISTINCT organization FROM users WHERE lower(trim(username)) = lower(trim(?)) ORDER BY organization",
-                params=(username,),
-            )
-            if not potential_orgs_df.empty:
-                potential_orgs = potential_orgs_df["organization"].tolist()
-        
-        # Show organization selector only if multiple organizations have this username
-        org_selector = None
-        if len(potential_orgs) > 1:
-            st.info(f"ℹ️ Username exists in multiple organizations. Please select your organization:")
-            org_selector = st.selectbox("Organization", potential_orgs, key="login_org_selector")
+    with col_form:
+        st.markdown(
+            """
+            <div class="lbl-row" style="margin-bottom:6px;">
+                <span>sign in</span><span>v1.0</span>
+            </div>
+            <h3 style="margin:0 0 4px;font-size:18px;font-weight:600;
+                       font-family:Inter,sans-serif;color:var(--onyx);">
+                Sign in to Team Intelligence
+            </h3>
+            <p style="margin:0 0 12px;font-size:12.5px;color:var(--smoke);
+                      font-family:Inter,sans-serif;">
+                Use your work credentials. Contact your administrator if you can't sign in.
+            </p>
+            """,
+            unsafe_allow_html=True,
+        )
 
-        if st.form_submit_button("Login"):
+        if blocked_message:
+            render_note(blocked_message, kind="err", pin="!")
 
-            if not username or not password:
-                st.warning("Enter credentials")
-                return
+    # Form continues inside col_form
+    with col_form:
+        with st.form("login_form"):
+            username = st.text_input("Username", placeholder="jdoe", label_visibility="collapsed")
+            st.markdown('<span class="field-label">Username</span>', unsafe_allow_html=True)
+            password = st.text_input("Password", type="password", placeholder="••••••••", label_visibility="collapsed")
+            st.markdown('<span class="field-label">Password</span>', unsafe_allow_html=True)
 
-            # MASTER LOGIN
-            if username == "Master" and password == "Admin123":
-                token = _create_login_session(conn, "master", "master", "MASTER")
+            # Get available organizations for the username (if it exists)
+            potential_orgs = []
+            if username and username.lower() != "master":
+                potential_orgs_df = _safe_read(
+                    conn,
+                    "SELECT DISTINCT organization FROM users WHERE lower(trim(username)) = lower(trim(?)) ORDER BY organization",
+                    params=(username,),
+                )
+                if not potential_orgs_df.empty:
+                    potential_orgs = potential_orgs_df["organization"].tolist()
+
+            # Show organization selector only if multiple organizations have this username
+            org_selector = None
+            if len(potential_orgs) > 1:
+                org_selector = st.selectbox(
+                    "Organization (multiple found)",
+                    potential_orgs,
+                    key="login_org_selector",
+                )
+
+            if st.form_submit_button("Login →", use_container_width=True):
+                if not username or not password:
+                    render_note("Please enter your username and password.", kind="err", pin="!")
+                    return
+
+                # MASTER LOGIN
+                if username == "Master" and password == "Admin123":
+                    token = _create_login_session(conn, "master", "master", "MASTER")
+                    st.session_state.update({
+                        "logged": True,
+                        "role": "master",
+                        "username": "master",
+                        "organization": "MASTER",
+                        "auth_token": token,
+                    })
+                    _set_auth_query_param(token)
+                    log_action(conn, "master", "LOGIN", "SYSTEM", "MASTER")
+                    st.rerun()
+
+                # DATABASE LOGIN
+                username_clean = username.strip()
+                query = "SELECT * FROM users WHERE lower(trim(username)) = lower(trim(?))"
+                params = [username_clean]
+
+                if org_selector:
+                    query += " AND organization = ?"
+                    params.append(org_selector)
+
+                user_df = _safe_read(conn, query, params=params)
+
+                if user_df.empty:
+                    render_note(
+                        "Username or password is incorrect. After 5 failed attempts, account is locked for 15 min.",
+                        kind="err", pin="!",
+                    )
+                    return
+
+                if len(user_df) > 1 and not org_selector:
+                    render_note(
+                        f"Username exists in multiple organizations. Select your organization above.",
+                        kind="info", pin="i",
+                    )
+                    return
+
+                if not verify_password(password, user_df.iloc[0]["password"]):
+                    render_note(
+                        "Username or password is incorrect. After 5 failed attempts, account is locked for 15 min.",
+                        kind="err", pin="!",
+                    )
+                    return
+
+                user_row = user_df.iloc[0]
+                role = user_row["role"]
+                org = user_row["organization"]
+                branch = str(user_row.get("branch", "") or "").strip()
+                user_status = str(user_row.get("status", "active") or "active").strip().lower()
+
+                if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
+                    render_note(
+                        f"<b>Organization suspended.</b> Subscription payment is overdue. "
+                        f"Master admin must record payment or send M-Pesa prompt to re-enable.",
+                        kind="err", pin="!",
+                    )
+                    return
+
+                access_issue = _get_access_block_reason(conn, org, branch)
+                if access_issue:
+                    render_note(access_issue, kind="err", pin="!")
+                    return
+
+                token = _create_login_session(conn, username, role, org)
                 st.session_state.update({
                     "logged": True,
-                    "role": "master",
-                    "username": "master",
-                    "organization": "MASTER",
+                    "role": role,
+                    "username": username,
+                    "organization": org,
+                    "branch": branch,
                     "auth_token": token,
                 })
-
                 _set_auth_query_param(token)
-                log_action(conn, "master", "LOGIN", "SYSTEM", "MASTER")
+                log_action(conn, username, "LOGIN", role, org)
                 st.rerun()
-
-            # DATABASE LOGIN
-            username_clean = username.strip()
-            query = "SELECT * FROM users WHERE lower(trim(username)) = lower(trim(?))"
-            params = [username_clean]
-            
-            # If multiple orgs and user selected one, filter by it
-            if org_selector:
-                query += " AND organization = ?"
-                params.append(org_selector)
-            
-            user_df = _safe_read(conn, query, params=params)
-
-            if user_df.empty:
-                st.error("User not found in the selected organization" if org_selector else "User not found")
-                return
-            
-            # If multiple rows but no org selector (shouldn't happen with org_selector logic above), take first
-            if len(user_df) > 1 and not org_selector:
-                st.error(f"Username '{username}' exists in multiple organizations. Please select your organization from the dropdown above and try again.")
-                return
-
-            if not verify_password(password, user_df.iloc[0]["password"]):
-                st.error("Wrong password")
-                return
-
-            user_row = user_df.iloc[0]
-            role = user_row["role"]
-            org = user_row["organization"]
-            branch = str(user_row.get("branch", "") or "").strip()
-            user_status = str(user_row.get("status", "active") or "active").strip().lower()
-
-            if user_status in {"suspended", "inactive", "disabled", "deactivated", "blocked", "locked"}:
-                st.error(f"Your account is currently {user_status}. Access is not authorized.")
-                return
-
-            access_issue = _get_access_block_reason(conn, org, branch)
-            if access_issue:
-                st.error(access_issue)
-                return
-
-            token = _create_login_session(conn, username, role, org)
-
-            st.session_state.update({
-                "logged": True,
-                "role": role,
-                "username": username,
-                "organization": org,
-                "branch": branch,
-                "auth_token": token,
-            })
-
-            _set_auth_query_param(token)
-            log_action(conn, username, "LOGIN", role, org)
-            st.rerun()
-
-    st.markdown('</div>', unsafe_allow_html=True)
 
 
 # =====================================================
@@ -935,18 +1019,130 @@ render_global_sidebar_toggle_button()
 
 
 # =====================================================
-# SIDEBAR
+# SIDEBAR — flat wireframe nav
 # =====================================================
-st.sidebar.title(f"👤 {st.session_state.username}")
-st.sidebar.success(st.session_state.role.upper())
+_role = st.session_state.role
+_username = st.session_state.username
+_org = st.session_state.organization or "Team Intelligence"
 
-if st.sidebar.button("Logout"):
-    current_token = st.session_state.get("auth_token") or _qp_get_value(st.query_params, "auth")
-    _invalidate_login_session(conn, current_token)
-    _clear_auth_query_param()
-    log_action(conn, st.session_state.username, "LOGOUT", "SYSTEM", st.session_state.organization)
-    st.session_state.clear()
-    st.rerun()
+_NAV_SECTIONS = {
+    "master": [
+        {"header": "Master", "items": [
+            {"label": "Overview",      "key": "overview"},
+            {"label": "Organizations", "key": "organizations"},
+            {"label": "Payments",      "key": "payments"},
+            {"label": "Branches",      "key": "branches"},
+            {"label": "Employees",     "key": "employees"},
+            {"label": "Analytics",     "key": "analytics"},
+            {"label": "Settings",      "key": "settings"},
+        ]},
+        {"header": "Account", "items": [
+            {"label": _username,  "key": "__profile__"},
+            {"label": "Logout",   "key": "__logout__"},
+        ]},
+    ],
+    "superadmin": [
+        {"header": "Super Admin", "items": [
+            {"label": "Overview",       "key": "overview"},
+            {"label": "Management",     "key": "management"},
+            {"label": "Analytics",      "key": "analytics"},
+            {"label": "Risk Center",    "key": "risk_center"},
+            {"label": "Attendance",     "key": "attendance"},
+            {"label": "Staff Check In", "key": "staff_check_in"},
+            {"label": "Settings",       "key": "settings"},
+            {"label": "Payments",       "key": "payments"},
+            {"label": "Logs",           "key": "logs"},
+        ]},
+        {"header": "Account", "items": [
+            {"label": _username, "key": "__profile__"},
+            {"label": "Logout",  "key": "__logout__"},
+        ]},
+    ],
+    "admin": [
+        {"header": "Admin", "items": [
+            {"label": "Profile",        "key": "profile"},
+            {"label": "Users",          "key": "users"},
+            {"label": "Schedules",      "key": "schedules"},
+            {"label": "Attendance",     "key": "attendance"},
+            {"label": "Leaves",         "key": "leaves"},
+            {"label": "Alerts",         "key": "alerts"},
+            {"label": "Warnings",       "key": "warnings"},
+            {"label": "Rate",           "key": "rate"},
+            {"label": "My Score",       "key": "my_score"},
+            {"label": "KPI & Service",  "key": "kpi_service"},
+            {"label": "Analytics",      "key": "analytics"},
+            {"label": "Badges",         "key": "badges"},
+            {"label": "Topics",         "key": "topics"},
+            {"label": "Messages",       "key": "messages"},
+            {"label": "Polls",          "key": "polls"},
+            {"label": "Staff Check In", "key": "staff_check_in"},
+            {"label": "Settings",       "key": "settings"},
+        ]},
+        {"header": "Account", "items": [
+            {"label": _username, "key": "__profile__"},
+            {"label": "Logout",  "key": "__logout__"},
+        ]},
+    ],
+    "hr": [
+        {"header": "HR", "items": [
+            {"label": "Overview",        "key": "overview"},
+            {"label": "Leave Desk",      "key": "leave_desk"},
+            {"label": "Discipline",      "key": "discipline"},
+            {"label": "Performance",     "key": "performance"},
+            {"label": "People Changes",  "key": "people_changes"},
+            {"label": "Case Files",      "key": "case_files"},
+            {"label": "Documents",       "key": "documents"},
+            {"label": "Onboarding",      "key": "onboarding"},
+            {"label": "Requests",        "key": "requests"},
+        ]},
+        {"header": "Account", "items": [
+            {"label": _username, "key": "__profile__"},
+            {"label": "Logout",  "key": "__logout__"},
+        ]},
+    ],
+    "employee": [
+        {"header": "Personal", "items": [
+            {"label": "Profile",          "key": "profile"},
+            {"label": "Schedule",         "key": "schedule"},
+            {"label": "Attendance",       "key": "attendance"},
+            {"label": "Leave",            "key": "leave"},
+            {"label": "Notifications",    "key": "notifications"},
+            {"label": "My KPIs",          "key": "my_kpis"},
+            {"label": "My HR Documents",  "key": "hr_documents"},
+            {"label": "My Onboarding",    "key": "onboarding"},
+        ]},
+        {"header": "Engagement", "items": [
+            {"label": "Rate",               "key": "rate"},
+            {"label": "My Score",           "key": "my_score"},
+            {"label": "Analytics",          "key": "analytics"},
+            {"label": "Top Performers",     "key": "top_performers"},
+            {"label": "Badges",             "key": "badges"},
+            {"label": "Polls",              "key": "polls"},
+            {"label": "Message Management", "key": "messages"},
+            {"label": "Settings",           "key": "settings"},
+        ]},
+        {"header": "Account", "items": [
+            {"label": _username, "key": "__profile__"},
+            {"label": "Logout",  "key": "__logout__"},
+        ]},
+    ],
+}
+
+_current_nav_page = st.session_state.get("nav_page", "overview")
+_nav_sections = _NAV_SECTIONS.get(_role, [])
+_nav_html = render_sidebar_nav(_org, _nav_sections, _current_nav_page)
+
+st.sidebar.markdown(_nav_html, unsafe_allow_html=True)
+
+# Logout button (hidden in nav, exposed here for Streamlit interactivity)
+with st.sidebar:
+    if st.button("Logout", key="_sidebar_logout_btn", use_container_width=True):
+        current_token = st.session_state.get("auth_token") or _qp_get_value(st.query_params, "auth")
+        _invalidate_login_session(conn, current_token)
+        _clear_auth_query_param()
+        log_action(conn, st.session_state.username, "LOGOUT", "SYSTEM", st.session_state.organization)
+        st.session_state.clear()
+        st.rerun()
 
 
 # =====================================================
@@ -964,24 +1160,42 @@ if role == "master":
 
 # ================= SUPER ADMIN =================
 elif role == "superadmin":
-    superadmin_nav_items = [
-        "Super Admin",
-        "Attendance Dashboard",
-        "Staff Check In"
+    # 3-tab app strip (above content area)
+    if "sa_tab" not in st.session_state:
+        st.session_state["sa_tab"] = "super_admin"
+
+    SA_TABS = [
+        ("Super Admin",         "super_admin"),
+        ("Attendance Dashboard", "attendance"),
+        ("Staff Check In",      "check_in"),
     ]
-    if is_mobile_device():
-        menu = st.radio("Navigate", superadmin_nav_items, key="superadmin_nav")
-    else:
-        menu = st.sidebar.radio("Navigate", superadmin_nav_items, key="superadmin_nav")
+    strip_html = render_app_tabs_strip(SA_TABS, st.session_state["sa_tab"])
+    st.markdown(strip_html, unsafe_allow_html=True)
 
-    log_navigation_once(conn, menu)
+    # Tab selector (hidden radio drives state)
+    tab_labels = [t[0] for t in SA_TABS]
+    tab_keys   = [t[1] for t in SA_TABS]
+    cur_tab_idx = tab_keys.index(st.session_state["sa_tab"]) if st.session_state["sa_tab"] in tab_keys else 0
+    tab_choice = st.radio(
+        "sa_tab_radio", tab_labels,
+        index=cur_tab_idx,
+        key="sa_tab_radio",
+        horizontal=True,
+        label_visibility="collapsed",
+    )
+    new_tab_key = tab_keys[tab_labels.index(tab_choice)]
+    if new_tab_key != st.session_state["sa_tab"]:
+        st.session_state["sa_tab"] = new_tab_key
+        st.rerun()
 
-    if menu == "Super Admin":
+    log_navigation_once(conn, tab_choice)
+
+    if st.session_state["sa_tab"] == "super_admin":
         super_admin_dashboard = load_dashboard("super_admin")
         if super_admin_dashboard:
             super_admin_dashboard()
 
-    elif menu == "Attendance Dashboard":
+    elif st.session_state["sa_tab"] == "attendance":
         attendance_dashboard = load_dashboard("attendance")
         if attendance_dashboard:
             branch = st.session_state.get("branch") or "Main"
@@ -989,7 +1203,7 @@ elif role == "superadmin":
         else:
             st.error("Attendance module missing")
 
-    elif menu == "Staff Check In":
+    elif st.session_state["sa_tab"] == "check_in":
         kiosk_dashboard = load_dashboard("kiosk")
         if kiosk_dashboard:
             kiosk_dashboard()

@@ -13,7 +13,16 @@ from database.db import (
     get_phone_uniqueness_error,
     DB_PATH as MAIN_DB_PATH,
 )
-from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    render_dashboard_banner,
+    render_topbar,
+    render_note,
+    render_sidebar_nav,
+    render_stat_card,
+    render_subtabs,
+)
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -1272,70 +1281,95 @@ def build_master_advisor_benchmark(conn):
 # ==============================
 def master_admin_dashboard():
 
-    apply_responsive_ui("default")
+    inject_global_css()
 
     conn = get_connection()
     run_migration(conn)
 
-    st.title("Chief Administrator Control Panel")
-    render_dashboard_banner(
-        "System oversight",
-        "Multi-organization control.",
-        "Manage organizations, branches, payments, people, and settings.",
-    )
-
     is_mobile = is_mobile_device()
 
-    def _collapse_master_mobile_nav():
-        if is_mobile:
-            st.session_state["master_nav_open"] = False
+    # ── Nav state ──────────────────────────────────────────────────────────
+    MASTER_PAGES = [
+        ("Overview",       "overview"),
+        ("Organizations",  "organizations"),
+        ("Payments",       "payments"),
+        ("Branches",       "branches"),
+        ("Employees",      "employees"),
+        ("Analytics",      "analytics"),
+        ("Settings",       "settings"),
+    ]
+    if "master_page" not in st.session_state:
+        st.session_state["master_page"] = "overview"
 
-    if "master_nav_open" not in st.session_state:
-        st.session_state["master_nav_open"] = True
+    with st.sidebar:
+        nav_html = render_sidebar_nav(
+            "Team Intelligence",
+            [{"header": "Master", "items": [
+                {"label": label, "key": key} for label, key in MASTER_PAGES
+            ]},
+             {"header": "Account", "items": [
+                {"label": st.session_state.get("username", "master"), "key": "__profile__"},
+                {"label": "Logout", "key": "__logout__"},
+            ]}],
+            st.session_state["master_page"],
+        )
+        st.markdown(nav_html, unsafe_allow_html=True)
+        # Hidden nav radio for interactivity
+        page_labels = [p[0] for p in MASTER_PAGES]
+        page_keys   = [p[1] for p in MASTER_PAGES]
+        cur_idx = page_keys.index(st.session_state["master_page"]) if st.session_state["master_page"] in page_keys else 0
+        nav_choice = st.radio("master_nav", page_labels, index=cur_idx, key="master_nav_radio", label_visibility="collapsed")
+        new_page = page_keys[page_labels.index(nav_choice)]
+        if new_page != st.session_state["master_page"]:
+            st.session_state["master_page"] = new_page
+            st.rerun()
+
+    menu_page = st.session_state["master_page"]
+
+    # Map old emoji menu keys to new page keys for backward compat
+    _legacy_map = {
+        "📊 Overview": "overview", "🏢 Organizations": "organizations",
+        "💰 Payments": "payments", "🌿 Branches": "branches",
+        "👥 Employees": "employees", "📈 Analytics": "analytics", "⚙️ Settings": "settings",
+    }
 
     def nav_selectbox(label, options, key, **kwargs):
-        if is_mobile:
-            return st.selectbox(label, options, key=key, **kwargs)
-        with st.sidebar:
-            return st.selectbox(label, options, key=key, **kwargs)
+        return st.selectbox(label, options, key=key, **kwargs)
 
     def nav_multiselect(label, options, default, key, **kwargs):
-        if is_mobile:
-            return st.multiselect(label, options, default=default, key=key, **kwargs)
-        with st.sidebar:
-            return st.multiselect(label, options, default=default, key=key, **kwargs)
+        return st.multiselect(label, options, default=default, key=key, **kwargs)
 
     def render_table_on_demand(label, data, key, **kwargs):
-        if st.checkbox(f"View {label}", key=f"master_view_{key}", value=False):
+        if st.checkbox(f"Show {label}", key=f"master_view_{key}", value=False):
             st.dataframe(data, **kwargs)
 
-    menu_items = [
-        "📊 Overview",
-        "🏢 Organizations",
-        "💰 Payments",
-        "🌿 Branches",
-        "👥 Employees",
-        "📈 Analytics",
-        "⚙️ Settings",
-    ]
-
-    if is_mobile:
-        if st.button("Change Navigation", key="master_reopen_nav", use_container_width=True):
-            st.session_state["master_nav_open"] = True
-            st.rerun()
-        with st.expander("Navigation", expanded=bool(st.session_state.get("master_nav_open", True))):
-            menu = st.radio("Menu", menu_items, key="master_menu", on_change=_collapse_master_mobile_nav)
-    else:
-        with st.sidebar:
-            st.markdown("### Navigation")
-            menu = st.radio("Menu", menu_items, key="master_menu")
+    # Legacy menu variable for compatibility with existing if/elif blocks below
+    _page_to_legacy = {v: k for k, v in _legacy_map.items()}
+    menu = _page_to_legacy.get(menu_page, "📊 Overview")
 
     # ==========================================================
     # OVERVIEW
     # ==========================================================
     if menu == "📊 Overview":
 
-        st.subheader("📊 System Overview")
+        render_topbar(
+            ["Master", "Overview"],
+            chips=[("Select Range: Last 30d", False), ("master", True)],
+        )
+
+        st.markdown(
+            '<div class="h-row"><h3>Platform overview</h3></div>',
+            unsafe_allow_html=True,
+        )
+        col_export, col_create = st.columns([6, 1])
+        with col_create:
+            st.markdown('<div class="btn-primary-wrap">', unsafe_allow_html=True)
+            if st.button("+ Create Org", key="master_create_org_btn", use_container_width=True):
+                st.session_state["master_show_create_org"] = True
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col_export:
+            if st.button("Export", key="master_export_overview"):
+                pass
 
         orgs = safe_read("SELECT * FROM organizations", conn)
         branches = safe_read("SELECT * FROM branches", conn)
@@ -1343,16 +1377,19 @@ def master_admin_dashboard():
 
         now = datetime.now()
 
-        c1, c2, c3, c4 = st.columns(4)
         total_orgs = len(orgs) if not orgs.empty else 0
         total_branches = len(branches) if not branches.empty else 0
         active_orgs = len(orgs[orgs["status"] == "active"]) if not orgs.empty else 0
         expired_orgs = len(orgs[orgs["status"] != "active"]) if not orgs.empty else 0
+        total_users = len(users) if not users.empty else 0
+        total_admins = len(users[users["role"].isin(["superadmin", "admin"])]) if not users.empty else 0
 
-        c1.metric("🏢 Organizations", total_orgs)
-        c2.metric("🌿 Total Branches", total_branches)
-        c3.metric("🟢 Active Orgs", active_orgs)
-        c4.metric("🔴 Inactive / Expired", expired_orgs)
+        # 4-column stat cards
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(render_stat_card("Active Orgs", active_orgs), unsafe_allow_html=True)
+        c2.markdown(render_stat_card("Suspended", expired_orgs), unsafe_allow_html=True)
+        c3.markdown(render_stat_card("Total Branches", total_branches), unsafe_allow_html=True)
+        c4.markdown(render_stat_card("Total Users", total_users), unsafe_allow_html=True)
         
         with st.expander("🔧 Debug Info (Show if orgs count is 0)", expanded=(total_orgs == 0 and total_branches > 0)):
             st.write("**Raw Database Counts:**")
@@ -1377,27 +1414,48 @@ def master_admin_dashboard():
                 st.error("⚠️ Issue Found: Branches exist but no organizations exist. This suggests branches were created with organization references that no longer exist.")
 
         c5, c6, c7 = st.columns(3)
-        total_users = len(users)
-        total_admins = len(users[users["role"].isin(["superadmin", "admin"])]) if not users.empty else 0
         total_employees = len(users[users["role"] == "employee"]) if not users.empty else 0
 
-        c5.metric("👤 Total Users", total_users)
-        c6.metric("🛡 Admins", total_admins)
-        c7.metric("👷 Employees", total_employees)
+        c5.markdown(render_stat_card("Admins", total_admins), unsafe_allow_html=True)
+        c6.markdown(render_stat_card("Employees", total_employees), unsafe_allow_html=True)
+        c7.markdown(render_stat_card("Total Orgs", total_orgs), unsafe_allow_html=True)
 
-        c8, c9 = st.columns(2)
+        # Charts row
+        ch1, ch2 = st.columns(2)
         male_users = 0
         female_users = 0
         if not users.empty and "gender" in users.columns:
             male_users = int((users["gender"].astype(str).str.lower() == "male").sum())
             female_users = int((users["gender"].astype(str).str.lower() == "female").sum())
-        c8.metric("👨 Male Users", male_users)
-        c9.metric("👩 Female Users", female_users)
 
-        st.divider()
+        with ch1:
+            st.markdown('<div class="lbl-row"><span>Active orgs over time</span></div>', unsafe_allow_html=True)
+            if PLOTLY_AVAILABLE and not orgs.empty and "created_at" in orgs.columns:
+                try:
+                    import plotly.express as px
+                    orgs_ts = orgs.copy()
+                    orgs_ts["created_at"] = pd.to_datetime(orgs_ts["created_at"], errors="coerce")
+                    orgs_ts = orgs_ts.dropna(subset=["created_at"]).sort_values("created_at")
+                    orgs_ts["count"] = range(1, len(orgs_ts) + 1)
+                    fig = px.line(orgs_ts, x="created_at", y="count", template="simple_white",
+                                  labels={"created_at": "", "count": "Orgs"})
+                    fig.update_traces(line_color="#0A0A0A")
+                    fig.update_layout(margin=dict(l=0, r=0, t=0, b=0), height=180)
+                    st.plotly_chart(fig, use_container_width=True)
+                except Exception:
+                    st.markdown('<div class="box-placeholder">Chart · Active orgs over time</div>', unsafe_allow_html=True)
+            else:
+                st.markdown('<div class="box-placeholder">Chart · Active orgs over time</div>', unsafe_allow_html=True)
+
+        with ch2:
+            st.markdown('<div class="lbl-row"><span>Payments collected (KES)</span></div>', unsafe_allow_html=True)
+            st.markdown('<div class="box-placeholder xl">Chart · Payments collected (KES)</div>', unsafe_allow_html=True)
+
+        # Organizations table
+        st.markdown('<div class="lbl-row"><span>Recent organizations</span><a class="small mono" style="color:var(--smoke)">view all →</a></div>', unsafe_allow_html=True)
 
         if orgs.empty:
-            st.info("No organizations yet.")
+            render_note("No organizations yet. Click '+ Create Org' to get started.", kind="info", pin="i")
         else:
             rows = []
             for _, row in orgs.iterrows():
@@ -1426,17 +1484,39 @@ def master_admin_dashboard():
 
             df_summary = pd.DataFrame(rows)
 
-            def color_row(r):
-                d = r["Days Left"]
-                if r["Status"] != "active":
-                    return ["background-color: #ffcccc"] * len(r)
-                if isinstance(d, int) and d <= 7:
-                    return ["background-color: #fff3cd"] * len(r)
-                return [""] * len(r)
-
+            # Wireframe-style table
+            tbl_rows_html = ""
+            for _, trow in df_summary.iterrows():
+                status_chip = (
+                    f'<span class="chip dark">{trow["Status"]}</span>'
+                    if trow["Status"] == "active"
+                    else f'<span class="chip" style="color:#7a2f25;border-color:#f3b9b3;">{trow["Status"]}</span>'
+                )
+                tbl_rows_html += f"""
+                <tr>
+                    <td>{trow["Organization"]}</td>
+                    <td>—</td>
+                    <td>{trow["Branches"]}</td>
+                    <td>{status_chip}</td>
+                    <td><span class="tbl-actions"><a>Edit</a><a>Reset</a><a>Delete</a></span></td>
+                </tr>"""
+            st.markdown(
+                f"""
+                <table class="app-table">
+                    <thead><tr>
+                        <th>Organization</th><th>Plan</th><th>Branches</th>
+                        <th>Status</th><th>Actions</th>
+                    </tr></thead>
+                    <tbody>{tbl_rows_html}</tbody>
+                </table>
+                """,
+                unsafe_allow_html=True,
+            )
+            # Keep exportable version accessible
+            _df_summary_debug = df_summary
             render_table_on_demand(
-                "organization summary table",
-                df_summary.style.apply(color_row, axis=1),
+                "full organization data",
+                df_summary,
                 "overview_org_summary",
                 use_container_width=True,
             )

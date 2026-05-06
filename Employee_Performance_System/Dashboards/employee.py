@@ -4,7 +4,16 @@ import streamlit as st
 import pandas as pd
 from datetime import datetime, date, timedelta
 from database.db import cached_read_sql, get_connection, verify_password, hash_password, execute_write, execute_many_write, is_recent_duplicate_message, get_hr_config, get_kpi_ai_config
-from Dashboards.ui_responsive import apply_responsive_ui, navigation_expander_open_default, render_dashboard_banner
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    navigation_expander_open_default,
+    render_dashboard_banner,
+    render_topbar,
+    render_note,
+    render_sidebar_nav,
+    render_stat_card,
+)
 from Analytics.badges import compute_badges_for_organization, build_holder_badge_map, decorate_username_with_badges
 from Analytics.polls import ensure_poll_tables, get_user_poll_response, get_visible_polls, submit_poll_response
 try:
@@ -201,7 +210,7 @@ def recommendation(score):
 # ==============================
 def employee_dashboard():
 
-    apply_responsive_ui("default")
+    inject_global_css()
 
     conn = get_connection()
     ensure_poll_tables(conn)
@@ -223,10 +232,10 @@ def employee_dashboard():
 
     current_status = str(user_data.iloc[0].get("status", "active") or "active").lower()
     if current_status == "suspended":
-        st.error("🚫 Account Suspended. Contact Admin.")
+        render_note("Account Suspended. Contact your Admin.", kind="err", pin="!")
         return
     if current_status == "probation":
-        st.warning("⚠ Your account is on probation and under management review.")
+        render_note("Your account is on probation and under management review.", kind="info", pin="i")
 
     branch = user_data.iloc[0]["branch"]
     hr_config = get_hr_config(conn, org)
@@ -253,21 +262,12 @@ def employee_dashboard():
     employee_onboarding_enabled = has_hr_coverage and bool(int(hr_config.get("hr_onboarding_enabled", 1) or 0))
     employee_case_updates_enabled = has_hr_coverage and bool(int(hr_config.get("hr_case_files_enabled", 1) or 0))
 
-    st.title("Employee Dashboard")
-    render_dashboard_banner(
-        "Specialist workspace",
-        f"Welcome, {username} !",
-        "Track your schedule, attendance, leave, ratings, and growth.",
-        pills=[
-             f"Organization: {org}",
-        ],
-    )
     show_flash_message()
 
     if hr_mode_enabled and has_hr_coverage:
-        st.caption(f"HR support is active for you via {hr_scope_label}. Any employee-safe HR documents, onboarding tasks, and updates will appear in this dashboard only for your profile.")
+        render_note(f"HR support active via {hr_scope_label}.", kind="info", pin="i")
     elif hr_mode_enabled and not has_hr_coverage:
-        st.caption("HR mode is enabled for the organization, but there is currently no HR partner assigned to your branch scope yet.")
+        render_note("HR mode is ON for the org but no HR partner is assigned to your branch yet.", kind="info", pin="i")
 
     # ==============================
     # NOTIFICATION COUNT
@@ -280,58 +280,52 @@ def employee_dashboard():
 
     is_mobile = is_mobile_device()
 
-    def _collapse_employee_mobile_nav():
-        if is_mobile:
-            st.session_state["employee_nav_open"] = False
+    # ── Build page items list (HR-conditional) ─────────────────────────
+    PERSONAL_ITEMS = ["Profile", "Schedule", "Attendance", "Leave", "Notifications", "My KPIs"]
+    if employee_docs_enabled:
+        PERSONAL_ITEMS.append("My HR Documents")
+    if employee_onboarding_enabled:
+        PERSONAL_ITEMS.append("My Onboarding")
+    ENGAGEMENT_ITEMS = ["Rate", "My Score", "Analytics", "Top Performers", "Badges", "Polls", "Message Management", "Settings"]
+    page_items = PERSONAL_ITEMS + ENGAGEMENT_ITEMS
 
-    if "employee_nav_open" not in st.session_state:
-        st.session_state["employee_nav_open"] = True
+    if "employee_menu" not in st.session_state:
+        st.session_state["employee_menu"] = "Profile"
+
+    with st.sidebar:
+        date_range = st.date_input(
+            "Date Range",
+            value=(date.today(), date.today()),
+            key="employee_date_range",
+        )
+        notif_badge = notif_count if notif_count > 0 else None
+        nav_html = render_sidebar_nav(
+            f"{org}",
+            [
+                {"header": "Personal", "items": [
+                    {"label": m, "key": m, "badge": (notif_badge if m == "Notifications" else None)}
+                    for m in PERSONAL_ITEMS
+                ]},
+                {"header": "Engagement", "items": [
+                    {"label": m, "key": m} for m in ENGAGEMENT_ITEMS
+                ]},
+                {"header": "Account", "items": [
+                    {"label": username, "key": "__profile__"},
+                ]},
+            ],
+            st.session_state["employee_menu"],
+        )
+        st.markdown(nav_html, unsafe_allow_html=True)
+        cur_idx = page_items.index(st.session_state["employee_menu"]) if st.session_state["employee_menu"] in page_items else 0
+        nav_choice = st.radio("emp_nav", page_items, index=cur_idx, key="employee_nav_radio", label_visibility="collapsed")
+        if nav_choice != st.session_state["employee_menu"]:
+            st.session_state["employee_menu"] = nav_choice
+            st.rerun()
+
+    page = st.session_state["employee_menu"]
 
     def nav_selectbox(label, options, key, **kwargs):
-        if is_mobile:
-            return st.selectbox(label, options, key=key, **kwargs)
-        with st.sidebar:
-            return st.selectbox(label, options, key=key, **kwargs)
-
-    page_items = [
-        "Profile", "Schedule", "Attendance", "Leave", "Notifications", "My KPIs"
-    ]
-    if employee_docs_enabled:
-        page_items.append("My HR Documents")
-    if employee_onboarding_enabled:
-        page_items.append("My Onboarding")
-    page_items.extend([
-        "Rate", "My Score",
-        "Analytics", "Top Performers",
-        "🏅 Badges", "Polls", "Message Management", "Settings"
-    ])
-
-    if is_mobile:
-        if st.button("Change Menu / Filter", key="employee_reopen_nav", use_container_width=True):
-            st.session_state["employee_nav_open"] = True
-            st.rerun()
-        with st.expander("Navigation and Filter", expanded=bool(st.session_state.get("employee_nav_open", True))):
-            date_range = st.date_input(
-                "Select Range",
-                value=(date.today(), date.today()),
-                key="employee_date_range",
-                on_change=_collapse_employee_mobile_nav,
-            )
-            page = st.radio(
-                f"Menu 🔔({notif_count})",
-                page_items,
-                key="employee_menu",
-                on_change=_collapse_employee_mobile_nav,
-            )
-    else:
-        with st.sidebar:
-            st.markdown("### Navigation")
-            date_range = st.date_input(
-                "Select Range",
-                value=(date.today(), date.today()),
-                key="employee_date_range",
-            )
-            page = st.radio(f"Menu 🔔({notif_count})", page_items, key="employee_menu")
+        return st.selectbox(label, options, key=key, **kwargs)
 
     if isinstance(date_range, tuple):
         start_date, end_date = date_range
@@ -357,6 +351,11 @@ def employee_dashboard():
     # PROFILE
     # =====================================================
     if page == "Profile":
+        render_topbar(
+            [org, "Employee", "Profile"],
+            chips=[(f"Branch: {branch}", False), ("employee", True)],
+        )
+        st.markdown('<div class="h-row"><h3>My profile</h3></div>', unsafe_allow_html=True)
         manager_row = pd.read_sql(
             """
             SELECT username, role FROM users

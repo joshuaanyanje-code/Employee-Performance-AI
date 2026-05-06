@@ -1,0 +1,1127 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<title>Team Intelligence — Wireframes</title>
+<meta name="viewport" content="width=1440"/>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg:#f3f4f6;
+    --paper:#ffffff;
+    --ink:#1f2328;
+    --ink-2:#4b5563;
+    --muted:#7a818b;
+    --line:#d6d8dd;
+    --line-2:#e6e7ea;
+    --line-3:#eef0f2;
+    --fill:#ececef;
+    --fill-2:#f5f6f7;
+    --accent:#1f2328;
+    --note-bg:#fffbe8;
+    --note-bd:#f0e29e;
+    --err-bg:#fdecea;
+    --err-bd:#f3b9b3;
+    --ok-bg:#eaf6ee;
+    --ok-bd:#bcd9c4;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--ink);font-family:'Inter',ui-sans-serif,system-ui,sans-serif;-webkit-font-smoothing:antialiased}
+  .mono{font-family:'JetBrains Mono',ui-monospace,Menlo,monospace}
+  a{color:inherit}
+
+  /* ---------- Document layout ---------- */
+  .doc{display:grid;grid-template-columns:240px 1fr;min-height:100vh}
+  .index{position:sticky;top:0;align-self:start;height:100vh;overflow-y:auto;background:#fff;border-right:1px solid var(--line);padding:18px 14px}
+  .idx-title{font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);padding:6px 8px}
+  .idx-group{margin-top:6px}
+  .idx-group .lbl{font-size:10.5px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted);padding:8px 8px 4px}
+  .idx a{display:block;text-decoration:none;font-size:12.5px;color:var(--ink-2);padding:6px 8px;border-radius:6px;font-weight:500}
+  .idx a:hover{background:var(--fill-2);color:var(--ink)}
+  .idx a.on{background:#222;color:#fff}
+  .idx-foot{margin-top:12px;padding:10px 8px;border-top:1px dashed var(--line);font-size:11px;color:var(--muted);font-family:'JetBrains Mono',monospace}
+
+  .canvas{padding:32px 36px 80px;max-width:1180px}
+  .doc-head{margin-bottom:28px}
+  .doc-head h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.01em}
+  .doc-head p{margin:6px 0 0;color:var(--ink-2);font-size:13.5px;max-width:760px}
+  .doc-head .meta{display:flex;gap:14px;margin-top:12px;font-size:11.5px;color:var(--muted);font-family:'JetBrains Mono',monospace;flex-wrap:wrap}
+  .doc-head .meta span{padding:3px 8px;border:1px dashed var(--line);border-radius:4px}
+
+  /* Section */
+  section.frame{margin-top:36px}
+  .sec-head{display:flex;align-items:baseline;gap:10px;margin-bottom:8px;border-bottom:1px solid var(--line);padding-bottom:8px}
+  .sec-no{font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:11.5px;letter-spacing:.06em}
+  .sec-head h2{margin:0;font-size:15px;font-weight:700;letter-spacing:-.005em}
+  .sec-head .tags{margin-left:auto;display:flex;gap:6px;flex-wrap:wrap}
+  .tag{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:2px 7px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:#fff}
+  .tag.role{background:#222;color:#fff;border-color:#222}
+
+  .caption{font-size:12.5px;color:var(--ink-2);margin:6px 0 14px;max-width:780px}
+
+  /* Wireframe canvas (the screen frame itself) */
+  .screen{background:#fff;border:1px solid var(--line);border-radius:6px;padding:0;overflow:hidden;position:relative}
+  .screen-bar{display:flex;align-items:center;gap:8px;padding:8px 12px;border-bottom:1px solid var(--line-2);background:var(--fill-2);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+  .screen-bar .dots{display:flex;gap:4px}
+  .screen-bar .dots i{width:9px;height:9px;border-radius:50%;border:1px solid var(--line);display:block}
+  .screen-bar .url{flex:1;background:#fff;border:1px solid var(--line-2);padding:3px 10px;border-radius:3px;color:var(--ink-2);font-size:10.5px}
+  .screen-bar .vp{font-size:10.5px;color:var(--muted)}
+
+  /* Generic boxy primitives */
+  .box{border:1.5px dashed var(--line);background:repeating-linear-gradient(135deg,#f7f8f9 0 8px,#ffffff 8px 16px);color:var(--muted);font-family:'JetBrains Mono',monospace;font-size:11.5px;display:flex;align-items:center;justify-content:center;text-align:center;padding:14px;border-radius:4px;min-height:60px}
+  .box.solid{background:var(--fill);border-style:solid;border-color:var(--line)}
+  .box.text{background:#fff;border:1px solid var(--line-2);color:var(--ink-2);font-family:'Inter',sans-serif;justify-content:flex-start;align-items:flex-start;text-align:left;padding:12px 14px;font-size:12.5px}
+  .box.h{min-height:30px}
+  .box.xl{min-height:200px}
+  .lbl-row{display:flex;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);margin:0 0 4px;text-transform:uppercase;letter-spacing:.06em}
+
+  /* Sidebar mock */
+  .app{display:grid;grid-template-columns:220px 1fr;min-height:560px}
+  .app .nav{border-right:1px solid var(--line-2);padding:14px 10px;background:var(--fill-2)}
+  .nav-brand{display:flex;align-items:center;gap:8px;padding:6px 8px 14px;border-bottom:1px dashed var(--line)}
+  .nav-brand .sq{width:22px;height:22px;background:#222;border-radius:3px}
+  .nav-brand b{font-size:12.5px}
+  .nav-section{margin-top:12px}
+  .nav-section .h{font-size:10px;text-transform:uppercase;letter-spacing:.1em;color:var(--muted);padding:6px 8px;font-weight:600}
+  .nav-item{display:flex;align-items:center;justify-content:space-between;padding:7px 10px;border-radius:4px;font-size:12px;color:var(--ink-2);cursor:default}
+  .nav-item .l{display:flex;align-items:center;gap:8px}
+  .nav-item .ic{width:12px;height:12px;border:1.5px solid var(--ink-2);border-radius:2px;flex-shrink:0}
+  .nav-item.on{background:#222;color:#fff}
+  .nav-item.on .ic{border-color:#fff}
+  .nav-item .badge{background:#222;color:#fff;font-family:'JetBrains Mono',monospace;font-size:9.5px;padding:1px 5px;border-radius:99px}
+  .nav-item.on .badge{background:#fff;color:#222}
+
+  .app .main{padding:16px 18px;display:flex;flex-direction:column;gap:12px;background:#fff;min-width:0}
+  .app .topbar{display:flex;align-items:center;gap:8px;padding-bottom:10px;border-bottom:1px solid var(--line-2);font-family:'JetBrains Mono',monospace;font-size:11px;color:var(--muted)}
+  .app .topbar .right{margin-left:auto;display:flex;gap:6px}
+  .chip{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:3px 8px;border:1px solid var(--line);border-radius:3px;color:var(--ink-2);background:#fff}
+  .chip.dark{background:#222;color:#fff;border-color:#222}
+  .crumbs{font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted)}
+  .crumbs b{color:var(--ink-2);font-weight:500}
+  .h-row{display:flex;justify-content:space-between;align-items:center}
+  .h-row h3{margin:0;font-size:14px;font-weight:600}
+  .btn{font-family:'JetBrains Mono',monospace;font-size:10.5px;padding:5px 10px;border:1px solid var(--ink);border-radius:3px;background:#fff;color:var(--ink);text-transform:uppercase;letter-spacing:.04em}
+  .btn.primary{background:#222;color:#fff;border-color:#222}
+  .btn.ghost{border-color:var(--line);color:var(--ink-2)}
+
+  /* Sub-tabs */
+  .subtabs{display:flex;gap:2px;border-bottom:1px solid var(--line-2);margin-top:-4px}
+  .subtabs .t{padding:7px 12px;font-size:11.5px;color:var(--muted);border-bottom:2px solid transparent;font-family:'JetBrains Mono',monospace;text-transform:uppercase;letter-spacing:.04em}
+  .subtabs .t.on{color:var(--ink);border-bottom-color:var(--ink)}
+
+  /* Grids inside main */
+  .grid{display:grid;gap:10px}
+  .g2{grid-template-columns:1fr 1fr}
+  .g3{grid-template-columns:1fr 1fr 1fr}
+  .g4{grid-template-columns:repeat(4,1fr)}
+
+  /* Table placeholder */
+  .table{border:1px solid var(--line-2);border-radius:4px;overflow:hidden;background:#fff;width:100%}
+  .table .thead{display:grid;grid-template-columns:var(--cols, 1fr 1fr 1fr 1fr);gap:0;background:var(--fill-2);font-family:'JetBrains Mono',monospace;font-size:10.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.06em}
+  .table .thead div{padding:8px 12px;border-right:1px dashed var(--line-2)}
+  .table .thead div:last-child{border-right:none}
+  .table .tr{display:grid;grid-template-columns:var(--cols,1fr 1fr 1fr 1fr);border-top:1px solid var(--line-2)}
+  .table .tr div{padding:9px 12px;font-size:11.5px;color:var(--ink-2);border-right:1px dashed var(--line-3)}
+  .table .tr div:last-child{border-right:none}
+  .skel{height:9px;background:var(--fill);border-radius:2px;width:80%}
+  .skel.s{width:50%}
+  .skel.l{width:95%}
+
+  /* Annotation note */
+  .note{display:flex;gap:10px;background:var(--note-bg);border:1px solid var(--note-bd);border-radius:4px;padding:10px 12px;font-size:11.5px;color:#5b4a00;font-family:'JetBrains Mono',monospace;line-height:1.55}
+  .note .pin{width:18px;height:18px;border-radius:50%;background:#fff3a8;border:1px solid #d6c351;display:grid;place-items:center;flex-shrink:0;font-size:10px;color:#5b4a00;font-weight:700}
+  .note.err{background:var(--err-bg);border-color:var(--err-bd);color:#7a2f25}
+  .note.err .pin{background:#fadad6;border-color:#d8807a;color:#7a2f25}
+  .note.ok{background:var(--ok-bg);border-color:var(--ok-bd);color:#23532f}
+  .note.ok .pin{background:#cdebd5;border-color:#7faf8b;color:#23532f}
+  .annotations{display:flex;flex-direction:column;gap:6px;margin-top:12px}
+
+  /* Sitemap */
+  .sitemap{background:#fff;border:1px solid var(--line);border-radius:6px;padding:18px 20px}
+  .sm-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px}
+  .sm-card{border:1px dashed var(--line);border-radius:5px;padding:12px}
+  .sm-card .role{display:flex;align-items:center;justify-content:space-between;font-family:'JetBrains Mono',monospace;font-size:11px;text-transform:uppercase;letter-spacing:.08em;color:var(--ink);margin-bottom:8px}
+  .sm-card .role .pill{background:#222;color:#fff;font-size:9.5px;padding:2px 6px;border-radius:99px}
+  .sm-card ul{list-style:none;padding:0;margin:0;display:flex;flex-direction:column;gap:3px}
+  .sm-card li{font-size:11.5px;color:var(--ink-2);padding:3px 0;border-bottom:1px dotted var(--line-2)}
+  .sm-card li:last-child{border-bottom:none}
+  .sm-card li .sub{display:block;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);margin-top:2px;padding-left:10px}
+
+  /* Login layout */
+  .login-frame{display:grid;grid-template-columns:1fr 380px;min-height:520px}
+  .login-frame .l{padding:32px;border-right:1px dashed var(--line);display:flex;flex-direction:column;gap:14px;background:var(--fill-2)}
+  .login-frame .r{padding:34px 28px;display:flex;flex-direction:column;gap:12px}
+  .field{display:flex;flex-direction:column;gap:5px}
+  .field label{font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:.08em}
+  .field .input{height:34px;border:1px solid var(--line);border-radius:3px;background:#fff;display:flex;align-items:center;padding:0 10px;color:var(--muted);font-size:12px;font-family:'JetBrains Mono',monospace}
+
+  /* Mobile mock */
+  .mobile{width:280px;border:1px solid var(--line);border-radius:18px;overflow:hidden;background:#fff;flex-shrink:0}
+  .mobile .topm{height:24px;background:var(--fill);display:flex;align-items:center;justify-content:center;font-family:'JetBrains Mono',monospace;font-size:10px;color:var(--muted)}
+  .mobile-row{display:flex;gap:18px;align-items:flex-start;flex-wrap:wrap}
+
+  /* Kiosk */
+  .kiosk{background:#fff;border:1px solid var(--line);border-radius:6px;overflow:hidden}
+  .kiosk-bar{display:flex;justify-content:space-between;align-items:center;padding:10px 16px;background:#222;color:#fff;font-family:'JetBrains Mono',monospace;font-size:11px}
+  .kiosk-body{padding:36px;min-height:480px;background:repeating-linear-gradient(45deg,#fbfbfc 0 10px,#fff 10px 20px)}
+  .kiosk-hero{text-align:center;padding:24px 0 30px}
+  .kiosk-hero h1{font-size:30px;margin:0;letter-spacing:-.01em}
+  .kiosk-hero p{margin:6px 0 4px;color:var(--ink-2);font-size:13.5px}
+  .kiosk-hero .branch{font-family:'JetBrains Mono',monospace;color:var(--muted);font-size:11.5px;margin-top:8px}
+  .kiosk-cta{display:grid;grid-template-columns:1fr 1fr;gap:18px;max-width:720px;margin:0 auto}
+  .kiosk-btn{border:2px solid var(--ink);border-radius:8px;padding:34px 18px;text-align:center;font-size:18px;font-weight:600}
+  .kiosk-btn.primary{background:#222;color:#fff}
+  .kiosk-btn .desc{display:block;font-weight:400;font-size:12px;color:var(--muted);margin-top:6px;font-family:'JetBrains Mono',monospace}
+  .kiosk-btn.primary .desc{color:#cfcfcf}
+
+  .stars{display:flex;gap:6px;font-size:22px;color:var(--muted)}
+  .pin-pad{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;max-width:280px;margin:0 auto}
+  .pin-pad .k{border:1px solid var(--line);border-radius:6px;height:54px;display:grid;place-items:center;font-size:20px;font-weight:600;background:#fff}
+  .pin-dots{display:flex;gap:10px;justify-content:center;margin:14px 0}
+  .pin-dots i{width:14px;height:14px;border-radius:50%;border:1.5px solid var(--ink);background:#fff}
+  .pin-dots i.f{background:var(--ink)}
+
+  /* Locked banner */
+  .locked{display:flex;align-items:center;gap:10px;padding:8px 14px;background:#fff5d6;border:1px dashed #d6b13d;border-radius:4px;font-family:'JetBrains Mono',monospace;font-size:11px;color:#6e5400}
+
+  /* Helpers */
+  .row{display:flex;gap:10px;flex-wrap:wrap}
+  .col{display:flex;flex-direction:column;gap:8px}
+  .small{font-size:11px;color:var(--muted)}
+  hr.dashed{border:none;border-top:1px dashed var(--line);margin:0}
+  
+  .arrow{font-family:'JetBrains Mono',monospace;color:var(--muted)}
+</style>
+</head>
+<body>
+
+<div class="doc">
+
+  <!-- ============== INDEX ============== -->
+  <aside class="index" id="idx">
+    <div class="idx-title">Team Intelligence</div>
+    <div class="small mono" style="padding:2px 8px;color:var(--muted)">Wireframes · v0.1</div>
+
+    <div class="idx-group">
+      <div class="lbl">Overview</div>
+      <a href="#sitemap">Sitemap</a>
+    </div>
+    <div class="idx-group">
+      <div class="lbl">Entry</div>
+      <a href="#login">Login (Desktop + Mobile)</a>
+      <a href="#login-states">Login — Error states</a>
+    </div>
+    <div class="idx-group">
+      <div class="lbl">Roles</div>
+      <a href="#master">Master · Overview</a>
+      <a href="#superadmin">Superadmin · Overview</a>
+      <a href="#sa-users">Superadmin · Mgmt → Users</a>
+      <a href="#admin">Admin · Overview</a>
+      <a href="#admin-attendance">Admin · Attendance</a>
+      <a href="#hr">HR · Overview</a>
+      <a href="#employee">Employee · Overview</a>
+    </div>
+    <div class="idx-group">
+      <div class="lbl">Kiosk</div>
+      <a href="#kiosk-home">Home</a>
+      <a href="#kiosk-guest">Guest Experience</a>
+      <a href="#kiosk-list">Staff Check-In · List</a>
+      <a href="#kiosk-pin">Staff Check-In · PIN</a>
+      <a href="#kiosk-verified">Staff Check-In · Verified</a>
+    </div>
+    <div class="idx-foot">
+      Mid-fi · Neutral grays<br/>
+      No final branding<br/>
+      Last update: WIP
+    </div>
+  </aside>
+
+  <!-- ============== CANVAS ============== -->
+  <main class="canvas">
+    <header class="doc-head">
+      <h1>Team Intelligence — Wireframes</h1>
+      <p>Information architecture, navigation patterns, and primary actions for an EPS workforce/HR app. Five authenticated roles plus an unauthenticated kiosk mode. Currency context: Kenya (KES, M-Pesa). Output is mid-fi: gray boxes, real placeholder copy from spec, light annotations. No final branding.</p>
+      <div class="meta">
+        <span>roles: master · superadmin · admin · hr · employee</span>
+        <span>kiosk: ?kiosk=&lt;branch&gt;&amp;org=&lt;org&gt;</span>
+        <span>session: ?auth=&lt;token&gt;</span>
+        <span>currency: KES · M-Pesa</span>
+      </div>
+    </header>
+
+    <!-- ============== SITEMAP ============== -->
+    <section class="frame" id="sitemap">
+      <div class="sec-head">
+        <span class="sec-no">00</span>
+        <h2>Sitemap — All roles + Kiosk</h2>
+        <div class="tags"><span class="tag">mental model</span><span class="tag">IA</span></div>
+      </div>
+      <p class="caption">First-level menu items per role, with key sub-areas. Boxes only show areas explicitly named in the spec.</p>
+
+      <div class="sitemap">
+        <!-- Entry -->
+        <div style="margin-bottom:14px">
+          <div class="lbl-row"><span>Entry points</span><span>unauthenticated</span></div>
+          <div class="row">
+            <div class="sm-card" style="flex:1">
+              <div class="role">Login <span class="pill">/login</span></div>
+              <ul>
+                <li>Username · Password</li>
+                <li>Organization picker (when username spans multiple orgs)</li>
+                <li><span class="sub">URL: ?auth=&lt;token&gt; for session restore</span></li>
+              </ul>
+            </div>
+            <div class="sm-card" style="flex:1">
+              <div class="role">Kiosk <span class="pill">/kiosk</span></div>
+              <ul>
+                <li>Home → Guest Experience · Staff Check-In</li>
+                <li>Locked to first branch on the device</li>
+                <li><span class="sub">URL: ?kiosk=&lt;branch&gt;&amp;org=&lt;org&gt;</span></li>
+              </ul>
+            </div>
+          </div>
+        </div>
+
+        <hr class="dashed" style="margin:14px 0"/>
+
+        <div class="lbl-row"><span>Authenticated roles</span><span>per-role shell + first-level nav</span></div>
+        <div class="sm-grid">
+
+          <div class="sm-card">
+            <div class="role">Master <span class="pill">platform</span></div>
+            <ul>
+              <li>Overview</li>
+              <li>Organizations <span class="sub">list · create · edit · delete · reset password</span></li>
+              <li>Payments <span class="sub">history · requests · manual · pricing · health/shutoff</span></li>
+              <li>Branches</li>
+              <li>Employees</li>
+              <li>Analytics</li>
+              <li>Settings</li>
+            </ul>
+          </div>
+
+          <div class="sm-card">
+            <div class="role">Superadmin <span class="pill">org-level</span></div>
+            <ul>
+              <li><b>App tabs:</b> Super Admin · Attendance Dashboard · Staff Check In</li>
+              <li>Overview</li>
+              <li>Management <span class="sub">Users · Branches · Operations</span></li>
+              <li>Analytics <span class="sub">Performance · Intelligence · Demographics · Guest Exp · KPI &amp; Service AI</span></li>
+              <li>Risk Center <span class="sub">Alerts · Warnings</span></li>
+              <li>Attendance · Staff Check In · Settings · Payments · Logs</li>
+              <li><span class="sub">Filter: Branch View = All / one</span></li>
+            </ul>
+          </div>
+
+          <div class="sm-card">
+            <div class="role">Admin <span class="pill">branch</span></div>
+            <ul>
+              <li>Profile · Users · Schedules · Attendance</li>
+              <li>Leaves <span class="sub">Request My Leave · Branch Leave Requests</span></li>
+              <li>Alerts · Warnings · Rate · My Score · KPI &amp; Service</li>
+              <li>Analytics · Badges</li>
+              <li>Topics <span class="sub">Add · Edit · Delete</span></li>
+              <li>Messages · Polls <span class="sub">Create · Manage · Results</span></li>
+              <li>Staff Check In <span class="sub">Create Kiosk · Manage Kiosks</span></li>
+              <li>Settings <span class="sub">HR settings can hide Warnings/Rate</span></li>
+            </ul>
+          </div>
+
+          <div class="sm-card">
+            <div class="role">HR <span class="pill">conditional</span></div>
+            <ul>
+              <li>Overview</li>
+              <li>Leave Desk · Discipline · Performance</li>
+              <li>People Changes · Case Files · Documents</li>
+              <li>Onboarding · Requests</li>
+              <li><span class="sub">HR Scope: All / one branch (or locked)</span></li>
+              <li><span class="sub">Superadmin = final approver</span></li>
+            </ul>
+          </div>
+
+          <div class="sm-card">
+            <div class="role">Employee <span class="pill">self-serve</span></div>
+            <ul>
+              <li>Profile · Schedule · Attendance · Leave</li>
+              <li>Notifications <span class="sub">unread badge</span></li>
+              <li>My KPIs</li>
+              <li>My HR Documents · My Onboarding <span class="sub">if HR enabled</span></li>
+              <li>Rate · My Score · Analytics</li>
+              <li>Top Performers · Badges · Polls</li>
+              <li>Message Management · Settings</li>
+            </ul>
+          </div>
+
+          <div class="sm-card">
+            <div class="role">Kiosk states <span class="pill">unauth</span></div>
+            <ul>
+              <li>Home (org · branch · manager · 2 CTAs)</li>
+              <li>Guest Experience <span class="sub">target · stars · message · optional name</span></li>
+              <li>Staff Check-In: list → PIN/password → verified</li>
+              <li>Verified: clock in/out · photo · lateness req · next user</li>
+              <li><span class="sub">Device locked to assigned branch</span></li>
+            </ul>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== LOGIN ============== -->
+    <section class="frame" id="login">
+      <div class="sec-head">
+        <span class="sec-no">01</span>
+        <h2>Login — Desktop + Mobile</h2>
+        <div class="tags"><span class="tag">entry</span><span class="tag">unauth</span></div>
+      </div>
+      <p class="caption">Username + password. If the same username exists in multiple orgs, an Organization dropdown appears. Primary action: Login.</p>
+
+      <div class="mobile-row">
+        <div class="screen" style="flex:1;min-width:520px">
+          <div class="screen-bar">
+            <div class="dots"><i></i><i></i><i></i></div>
+            <div class="url">team-intelligence.app/login</div>
+            <div class="vp">1440 × 900</div>
+          </div>
+          <div class="login-frame">
+            <div class="l">
+              <div class="box solid h" style="height:32px;width:160px">App logomark / wordmark</div>
+              <div class="box xl">Marketing / illustration placeholder · do not design final</div>
+              <div class="small mono">Neutral context panel — replaced later by brand visual.</div>
+            </div>
+            <div class="r">
+              <div class="lbl-row"><span>sign in</span><span>v0.1</span></div>
+              <h3 style="margin:0;font-size:18px;font-weight:600">Sign in to Team Intelligence</h3>
+              <p class="small" style="margin:0">Use your work credentials. Contact your administrator if you can't sign in.</p>
+              <div class="field"><label>Username</label><div class="input">jdoe</div></div>
+              <div class="field"><label>Password</label><div class="input">••••••••</div></div>
+              <div class="field"><label>Organization <span style="text-transform:none;color:var(--muted)">(if multiple)</span></label><div class="input">Acme Holdings ▾</div></div>
+              <button class="btn primary" style="height:36px;font-size:11px;margin-top:6px">Login →</button>
+              <a class="small" style="text-align:center;color:var(--muted);text-decoration:none;margin-top:4px">Forgot password?</a>
+            </div>
+          </div>
+        </div>
+
+        <div class="mobile">
+          <div class="topm">9:41 ·  ·  ·  </div>
+          <div style="padding:18px 16px;display:flex;flex-direction:column;gap:10px">
+            <div class="box solid h" style="height:28px;width:120px">Logo</div>
+            <h3 style="margin:6px 0 0;font-size:15px">Sign in</h3>
+            <div class="field"><label>Username</label><div class="input">jdoe</div></div>
+            <div class="field"><label>Password</label><div class="input">••••••••</div></div>
+            <div class="field"><label>Organization</label><div class="input">Acme Holdings ▾</div></div>
+            <button class="btn primary" style="height:36px;margin-top:6px">Login</button>
+            <a class="small" style="text-align:center;color:var(--muted);margin-top:2px">Forgot password?</a>
+          </div>
+        </div>
+      </div>
+
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>Organization dropdown <b>only renders</b> when the username resolves to more than one org. Otherwise the field is hidden and the user is bound to their single org.</div></div>
+        <div class="note"><span class="pin">2</span><div>If <span style="font-weight:600">?auth=&lt;token&gt;</span> is present in the URL, skip this form and resume session. Show a subtle "Restoring session…" placeholder for 1–2s.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== LOGIN STATES ============== -->
+    <section class="frame" id="login-states">
+      <div class="sec-head">
+        <span class="sec-no">01a</span>
+        <h2>Login — Error & empty states</h2>
+        <div class="tags"><span class="tag">states</span></div>
+      </div>
+      <div class="grid g3">
+        <div class="screen">
+          <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/login (wrong credentials)</div></div>
+          <div style="padding:18px;display:flex;flex-direction:column;gap:8px">
+            <div class="lbl-row"><span>state · error</span><span>auth-failed</span></div>
+            <div class="field"><label>Username</label><div class="input" style="border-color:#c66">jdoe</div></div>
+            <div class="field"><label>Password</label><div class="input" style="border-color:#c66">••••••</div></div>
+            <div class="note err"><span class="pin">!</span><div>Username or password is incorrect. After 5 failed attempts, account is locked for 15 min.</div></div>
+            <button class="btn primary" style="height:34px">Login</button>
+          </div>
+        </div>
+        <div class="screen">
+          <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/login (org suspended)</div></div>
+          <div style="padding:18px;display:flex;flex-direction:column;gap:8px">
+            <div class="lbl-row"><span>state · blocked</span><span>org-suspended</span></div>
+            <div class="box xl" style="min-height:120px">Suspended state hero · large icon placeholder</div>
+            <div class="note err"><span class="pin">!</span><div><b>Organization suspended.</b> Subscription payment is overdue. Master admin must record payment or send M-Pesa prompt to re-enable.</div></div>
+            <button class="btn ghost" style="height:32px">Contact support</button>
+          </div>
+        </div>
+        <div class="screen">
+          <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/login (no branches)</div></div>
+          <div style="padding:18px;display:flex;flex-direction:column;gap:8px">
+            <div class="lbl-row"><span>state · empty</span><span>no-branches</span></div>
+            <div class="box xl" style="min-height:120px">Empty illustration placeholder</div>
+            <div class="note"><span class="pin">i</span><div>Login succeeds but org has zero branches. Redirect superadmin to <b>Management → Branches → Create branch</b>. Block other roles with explanatory empty state.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== MASTER ============== -->
+    <section class="frame" id="master">
+      <div class="sec-head">
+        <span class="sec-no">02</span>
+        <h2>Master — Chief Administrator Control Panel</h2>
+        <div class="tags"><span class="tag role">role · master</span><span class="tag">platform</span></div>
+      </div>
+      <p class="caption">Cross-organization platform owner. Manages orgs, branches, payments, pricing, and platform-wide analytics.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/master/overview</div><div class="vp">1440</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Team Intelligence</b></div>
+            <div class="nav-section">
+              <div class="h">Master</div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Overview</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Organizations</span><span class="badge">14</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Payments</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Branches</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Employees</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+            </div>
+            <div class="nav-section">
+              <div class="h">Account</div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>master@platform</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Logout</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Master <span class="arrow">/</span> <b>Overview</b></span>
+              <div class="right"><span class="chip">Select Range: Last 30d</span><span class="chip dark">master</span></div>
+            </div>
+            <div class="h-row"><h3>Platform overview</h3><div class="row"><button class="btn ghost">Export</button><button class="btn primary">+ Create Org</button></div></div>
+            <div class="grid g4">
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Active orgs</span><span style="font-size:22px;font-weight:600;color:var(--ink)">14</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Suspended</span><span style="font-size:22px;font-weight:600;color:var(--ink)">2</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">MRR (KES)</span><span style="font-size:22px;font-weight:600;color:var(--ink)">412k</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Pending payments</span><span style="font-size:22px;font-weight:600;color:var(--ink)">3</span></div>
+            </div>
+            <div class="grid g2">
+              <div class="box xl">Chart placeholder · Active orgs over time</div>
+              <div class="box xl">Chart placeholder · Payments collected (KES)</div>
+            </div>
+            <div class="lbl-row"><span>Recent organizations</span><a class="small mono" style="color:var(--muted);text-decoration:none">view all →</a></div>
+            <div class="table" style="--cols:2fr 1fr 1fr 1fr 1fr">
+              <div class="thead"><div>Organization</div><div>Plan</div><div>Branches</div><div>Status</div><div>Actions</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Reset · Delete</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Reset · Delete</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Reset · Delete</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>Payments tab contains: history, requests, manual recording, pricing config, <b>org health/shutoff</b>. M-Pesa prompt is a stubbed action only.</div></div>
+        <div class="note"><span class="pin">2</span><div>Reset password is a row-level action on Organizations table — confirm modal, audit-logged.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== SUPERADMIN ============== -->
+    <section class="frame" id="superadmin">
+      <div class="sec-head">
+        <span class="sec-no">03</span>
+        <h2>Superadmin — Managing Director (org-level)</h2>
+        <div class="tags"><span class="tag role">role · superadmin</span><span class="tag">org</span></div>
+      </div>
+      <p class="caption">Three app-level tabs in the header: <b>Super Admin</b> · Attendance Dashboard · Staff Check In. Branch View filter is persistent.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/org/acme/super-admin</div><div class="vp">1440</div></div>
+        <!-- App-level tabs -->
+        <div style="display:flex;gap:0;border-bottom:1px solid var(--line-2);padding:0 16px;background:var(--fill-2)">
+          <div class="subtabs" style="border:none;margin:0">
+            <div class="t on">Super Admin</div>
+            <div class="t">Attendance Dashboard</div>
+            <div class="t">Staff Check In</div>
+          </div>
+          <div style="margin-left:auto;display:flex;align-items:center;gap:8px;padding:6px 0">
+            <span class="chip">Branch View: All Branches ▾</span>
+            <span class="chip">Select Range</span>
+            <span class="chip dark">Acme Holdings</span>
+          </div>
+        </div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Acme Holdings</b></div>
+            <div class="nav-section">
+              <div class="h">Super Admin</div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Overview</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Management</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Risk Center</span><span class="badge">5</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Attendance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Staff Check In</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Payments</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Logs</span></div>
+            </div>
+            <div class="nav-section">
+              <div class="h">Account</div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>director@acme</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Logout</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Acme <span class="arrow">/</span> Super Admin <span class="arrow">/</span> <b>Overview</b></span>
+            </div>
+            <div class="h-row"><h3>Organization overview</h3><div class="row"><button class="btn ghost">Export</button><button class="btn primary">+ Quick action</button></div></div>
+            <div class="grid g4">
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Branches</span><span style="font-size:22px;font-weight:600;color:var(--ink)">12</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Employees</span><span style="font-size:22px;font-weight:600;color:var(--ink)">418</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Avg attendance</span><span style="font-size:22px;font-weight:600;color:var(--ink)">92%</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Open alerts</span><span style="font-size:22px;font-weight:600;color:var(--ink)">5</span></div>
+            </div>
+            <div class="grid g2">
+              <div class="box xl">Chart · Performance trend (Branch View aware)</div>
+              <div class="box xl">Chart · Risk surface (Alerts + Warnings)</div>
+            </div>
+            <div class="lbl-row"><span>Pinned shortcuts</span></div>
+            <div class="row">
+              <button class="btn ghost">Management → Users</button>
+              <button class="btn ghost">Risk Center → Alerts</button>
+              <button class="btn ghost">Analytics → KPI &amp; Service AI</button>
+              <button class="btn ghost">Logs</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>App-level tabs (Super Admin / Attendance Dashboard / Staff Check In) live <b>above</b> the role sidebar; switching tabs swaps the entire shell.</div></div>
+        <div class="note"><span class="pin">2</span><div>Branch View pill is persistent across sub-areas. Charts and tables re-scope when changed.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== SUPERADMIN · MANAGEMENT → USERS ============== -->
+    <section class="frame" id="sa-users">
+      <div class="sec-head">
+        <span class="sec-no">03a</span>
+        <h2>Superadmin — Management → Users</h2>
+        <div class="tags"><span class="tag role">role · superadmin</span><span class="tag">L2</span></div>
+      </div>
+      <p class="caption">Second-level wireframe. Sub-areas under Management: Users · Branches · Operations.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/org/acme/super-admin/management/users</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Acme Holdings</b></div>
+            <div class="nav-section">
+              <div class="h">Super Admin</div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Overview</span></div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Management</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Risk Center</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Attendance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Staff Check In</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Payments</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Logs</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Super Admin <span class="arrow">/</span> Management <span class="arrow">/</span> <b>Users</b></span>
+              <div class="right"><span class="chip">Branch View: All ▾</span></div>
+            </div>
+            <div class="subtabs">
+              <div class="t on">Users</div>
+              <div class="t">Branches</div>
+              <div class="t">Operations</div>
+            </div>
+            <div class="h-row" style="margin-top:8px"><h3>Users</h3><div class="row"><button class="btn ghost">Filter</button><button class="btn ghost">Bulk import</button><button class="btn primary">+ Create User</button></div></div>
+
+            <div class="row">
+              <span class="chip">Role: All</span>
+              <span class="chip">Branch: All</span>
+              <span class="chip">Status: Active</span>
+              <span class="chip">Search: ____________</span>
+            </div>
+
+            <div class="table" style="--cols:2fr 1fr 1fr 1fr 1fr 1fr">
+              <div class="thead"><div>Name</div><div>Role</div><div>Branch</div><div>Status</div><div>Last seen</div><div>Actions</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Disable</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Disable</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Disable</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Disable</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div><div class="skel s"></div></div><div class="mono small">Edit · Disable</div></div>
+            </div>
+            <div class="lbl-row" style="margin-top:6px"><span>Pagination · 1–25 of 418</span><span>‹  1  2  3  …  ›</span></div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>Sub-tabs render directly under the page header. State <b>Users</b> is selected by default for this URL.</div></div>
+        <div class="note ok"><span class="pin">✓</span><div>Create User opens a side drawer (not a separate route) so superadmin doesn't lose list filters.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== ADMIN ============== -->
+    <section class="frame" id="admin">
+      <div class="sec-head">
+        <span class="sec-no">04</span>
+        <h2>Admin — Branch manager</h2>
+        <div class="tags"><span class="tag role">role · admin</span><span class="tag">branch-scoped</span></div>
+      </div>
+      <p class="caption">Scoped to a single branch. HR settings can hide <b>Warnings</b> or <b>Rate</b> from this menu.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/admin/branch/nairobi-cbd/profile</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Acme · Nairobi CBD</b></div>
+            <div class="nav-section">
+              <div class="h">Admin</div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Profile</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Users</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Schedules</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Attendance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Leaves</span><span class="badge">3</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Alerts</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Warnings</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Rate</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>My Score</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>KPI &amp; Service</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Badges</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Topics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Messages</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Polls</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Staff Check In</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Admin <span class="arrow">/</span> <b>Profile</b></span>
+              <div class="right"><span class="chip">Branch: Nairobi CBD</span><span class="chip dark">admin</span></div>
+            </div>
+            <div class="h-row"><h3>Branch profile</h3><button class="btn primary">Edit profile</button></div>
+            <div class="grid g3">
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Branch</span><span style="font-size:18px;font-weight:600;color:var(--ink)">Nairobi CBD</span><span class="small">Manager: J. Kamau</span></div>
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Headcount</span><span style="font-size:22px;font-weight:600;color:var(--ink)">36</span></div>
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">My Score</span><span style="font-size:22px;font-weight:600;color:var(--ink)">88</span></div>
+            </div>
+            <div class="lbl-row"><span>Quick actions</span></div>
+            <div class="row">
+              <button class="btn ghost">Users → Create Employee</button>
+              <button class="btn ghost">Polls → Create</button>
+              <button class="btn ghost">Topics → Add</button>
+              <button class="btn ghost">Staff Check In → Create Kiosk</button>
+              <button class="btn ghost">Leaves → Branch Requests</button>
+            </div>
+            <div class="grid g2">
+              <div class="box xl">Activity feed · placeholder</div>
+              <div class="box xl">Branch leaderboard · placeholder</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>If org-level HR mode hides <b>Warnings</b>/<b>Rate</b>, those nav items are absent (not greyed out).</div></div>
+        <div class="note"><span class="pin">2</span><div>Users sub-tabs: Create Employee · Edit User · Status Requests. Topics sub-tabs: Add · Edit · Delete.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== ADMIN · ATTENDANCE ============== -->
+    <section class="frame" id="admin-attendance">
+      <div class="sec-head">
+        <span class="sec-no">04a</span>
+        <h2>Admin — Attendance</h2>
+        <div class="tags"><span class="tag role">role · admin</span><span class="tag">L2</span></div>
+      </div>
+      <p class="caption">Summary metrics + filter "Show All Staff" vs "Show Only Late Staff". Date range in nav area.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/admin/branch/nairobi-cbd/attendance</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Acme · Nairobi CBD</b></div>
+            <div class="nav-section">
+              <div class="h">Admin</div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Profile</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Users</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Schedules</span></div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Attendance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Leaves</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Alerts</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Warnings</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Admin <span class="arrow">/</span> <b>Attendance</b></span>
+              <div class="right"><span class="chip">Select Range: This week ▾</span></div>
+            </div>
+            <div class="h-row"><h3>Attendance</h3>
+              <div class="row">
+                <span class="chip dark">Show All Staff</span>
+                <span class="chip">Show Only Late Staff</span>
+                <button class="btn ghost">Export CSV</button>
+              </div>
+            </div>
+            <div class="grid g4">
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Avg punctuality</span><span style="font-size:22px;font-weight:600;color:var(--ink)">94%</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Late today</span><span style="font-size:22px;font-weight:600;color:var(--ink)">4</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">No-shows</span><span style="font-size:22px;font-weight:600;color:var(--ink)">1</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Pending approvals</span><span style="font-size:22px;font-weight:600;color:var(--ink)">2</span></div>
+            </div>
+            <div class="table" style="--cols:1.6fr 1fr 1fr 1fr 1fr 1fr">
+              <div class="thead"><div>Staff</div><div>Scheduled</div><div>Clock-in</div><div>Clock-out</div><div>Lateness</div><div>Status</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div class="mono small">08:00</div><div class="mono small">07:58</div><div class="mono small">17:01</div><div class="mono small">—</div><div class="mono small">On time</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div class="mono small">08:00</div><div class="mono small">08:14</div><div class="mono small">—</div><div class="mono small">+14m</div><div class="mono small">Late · pending approval</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div class="mono small">08:00</div><div class="mono small">—</div><div class="mono small">—</div><div class="mono small">—</div><div class="mono small">No-show</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div class="mono small">10:00</div><div class="mono small">10:02</div><div class="mono small">—</div><div class="mono small">+2m</div><div class="mono small">On time</div></div>
+              <div class="tr"><div><div class="skel l"></div></div><div class="mono small">08:00</div><div class="mono small">08:00</div><div class="mono small">—</div><div class="mono small">—</div><div class="mono small">On time</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>The two filter chips behave like a segmented control: only one active at a time.</div></div>
+        <div class="note"><span class="pin">2</span><div>Lateness rows expose an inline <b>Approve / Reject</b> action (admin clock-in lateness rules differ from employees — call out in copy).</div></div>
+      </div>
+    </section>
+
+    <!-- ============== HR ============== -->
+    <section class="frame" id="hr">
+      <div class="sec-head">
+        <span class="sec-no">05</span>
+        <h2>HR — Conditional role</h2>
+        <div class="tags"><span class="tag role">role · hr</span><span class="tag">conditional</span></div>
+      </div>
+      <p class="caption">Only available when HR mode is enabled for the org. HR scope can be locked to a single branch.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/hr/overview</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Acme · HR</b></div>
+            <div class="nav-section">
+              <div class="h">HR</div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Overview</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Leave Desk</span><span class="badge">7</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Discipline</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Performance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>People Changes</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Case Files</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Documents</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Onboarding</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Requests</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">HR <span class="arrow">/</span> <b>Overview</b></span>
+              <div class="right"><span class="chip">HR Scope: All Branches ▾</span><span class="chip">Select Range</span></div>
+            </div>
+            <div class="h-row"><h3>HR overview</h3><div class="row"><button class="btn ghost">Export</button><button class="btn primary">+ Open case</button></div></div>
+
+            <div class="note"><span class="pin">i</span><div>Sensitive HR actions (terminations, salary changes, formal warnings) require <b>Superadmin final approval</b>. UI shows a "Pending approval" lane wherever applicable.</div></div>
+
+            <div class="grid g4">
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Open cases</span><span style="font-size:22px;font-weight:600;color:var(--ink)">12</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Pending leave</span><span style="font-size:22px;font-weight:600;color:var(--ink)">7</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Onboarding</span><span style="font-size:22px;font-weight:600;color:var(--ink)">3</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Awaiting SA approval</span><span style="font-size:22px;font-weight:600;color:var(--ink)">2</span></div>
+            </div>
+            <div class="grid g2">
+              <div class="box xl">Discipline funnel · placeholder</div>
+              <div class="box xl">People-change pipeline · placeholder</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="screen" style="margin-top:14px">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/hr (HR mode disabled)</div></div>
+        <div style="padding:36px;text-align:center;background:var(--fill-2)">
+          <div class="lbl-row" style="justify-content:center"><span>state · empty / disabled</span></div>
+          <div class="box xl" style="max-width:520px;margin:14px auto;min-height:140px">Empty state illustration placeholder</div>
+          <h3 style="margin:0">HR mode is not enabled for this organization.</h3>
+          <p class="small" style="margin:6px 0 14px">Ask your superadmin to enable HR in <b>Settings → Org → HR Module</b>.</p>
+          <button class="btn ghost">Back to dashboard</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== EMPLOYEE ============== -->
+    <section class="frame" id="employee">
+      <div class="sec-head">
+        <span class="sec-no">06</span>
+        <h2>Employee — Self-serve</h2>
+        <div class="tags"><span class="tag role">role · employee</span></div>
+      </div>
+      <p class="caption">Personal scope. Notification badge on <b>Notifications</b> and <b>Message Management</b>. HR-document items appear only if HR is enabled.</p>
+
+      <div class="screen">
+        <div class="screen-bar"><div class="dots"><i></i><i></i><i></i></div><div class="url">/me/profile</div></div>
+        <div class="app">
+          <nav class="nav">
+            <div class="nav-brand"><div class="sq"></div><b>Maria K. · Employee</b></div>
+            <div class="nav-section">
+              <div class="h">Personal</div>
+              <div class="nav-item on"><span class="l"><span class="ic"></span>Profile</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Schedule</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Attendance</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Leave</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Notifications</span><span class="badge">9</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>My KPIs</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>My HR Documents</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>My Onboarding</span></div>
+            </div>
+            <div class="nav-section">
+              <div class="h">Engagement</div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Rate</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>My Score</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Analytics</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Top Performers</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Badges</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Polls</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Message Management</span><span class="badge">2</span></div>
+              <div class="nav-item"><span class="l"><span class="ic"></span>Settings</span></div>
+            </div>
+          </nav>
+          <div class="main">
+            <div class="topbar">
+              <span class="crumbs">Me <span class="arrow">/</span> <b>Profile</b></span>
+              <div class="right"><span class="chip">Branch: Nairobi CBD</span><span class="chip dark">employee</span></div>
+            </div>
+            <div class="h-row"><h3>Profile</h3><button class="btn primary">Edit</button></div>
+            <div class="grid g3">
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">My Score</span><span style="font-size:22px;font-weight:600;color:var(--ink)">86</span></div>
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Attendance</span><span style="font-size:22px;font-weight:600;color:var(--ink)">95%</span></div>
+              <div class="box solid xl" style="flex-direction:column;align-items:flex-start"><span class="lbl-row" style="margin:0">Leave balance</span><span style="font-size:22px;font-weight:600;color:var(--ink)">12d</span></div>
+            </div>
+            <div class="grid g2">
+              <div class="box xl">My KPIs · progress placeholder</div>
+              <div class="box xl">Recent badges · placeholder</div>
+            </div>
+            <div class="lbl-row"><span>Quick actions</span></div>
+            <div class="row">
+              <button class="btn ghost">Request leave</button>
+              <button class="btn ghost">Rate my admin</button>
+              <button class="btn ghost">View polls</button>
+              <button class="btn ghost">Open my onboarding</button>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== KIOSK · HOME ============== -->
+    <section class="frame" id="kiosk-home">
+      <div class="sec-head">
+        <span class="sec-no">07</span>
+        <h2>Kiosk — Home</h2>
+        <div class="tags"><span class="tag">unauth</span><span class="tag">tablet</span></div>
+      </div>
+      <p class="caption">Full-width touch layout, large targets. Device locks to the first branch it was opened with.</p>
+
+      <div class="mobile-row">
+        <div class="kiosk" style="flex:1;min-width:680px">
+          <div class="kiosk-bar"><span>KIOSK MODE · ?kiosk=nairobi-cbd&amp;org=acme</span><span>1280 × 800 · landscape</span></div>
+          <div class="kiosk-body">
+            <div class="locked" style="max-width:520px;margin:0 auto 16px">⛓ Device locked to branch · Nairobi CBD</div>
+            <div class="kiosk-hero">
+              <h1>Acme Holdings</h1>
+              <p>Nairobi CBD</p>
+              <div class="branch">Branch manager: J. Kamau</div>
+            </div>
+            <div class="kiosk-cta">
+              <div class="kiosk-btn">Guest Experience<span class="desc">Leave feedback for the team</span></div>
+              <div class="kiosk-btn primary">Staff Check In<span class="desc">Clock in / out · request lateness</span></div>
+            </div>
+          </div>
+        </div>
+        <div class="mobile" style="width:240px">
+          <div class="topm">9:41</div>
+          <div style="padding:14px 12px">
+            <div class="locked" style="font-size:9.5px;padding:5px 8px">⛓ Locked to Nairobi CBD</div>
+            <div style="text-align:center;margin:14px 0 10px"><b>Acme Holdings</b><div class="small">Nairobi CBD · J. Kamau</div></div>
+            <div class="kiosk-btn" style="padding:18px 10px;font-size:14px">Guest Experience</div>
+            <div style="height:8px"></div>
+            <div class="kiosk-btn primary" style="padding:18px 10px;font-size:14px">Staff Check In</div>
+          </div>
+        </div>
+      </div>
+      <div class="annotations">
+        <div class="note"><span class="pin">1</span><div>Both buttons must hit a 64×64+ touch target. No back button — kiosk has its own state machine.</div></div>
+        <div class="note err"><span class="pin">!</span><div>If the URL <b>?kiosk</b> param is missing or branch is disabled by superadmin, render a "Kiosk disabled" state with an admin contact line.</div></div>
+      </div>
+    </section>
+
+    <!-- ============== KIOSK · GUEST ============== -->
+    <section class="frame" id="kiosk-guest">
+      <div class="sec-head">
+        <span class="sec-no">07a</span>
+        <h2>Kiosk — Guest Experience form</h2>
+        <div class="tags"><span class="tag">unauth</span></div>
+      </div>
+      <div class="kiosk">
+        <div class="kiosk-bar"><span>KIOSK · GUEST EXPERIENCE</span><span>back to home</span></div>
+        <div class="kiosk-body" style="padding:24px 36px">
+          <h2 style="margin:0 0 4px">How was your visit?</h2>
+          <p class="small">All fields except rating are optional.</p>
+
+          <div class="grid g2" style="margin-top:14px;gap:18px">
+            <div class="col">
+              <div class="lbl-row"><span>Who is this feedback about?</span></div>
+              <div class="row">
+                <div class="kiosk-btn" style="padding:18px;font-size:14px;flex:1">The whole team<span class="desc">general feedback</span></div>
+                <div class="kiosk-btn" style="padding:18px;font-size:14px;flex:1">A specific staff member<span class="desc">pick from list</span></div>
+              </div>
+              <div class="lbl-row" style="margin-top:8px"><span>Rating</span></div>
+              <div class="stars">★ ★ ★ ★ ☆</div>
+              <div class="lbl-row" style="margin-top:8px"><span>Optional message</span></div>
+              <div class="box text" style="min-height:90px">Tell us what stood out…</div>
+              <div class="lbl-row" style="margin-top:8px"><span>Your name (optional)</span></div>
+              <div class="field"><div class="input" style="height:42px">Maria</div></div>
+              <div class="small mono" style="color:var(--muted)">Name field appears only if the org allows named feedback.</div>
+              <div class="row" style="margin-top:14px">
+                <button class="btn ghost" style="height:48px;padding:0 22px;font-size:13px">Cancel</button>
+                <button class="btn primary" style="height:48px;padding:0 28px;font-size:13px;flex:1">Submit feedback →</button>
+              </div>
+            </div>
+            <div class="col">
+              <div class="box xl" style="min-height:340px">Illustration / branding placeholder</div>
+              <div class="note ok"><span class="pin">✓</span><div>After submit: large success screen, auto-return to Home in 6s.</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== KIOSK · STAFF LIST ============== -->
+    <section class="frame" id="kiosk-list">
+      <div class="sec-head">
+        <span class="sec-no">07b</span>
+        <h2>Kiosk — Staff Check In · User list</h2>
+        <div class="tags"><span class="tag">unauth</span></div>
+      </div>
+      <div class="kiosk">
+        <div class="kiosk-bar"><span>KIOSK · STAFF CHECK IN</span><span>step 1 of 2 · pick user</span></div>
+        <div class="kiosk-body" style="padding:24px 36px">
+          <h2 style="margin:0">Select your name</h2>
+          <p class="small">Tap your name to continue. Branch: Nairobi CBD.</p>
+          <div class="field" style="margin-top:10px"><div class="input" style="height:48px">🔍 Search by name…</div></div>
+          <div class="grid g3" style="margin-top:14px">
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>Maria K.</b><span class="desc">employee · scheduled 08:00</span></div>
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>James O.</b><span class="desc">employee · scheduled 08:00</span></div>
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>Esther W.</b><span class="desc">employee · scheduled 10:00</span></div>
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>Daniel M.</b><span class="desc">employee · scheduled 08:00</span></div>
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>J. Kamau</b><span class="desc">admin · password</span></div>
+            <div class="kiosk-btn" style="padding:18px;font-size:14px;text-align:left"><b>Faith N.</b><span class="desc">employee · scheduled 12:00</span></div>
+          </div>
+          <div class="lbl-row" style="margin-top:14px"><span>14 staff at Nairobi CBD</span><span>‹ 1 / 2 ›</span></div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== KIOSK · PIN ============== -->
+    <section class="frame" id="kiosk-pin">
+      <div class="sec-head">
+        <span class="sec-no">07c</span>
+        <h2>Kiosk — Staff Check In · PIN entry</h2>
+        <div class="tags"><span class="tag">unauth</span></div>
+      </div>
+      <div class="kiosk">
+        <div class="kiosk-bar"><span>KIOSK · STAFF CHECK IN</span><span>step 2 of 2 · verify</span></div>
+        <div class="kiosk-body" style="padding:24px 36px">
+          <div style="text-align:center;margin-bottom:18px">
+            <div class="box solid" style="width:72px;height:72px;border-radius:50%;margin:0 auto;border:none">MK</div>
+            <h2 style="margin:10px 0 4px">Maria K.</h2>
+            <span class="chip dark">employee</span>
+          </div>
+          <p class="small" style="text-align:center">Enter your 4-digit PIN to continue.</p>
+          <div class="pin-dots"><i class="f"></i><i class="f"></i><i></i><i></i></div>
+          <div class="pin-pad">
+            <div class="k">1</div><div class="k">2</div><div class="k">3</div>
+            <div class="k">4</div><div class="k">5</div><div class="k">6</div>
+            <div class="k">7</div><div class="k">8</div><div class="k">9</div>
+            <div class="k" style="visibility:hidden"></div><div class="k">0</div><div class="k">⌫</div>
+          </div>
+          <div class="row" style="justify-content:center;margin-top:18px">
+            <button class="btn ghost" style="height:42px;padding:0 18px">← Back to list</button>
+            <button class="btn primary" style="height:42px;padding:0 24px">Verify</button>
+          </div>
+          <div class="annotations">
+            <div class="note"><span class="pin">i</span><div>For users with role <b>admin</b>, the PIN pad is replaced by a password input.</div></div>
+            <div class="note err"><span class="pin">!</span><div>3 wrong attempts → user must wait 60s and is bumped back to list.</div></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- ============== KIOSK · VERIFIED ============== -->
+    <section class="frame" id="kiosk-verified">
+      <div class="sec-head">
+        <span class="sec-no">07d</span>
+        <h2>Kiosk — Staff Check In · Verified</h2>
+        <div class="tags"><span class="tag">unauth</span></div>
+      </div>
+      <div class="kiosk">
+        <div class="kiosk-bar"><span>KIOSK · STAFF CHECK IN</span><span>verified · session 0:42</span></div>
+        <div class="kiosk-body" style="padding:24px 36px">
+          <div class="grid g2" style="gap:18px">
+            <div class="col">
+              <div style="display:flex;align-items:center;gap:14px">
+                <div class="box solid" style="width:64px;height:64px;border-radius:50%;border:none">MK</div>
+                <div><h2 style="margin:0">Hi, Maria K.</h2><span class="chip dark">employee</span></div>
+              </div>
+              <div class="lbl-row" style="margin-top:14px"><span>Today's status</span></div>
+              <div class="box solid" style="flex-direction:column;align-items:flex-start;padding:14px"><span class="small mono">Scheduled 08:00</span><span style="font-size:18px;font-weight:600">Not yet clocked in</span></div>
+              <div class="lbl-row" style="margin-top:14px"><span>Action</span></div>
+              <div class="row">
+                <div class="kiosk-btn primary" style="padding:22px 18px;font-size:16px;flex:1">Clock in</div>
+                <div class="kiosk-btn" style="padding:22px 18px;font-size:16px;flex:1">Clock out</div>
+              </div>
+              <div class="row" style="margin-top:10px">
+                <button class="btn ghost" style="flex:1;height:40px">Request lateness approval</button>
+                <button class="btn ghost" style="flex:1;height:40px">Next user</button>
+              </div>
+            </div>
+            <div class="col">
+              <div class="lbl-row"><span>Attendance photo (optional)</span></div>
+              <div class="box xl" style="min-height:240px">📷 Camera viewfinder placeholder</div>
+              <div class="note"><span class="pin">i</span><div>If org settings require a photo, this becomes mandatory and the Clock in button is disabled until a frame is captured.</div></div>
+              <div class="note err"><span class="pin">!</span><div>Admins follow different lateness rules — admin clock-in does not auto-trigger the lateness approval flow.</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<script>
+  // Sticky-index active link on scroll
+  const links = document.querySelectorAll('#idx a[href^="#"]');
+  const sections = [...document.querySelectorAll('section.frame, #sitemap')].map(s => ({id: s.id, el: s}));
+  function setActive(){
+    const y = window.scrollY + 120;
+    let cur = sections[0].id;
+    for(const s of sections){ if(s.el.offsetTop <= y) cur = s.id; }
+    links.forEach(a => a.classList.toggle('on', a.getAttribute('href') === '#'+cur));
+  }
+  document.addEventListener('scroll', setActive, {passive:true});
+  setActive();
+  // Smooth scroll
+  links.forEach(a=>a.addEventListener('click', e=>{
+    const id = a.getAttribute('href').slice(1);
+    const el = document.getElementById(id);
+    if(el){ e.preventDefault(); window.scrollTo({top:el.offsetTop-12, behavior:'smooth'}); }
+  }));
+</script>
+</body>
+</html>

@@ -17,7 +17,16 @@ except Exception:
     HOLIDAYS_OK = False
 
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
-from Dashboards.ui_responsive import apply_responsive_ui
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    render_topbar,
+    render_note,
+    render_sidebar_nav,
+    render_stat_card,
+    render_subtabs,
+    render_app_tabs_strip,
+)
 from Analytics.polls import create_poll_batch, ensure_poll_tables, get_poll_results, get_visible_polls, set_poll_status
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -1128,10 +1137,8 @@ _SA_ORIG_DATAFRAME = st.dataframe
 
 def super_admin_dashboard():
 
-    apply_responsive_ui("default")
+    inject_global_css()
 
-    # Auto-wrap every st.dataframe in this dashboard inside a collapsed
-    # expander so tables are hidden until the user needs them.
     def _auto_table(data, *args, **kwargs):
         try:
             label = f"View Table  ({len(data)} rows)"
@@ -1141,8 +1148,6 @@ def super_admin_dashboard():
             with st.expander(label, expanded=False):
                 _SA_ORIG_DATAFRAME(data, *args, **kwargs)
         except Exception:
-            # Streamlit disallows some nested container combinations
-            # (for example expander inside expander); render normally then.
             _SA_ORIG_DATAFRAME(data, *args, **kwargs)
 
     st.dataframe = _auto_table
@@ -1153,10 +1158,9 @@ def super_admin_dashboard():
     org  = st.session_state.get("organization")
 
     if not org:
-        st.error("Organization not assigned")
+        render_note("Organization not assigned. Please log in again.", kind="err", pin="!")
         st.stop()
 
-    # Fetch business type once per session so every section can use it
     if "sa_business_type" not in st.session_state or st.session_state.get("sa_org_for_btype") != org:
         try:
             _org_meta = safe_read(
@@ -1182,8 +1186,6 @@ def super_admin_dashboard():
     hr_requires_recommendation_note = hr_mode_enabled and bool(int(hr_config.get("hr_require_recommendation_note", 1) or 0))
     hr_requires_super_admin_note = hr_mode_enabled and bool(int(hr_config.get("hr_require_super_admin_note", 1) or 0))
 
-    st.title(f"Managing Director - {org}")
-
     branches_raw = safe_read("SELECT name FROM branches WHERE organization=?", conn, params=(org,))
     branches = branches_raw["name"].tolist() if not branches_raw.empty else []
     usernames_raw = safe_read("SELECT username FROM users WHERE organization=?", conn, params=(org,))
@@ -1191,115 +1193,88 @@ def super_admin_dashboard():
 
     is_mobile = is_mobile_device()
 
-    def _collapse_sa_mobile_nav():
-        if is_mobile:
-            st.session_state["sa_nav_open"] = False
-
-    if "sa_nav_open" not in st.session_state:
-        st.session_state["sa_nav_open"] = True
-
-    def nav_selectbox(label, options, key, **kwargs):
-        if is_mobile:
-            return st.selectbox(label, options, key=key, **kwargs)
-        with st.sidebar:
-            return st.selectbox(label, options, key=key, **kwargs)
-
-    def nav_radio(label, options, key, horizontal=False, **kwargs):
-        if is_mobile:
-            return st.radio(label, options, key=key, horizontal=horizontal, **kwargs)
-        with st.sidebar:
-            return st.radio(label, options, key=key, **kwargs)
-
-    def nav_date_input(label, value, key, **kwargs):
-        if is_mobile:
-            return st.date_input(label, value=value, key=key, **kwargs)
-        with st.sidebar:
-            return st.date_input(label, value=value, key=key, **kwargs)
-
-    nav_items = [
-        "Overview",
-        "Management",
-        "Analytics",
-        "Risk Center",
-        "Attendance",
-        "Staff Check In",
-        "Settings",
-        "Payments",
-        "Logs",
+    # ── Sidebar nav ───────────────────────────────────────────────────────
+    SA_NAV_ITEMS = [
+        ("Overview",       "Overview"),
+        ("Management",     "Management"),
+        ("Analytics",      "Analytics"),
+        ("Risk Center",    "Risk Center"),
+        ("Attendance",     "Attendance"),
+        ("Staff Check In", "Staff Check In"),
+        ("Settings",       "Settings"),
+        ("Payments",       "Payments"),
+        ("Logs",           "Logs"),
     ]
+    if "sa_menu" not in st.session_state:
+        st.session_state["sa_menu"] = "Overview"
 
-    if is_mobile:
-        if st.button("Change Navigation", key="sa_reopen_nav", use_container_width=True):
-            st.session_state["sa_nav_open"] = True
+    with st.sidebar:
+        nav_html = render_sidebar_nav(
+            org,
+            [{"header": "Super Admin", "items": [
+                {"label": label, "key": key} for label, key in SA_NAV_ITEMS
+            ]},
+             {"header": "Account", "items": [
+                {"label": user or "superadmin", "key": "__profile__"},
+            ]}],
+            st.session_state["sa_menu"],
+        )
+        st.markdown(nav_html, unsafe_allow_html=True)
+        nav_labels = [n[0] for n in SA_NAV_ITEMS]
+        nav_keys   = [n[1] for n in SA_NAV_ITEMS]
+        cur_idx = nav_keys.index(st.session_state["sa_menu"]) if st.session_state["sa_menu"] in nav_keys else 0
+        nav_choice = st.radio("sa_nav", nav_labels, index=cur_idx, key="sa_nav_radio", label_visibility="collapsed")
+        new_menu = nav_keys[nav_labels.index(nav_choice)]
+        if new_menu != st.session_state["sa_menu"]:
+            st.session_state["sa_menu"] = new_menu
             st.rerun()
-        with st.expander("Navigation", expanded=bool(st.session_state.get("sa_nav_open", True))):
-            menu = st.radio("Navigation", nav_items, key="sa_menu", on_change=_collapse_sa_mobile_nav)
-    else:
-        with st.sidebar:
-            st.markdown("### Navigation")
-            menu = st.radio("Navigation", nav_items, key="sa_menu")
 
+    menu = st.session_state["sa_menu"]
+
+    # ── Branch scope filter ───────────────────────────────────────────────
+    branch_scope_options = ["All Branches"] + branches
+    selected_branch_scope = st.selectbox(
+        "Branch View", branch_scope_options, key="sa_branch_scope", label_visibility="visible"
+    )
+    branch_scope = None if selected_branch_scope == "All Branches" else selected_branch_scope
+
+    # ── Sub-nav helpers ───────────────────────────────────────────────────
     management_view = None
     analytics_view = None
     risk_view = None
 
     if menu == "Management":
-        if is_mobile:
-            management_view = st.radio(
-                "Management Area",
-                ["Users", "Branches", "Operations"],
-                horizontal=True,
-                key="sa_management_view",
-                on_change=_collapse_sa_mobile_nav,
-            )
-        else:
-            with st.sidebar:
-                st.markdown("### Management Area")
-                management_view = st.radio(
-                    "Management Area",
-                    ["Users", "Branches", "Operations"],
-                    key="sa_management_view",
-                )
+        st.markdown(render_subtabs(
+            [("Users", "Users"), ("Branches", "Branches"), ("Operations", "Operations")],
+            st.session_state.get("sa_management_view", "Users"),
+        ), unsafe_allow_html=True)
+        management_view = st.radio(
+            "Management Area", ["Users", "Branches", "Operations"],
+            horizontal=True, key="sa_management_view", label_visibility="collapsed",
+        )
 
     if menu == "Analytics":
-        if is_mobile:
-            analytics_view = st.radio(
-                "Analytics Area",
-                ["Performance", "Intelligence", "Demographics", "Guest Experience", "KPI & Service AI"],
-                horizontal=True,
-                key="sa_analytics_view",
-                on_change=_collapse_sa_mobile_nav,
-            )
-        else:
-            with st.sidebar:
-                st.markdown("### Analytics Area")
-                analytics_view = st.radio(
-                    "Analytics Area",
-                    ["Performance", "Intelligence", "Demographics", "Guest Experience", "KPI & Service AI"],
-                    key="sa_analytics_view",
-                )
+        analytics_view = st.radio(
+            "Analytics Area",
+            ["Performance", "Intelligence", "Demographics", "Guest Experience", "KPI & Service AI"],
+            horizontal=True, key="sa_analytics_view", label_visibility="collapsed",
+        )
 
     if menu == "Risk Center":
-        if is_mobile:
-            risk_view = st.radio(
-                "Risk Area",
-                ["Alerts", "Warnings"],
-                horizontal=True,
-                key="sa_risk_view",
-                on_change=_collapse_sa_mobile_nav,
-            )
-        else:
-            with st.sidebar:
-                st.markdown("### Risk Area")
-                risk_view = st.radio(
-                    "Risk Area",
-                    ["Alerts", "Warnings"],
-                    key="sa_risk_view",
-                )
+        risk_view = st.radio(
+            "Risk Area", ["Alerts", "Warnings"],
+            horizontal=True, key="sa_risk_view", label_visibility="collapsed",
+        )
 
-    branch_scope_options = ["All Branches"] + branches
-    selected_branch_scope = nav_selectbox("Branch View", branch_scope_options, key="sa_branch_scope")
-    branch_scope = None if selected_branch_scope == "All Branches" else selected_branch_scope
+    # Legacy helpers (unchanged backend code expects these)
+    def nav_selectbox(label, options, key, **kwargs):
+        return st.selectbox(label, options, key=key, **kwargs)
+
+    def nav_radio(label, options, key, horizontal=False, **kwargs):
+        return st.radio(label, options, key=key, horizontal=horizontal, **kwargs)
+
+    def nav_date_input(label, value, key, **kwargs):
+        return st.date_input(label, value=value, key=key, **kwargs)
 
     def apply_branch_scope(df, branch_col="branch"):
         if df is None or getattr(df, "empty", True):
@@ -1312,7 +1287,21 @@ def super_admin_dashboard():
     # OVERVIEW
     # =========================================================
     if menu == "Overview":
-        st.subheader("Overview")
+        render_topbar(
+            [org, "Super Admin", "Overview"],
+            chips=[("Branch View: " + (branch_scope or "All Branches"), False), ("superadmin", True)],
+        )
+        st.markdown(
+            '<div class="h-row"><h3>Organization overview</h3></div>',
+            unsafe_allow_html=True,
+        )
+        col_ex, col_qa = st.columns([5, 1])
+        with col_qa:
+            st.markdown('<div class="btn-primary-wrap">', unsafe_allow_html=True)
+            st.button("+ Quick action", key="sa_quick_action")
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col_ex:
+            st.button("Export", key="sa_export_overview")
 
         users_df      = apply_branch_scope(safe_read("SELECT * FROM users WHERE organization=?",    conn, params=(org,)))
         ratings_df    = apply_branch_scope(safe_read("SELECT * FROM ratings WHERE organization=?",  conn, params=(org,)))
@@ -1323,10 +1312,10 @@ def super_admin_dashboard():
         kiosks_df    = safe_read("SELECT * FROM kiosks WHERE organization=?", conn, params=(org,))
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Users",    len(users_df))
-        c2.metric("Branches", len(branches_all))
-        c3.metric("Ratings",  len(ratings_df))
-        c4.metric("Kiosks",   len(kiosks_df))
+        c1.markdown(render_stat_card("Branches", len(branches_all)), unsafe_allow_html=True)
+        c2.markdown(render_stat_card("Employees", len(users_df)), unsafe_allow_html=True)
+        c3.markdown(render_stat_card("Ratings", len(ratings_df)), unsafe_allow_html=True)
+        c4.markdown(render_stat_card("Open Alerts", 0), unsafe_allow_html=True)
 
         employee_df = users_df.copy() if safe_df(users_df) else pd.DataFrame()
         if safe_df(employee_df) and "role" in employee_df.columns:
@@ -1344,9 +1333,9 @@ def super_admin_dashboard():
             unknown_employees = 0
 
         g1, g2, g3 = st.columns(3)
-        g1.metric("Male Employees", male_employees)
-        g2.metric("Female Employees", female_employees)
-        g3.metric("Other/Unknown", unknown_employees)
+        g1.markdown(render_stat_card("Male Employees", male_employees), unsafe_allow_html=True)
+        g2.markdown(render_stat_card("Female Employees", female_employees), unsafe_allow_html=True)
+        g3.markdown(render_stat_card("Other/Unknown", unknown_employees), unsafe_allow_html=True)
 
         try:
             overview_group_data = analyze_group_demographics(
@@ -2320,7 +2309,25 @@ def super_admin_dashboard():
     # USERS
     # =========================================================
     elif menu == "Management" and management_view == "Users":
-        st.subheader("Users")
+        render_topbar(
+            [org, "Super Admin", "Management", "Users"],
+            chips=[("Branch View: " + (branch_scope or "All"), False)],
+        )
+        st.markdown(
+            '<div class="h-row"><h3>Users</h3></div>',
+            unsafe_allow_html=True,
+        )
+        col_f, col_bi, col_cu = st.columns([2, 1, 1])
+        with col_cu:
+            st.markdown('<div class="btn-primary-wrap">', unsafe_allow_html=True)
+            if st.button("+ Create User", key="sa_create_user_btn", use_container_width=True):
+                st.session_state["sa_show_create_user"] = True
+            st.markdown('</div>', unsafe_allow_html=True)
+        with col_bi:
+            st.button("Bulk import", key="sa_bulk_import")
+        with col_f:
+            st.button("Filter", key="sa_user_filter")
+
         show_flash_message("super_admin_user_flash")
 
         users_df = apply_branch_scope(safe_read(
@@ -2337,10 +2344,10 @@ def super_admin_dashboard():
             role_view_df.loc[role_norm.isin(["superadmin", "super_admin", "master", "owner"]), "user_category"] = "Managing Director"
 
             r1, r2, r3, r4 = st.columns(4)
-            r1.metric("Managing Directors", int((role_view_df["user_category"] == "Managing Director").sum()))
-            r2.metric("HR Partners", int((role_view_df["user_category"] == "HR").sum()))
-            r3.metric("Managers", int((role_view_df["user_category"] == "Manager").sum()))
-            r4.metric("Specialists", int((role_view_df["user_category"] == "Specialist").sum()))
+            r1.markdown(render_stat_card("Managing Directors", int((role_view_df["user_category"] == "Managing Director").sum())), unsafe_allow_html=True)
+            r2.markdown(render_stat_card("HR Partners", int((role_view_df["user_category"] == "HR").sum())), unsafe_allow_html=True)
+            r3.markdown(render_stat_card("Managers", int((role_view_df["user_category"] == "Manager").sum())), unsafe_allow_html=True)
+            r4.markdown(render_stat_card("Specialists", int((role_view_df["user_category"] == "Specialist").sum())), unsafe_allow_html=True)
 
             with st.expander("User Categories", expanded=False):
                 for category in ["Managing Director", "HR", "Manager", "Specialist"]:

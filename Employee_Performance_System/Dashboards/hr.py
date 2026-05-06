@@ -8,7 +8,15 @@ import pandas as pd
 import streamlit as st
 
 from database.db import cached_read_sql, get_connection, get_hr_config, log_action
-from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    render_dashboard_banner,
+    render_topbar,
+    render_note,
+    render_sidebar_nav,
+    render_stat_card,
+)
 
 try:
     from Dashboards.ui_responsive import is_mobile_device
@@ -224,7 +232,7 @@ def _summarize_request_reason(value):
 
 
 def hr_dashboard():
-    apply_responsive_ui("default")
+    inject_global_css()
 
     conn = get_connection()
     username = st.session_state.get("username")
@@ -245,7 +253,25 @@ def hr_dashboard():
 
     hr_config = get_hr_config(conn, org)
     if not bool(int(hr_config.get("hr_mode_enabled", 0) or 0)):
-        st.warning("HR mode is currently OFF for this organization. Ask the super admin to enable it in Settings.")
+        # Wireframe "disabled state" full-screen
+        st.markdown(
+            f"""
+            <div style="min-height:480px;display:flex;flex-direction:column;align-items:center;
+                        justify-content:center;gap:16px;padding:40px;">
+                <div style="width:40px;height:40px;border:2px solid var(--line);border-radius:4px;
+                            display:grid;place-items:center;font-size:20px;">🔒</div>
+                <h3 style="margin:0;font-size:16px;font-weight:600;color:var(--onyx);">
+                    HR Mode is OFF
+                </h3>
+                <p style="font-family:'JetBrains Mono',monospace;font-size:11.5px;color:var(--smoke);
+                          max-width:320px;text-align:center;margin:0;">
+                    HR Mode is currently disabled for {org}.
+                    Ask the Super Admin to enable it in Settings.
+                </p>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
         return
 
     hr_handles_leave = bool(int(hr_config.get("hr_handles_leave", 1) or 0))
@@ -268,41 +294,41 @@ def hr_dashboard():
     if assigned_branch is None:
         scope_options = ["All Branches"] + branches
         default_idx = 0
-        if is_mobile_device():
-            selected_scope = st.selectbox("HR Scope", scope_options, index=default_idx, key="hr_scope_select")
-        else:
-            with st.sidebar:
-                st.markdown("### HR Scope")
-                selected_scope = st.selectbox("View", scope_options, index=default_idx, key="hr_scope_select")
+        selected_scope = st.selectbox("HR Scope", scope_options, index=default_idx, key="hr_scope_select")
         scope_branch = _normalize_scope_branch(selected_scope)
     else:
         scope_branch = assigned_branch
-        with st.sidebar:
-            st.markdown("### HR Scope")
-            st.info(f"Assigned to: {assigned_branch}")
 
     scope_text = _scope_label(scope_branch)
     show_flash_message()
 
-    st.title("HR Dashboard")
-    render_dashboard_banner(
-        "People operations",
-        f"HR workspace - {org}",
-        "Review leave, discipline, onboarding/offboarding, transfer requests, employee case files, and HR documents across the allowed HR scope. Super admin remains the final approver for HR actions.",
-        pills=[
-            f"HR {username}",
-            f"Scope {scope_text}",
-            "Final approval: Super Admin",
-        ],
-    )
+    # ── Sidebar nav ────────────────────────────────────────────────────────
+    HR_MENU_ITEMS = [
+        "Overview", "Leave Desk", "Discipline", "Performance",
+        "People Changes", "Case Files", "Documents", "Onboarding", "Requests",
+    ]
+    if "hr_menu" not in st.session_state:
+        st.session_state["hr_menu"] = "Overview"
 
-    menu_items = ["Overview", "Leave Desk", "Discipline", "Performance", "People Changes", "Case Files", "Documents", "Onboarding", "Requests"]
-    if is_mobile_device():
-        menu = st.radio("HR Menu", menu_items, key="hr_menu")
-    else:
-        with st.sidebar:
-            st.markdown("### HR Menu")
-            menu = st.radio("Navigate", menu_items, key="hr_menu")
+    with st.sidebar:
+        nav_html = render_sidebar_nav(
+            f"{org} · HR",
+            [{"header": "HR", "items": [
+                {"label": m, "key": m} for m in HR_MENU_ITEMS
+            ]},
+             {"header": "Account", "items": [
+                {"label": username, "key": "__profile__"},
+            ]}],
+            st.session_state["hr_menu"],
+        )
+        st.markdown(nav_html, unsafe_allow_html=True)
+        cur_idx = HR_MENU_ITEMS.index(st.session_state["hr_menu"]) if st.session_state["hr_menu"] in HR_MENU_ITEMS else 0
+        nav_choice = st.radio("hr_nav", HR_MENU_ITEMS, index=cur_idx, key="hr_nav_radio", label_visibility="collapsed")
+        if nav_choice != st.session_state["hr_menu"]:
+            st.session_state["hr_menu"] = nav_choice
+            st.rerun()
+
+    menu = st.session_state["hr_menu"]
 
     users_query, users_params = _apply_scope_query(
         "SELECT username, role, branch, status FROM users WHERE organization=? AND role IN ('employee','admin','hr')",
@@ -355,6 +381,17 @@ def hr_dashboard():
     onboarding_df = safe_read(onboarding_query + " ORDER BY id DESC", conn, params=tuple(onboarding_params))
 
     if menu == "Overview":
+        render_topbar(
+            [org, "HR", "Overview"],
+            chips=[(f"Scope: {scope_text}", False), ("hr", True)],
+        )
+        st.markdown('<div class="h-row"><h3>HR overview</h3></div>', unsafe_allow_html=True)
+        render_note(
+            "<b>Approval lane:</b> All HR actions you submit go to <b>Super Admin</b> for final approval. "
+            "You review, HR approves in principle — Super Admin countersigns.",
+            kind="info", pin="i",
+        )
+
         pending_leaves = int((leaves_df["status"].astype(str).str.lower() == "pending").sum()) if not leaves_df.empty else 0
         pending_requests = safe_read(
             "SELECT COUNT(*) AS cnt FROM admin_action_requests WHERE organization=? AND requested_by=? AND lower(coalesce(status,'pending'))='pending'",
@@ -367,16 +404,11 @@ def hr_dashboard():
         document_count = len(documents_df)
         onboarding_pending = int((onboarding_df["status"].astype(str).str.lower() != "done").sum()) if not onboarding_df.empty else 0
 
-        c1, c2, c3 = st.columns(3)
-        c4, c5, c6 = st.columns(3)
-        c1.metric("People in scope", len(users_df))
-        c2.metric("Pending leave cases", pending_leaves)
-        c3.metric("Warnings logged", len(warnings_df))
-        c4.metric("Open HR cases", open_cases)
-        c5.metric("HR documents", document_count)
-        c6.metric("Onboarding tasks open", onboarding_pending)
-
-        st.caption(f"Pending HR requests: {pending_count}")
+        c1, c2, c3, c4 = st.columns(4)
+        c1.markdown(render_stat_card("People in scope", len(users_df)), unsafe_allow_html=True)
+        c2.markdown(render_stat_card("Pending Leave", pending_leaves), unsafe_allow_html=True)
+        c3.markdown(render_stat_card("Open HR Cases", open_cases), unsafe_allow_html=True)
+        c4.markdown(render_stat_card("Onboarding Pending", onboarding_pending), unsafe_allow_html=True)
 
         st.markdown("### Scope Staff")
         if users_df.empty:

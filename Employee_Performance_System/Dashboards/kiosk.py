@@ -14,7 +14,13 @@ except Exception:
     holiday_lib = None
 
 from database.db import get_connection, execute_write, verify_password
-from Dashboards.ui_responsive import apply_responsive_ui
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    render_note,
+    render_pin_dots,
+    render_locked_banner,
+)
 
 # ==============================
 # DEVICE FINGERPRINT
@@ -427,110 +433,19 @@ def _notify_super_admin_policy_breach(conn, org, branch, staff_user, staff_role,
 # ==============================
 def kiosk_dashboard():
 
-    apply_responsive_ui("kiosk")
+    inject_global_css()
+
+    # Kiosk-specific overrides
+    st.markdown(
+        """
+        <style>
+        .block-container { max-width: 760px !important; }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
 
     conn = get_connection()
-
-    # ==============================
-    # UI STYLE
-    # ==============================
-    st.markdown("""
-        <style>
-        .block-container {max-width: 700px; padding-top: 0.9rem; padding-bottom: 2rem;}
-        button {height:58px; font-size:20px; font-weight:700;}
-        .stButton > button, .stDownloadButton > button, .stFormSubmitButton > button {
-            width: min(100%, 340px);
-            display: block;
-            margin: 0 auto;
-            box-sizing: border-box;
-            background: linear-gradient(135deg, #0071e3 0%, #2d8cff 100%) !important;
-            color: #ffffff !important;
-            border: 1px solid rgba(0, 113, 227, 0.14) !important;
-            border-radius: 999px;
-            box-shadow: 0 10px 20px rgba(0, 113, 227, 0.16) !important;
-        }
-        .stButton > button:hover, .stDownloadButton > button:hover, .stFormSubmitButton > button:hover {
-            filter: brightness(1.03);
-        }
-        .home-kiosk-hero {
-            text-align: center;
-            padding: 0.9rem 1rem 0.8rem;
-            margin: 0.2rem 0 1rem;
-            border-radius: 28px;
-            border: 1px solid rgba(15, 23, 42, 0.07);
-            background: linear-gradient(135deg, rgba(255,255,255,0.98), rgba(244,248,255,0.96));
-            box-shadow: 0 14px 34px rgba(15, 23, 42, 0.06);
-        }
-        .home-kiosk-kicker {
-            font-size: 0.72rem;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.12em;
-            color: #0071e3;
-            margin-bottom: 0.35rem;
-        }
-        .home-kiosk-title {
-            text-align: center;
-            padding: 0.2rem 0 0.1rem;
-        }
-        .home-kiosk-title .org-name {
-            font-size: 2.25rem;
-            font-weight: 900;
-            letter-spacing: -0.04em;
-            line-height: 1.05;
-            margin-bottom: 0.3rem;
-            color: #1d1d1f;
-        }
-        .home-kiosk-title .branch-name {
-            font-size: 1.5rem;
-            font-weight: 700;
-            letter-spacing: -0.02em;
-            line-height: 1.1;
-            color: #1d1d1f;
-        }
-        .home-kiosk-title .manager-name {
-            font-size: 1rem;
-            font-weight: 600;
-            color: #1d1d1f;
-            margin-top: 0.45rem;
-        }
-        .stSelectbox, .stTextInput, .stTextArea, .stDateInput {width: 100%;}
-
-        [data-testid="stImage"] {
-            border-radius: 14px;
-            overflow: hidden;
-            margin: 1rem 0;
-            border: 1px solid rgba(15, 23, 42, 0.08);
-        }
-
-        [data-testid="stCameraInput"] {
-            width: 80% !important;
-            margin-left: auto !important;
-            margin-right: auto !important;
-        }
-
-        [data-testid="stCameraInput"] video,
-        [data-testid="stCameraInput"] img,
-        [data-testid="stImage"] img {
-            width: 80% !important;
-            max-width: 80% !important;
-            max-height: 60vh !important;
-            object-fit: cover !important;
-            border-radius: 14px;
-            display: block !important;
-            margin-left: auto !important;
-            margin-right: auto !important;
-        }
-
-        @media (max-width: 640px) {
-            .block-container {max-width: 100%; padding-left: 0.75rem; padding-right: 0.75rem;}
-            button {height: 54px; font-size: 17px;}
-            .home-kiosk-title .org-name {font-size: 2.25rem;}
-            .home-kiosk-title .branch-name {font-size: 1.5rem;}
-            .home-kiosk-title .manager-name {font-size: 1rem;}
-        }
-        </style>
-    """, unsafe_allow_html=True)
 
     # ==============================
     # PARAMS (SAFE)
@@ -641,37 +556,69 @@ def kiosk_dashboard():
     # HOME
     # ==============================================================
     if kiosk_view == "home":
-        render_kiosk_hero(
-            org,
-            branch,
-            f"Branch Manager: {manager_name}",
+        # Wireframe kiosk topbar
+        st.markdown(
+            f"""
+            <div class="kiosk-bar">
+                <span style="font-family:'Inter',sans-serif;font-weight:600;">
+                    {escape(str(org))}
+                </span>
+                <span>{escape(str(branch))}</span>
+            </div>
+            <div class="kiosk-hero">
+                <p style="font-family:'JetBrains Mono',monospace;font-size:10.5px;
+                          color:var(--smoke);text-transform:uppercase;letter-spacing:0.1em;margin:0 0 10px;">
+                    WORKPLACE KIOSK
+                </p>
+                <h1>{escape(str(org))}</h1>
+                <p style="font-size:13.5px;color:var(--ink-2);margin:4px 0;">
+                    {escape(str(branch))}
+                </p>
+                <div class="kiosk-branch">Branch Manager: {escape(str(manager_name))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        st.write("")
+        col_g, col_s = st.columns(2)
+        with col_g:
+            st.markdown('<div class="kiosk-btn-wrap">', unsafe_allow_html=True)
+            if st.button("Guest Experience\n\nRate our service", key="home_btn_guest", use_container_width=True):
+                st.session_state["kiosk_view"] = "guest"
+                refresh()
+            st.markdown('</div>', unsafe_allow_html=True)
 
-        if home_kiosk_button("Guest Experience", key="home_btn_guest"):
-            st.session_state["kiosk_view"] = "guest"
-            refresh()
-
-        st.write("")
-
-        if home_kiosk_button("Staff Check In", key="home_btn_staff"):
-            st.session_state["kiosk_view"] = "staff"
-            refresh()
+        with col_s:
+            st.markdown('<div class="kiosk-btn-primary-wrap">', unsafe_allow_html=True)
+            if st.button("Staff Check In\n\nClock in or out", key="home_btn_staff", use_container_width=True):
+                st.session_state["kiosk_view"] = "staff"
+                refresh()
+            st.markdown('</div>', unsafe_allow_html=True)
 
     # ==============================================================
     # GUEST EXPERIENCE
     # ==============================================================
     elif kiosk_view == "guest":
-        render_kiosk_hero(
-            org,
-            "Guest Experience",
-            "",
+        st.markdown(
+            f"""
+            <div class="kiosk-bar">
+                <span style="font-family:'Inter',sans-serif;font-weight:600;">{escape(str(org))}</span>
+                <span>Guest Experience</span>
+            </div>
+            <div class="kiosk-hero">
+                <h1>Guest Experience</h1>
+                <p>Rate the service and leave feedback. Thank you for visiting.</p>
+                <div class="kiosk-branch">{escape(str(branch))}</div>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
 
-        if compact_kiosk_button("← Back", key="guest_back"):
+        st.markdown('<div class="btn-ghost-wrap">', unsafe_allow_html=True)
+        if st.button("← Back", key="guest_back"):
             st.session_state["kiosk_view"] = "home"
             refresh()
+        st.markdown('</div>', unsafe_allow_html=True)
 
         feedback_targets = _safe_read(
             conn,
@@ -743,20 +690,37 @@ def kiosk_dashboard():
     # STAFF CHECK IN
     # ==============================================================
     elif kiosk_view == "staff":
-        render_kiosk_hero(
-            org,
-            "Staff Check In",
-            "",
+        st.markdown(
+            f"""
+            <div class="kiosk-bar">
+                <span style="font-family:'Inter',sans-serif;font-weight:600;">{escape(str(org))}</span>
+                <span>Staff Check In</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
         )
-        st.divider()
 
         if "kiosk_user" not in st.session_state:
-            if compact_kiosk_button("← Back", key="staff_back"):
+            # Staff list / PIN entry screen
+            st.markdown(
+                f"""
+                <div class="kiosk-hero">
+                    <h1>Staff Check In</h1>
+                    <p>Select your name and enter your PIN to clock in or out.</p>
+                    <div class="kiosk-branch">{escape(str(branch))}</div>
+                </div>
+                """,
+                unsafe_allow_html=True,
+            )
+
+            st.markdown('<div class="btn-ghost-wrap">', unsafe_allow_html=True)
+            if st.button("← Back", key="staff_back"):
                 clear_kiosk_photo_state()
                 clear_kiosk_pin_input()
                 clear_kiosk_staff_transient_state()
                 st.session_state["kiosk_view"] = "home"
                 refresh()
+            st.markdown('</div>', unsafe_allow_html=True)
 
             users = _safe_read(conn, """
                 SELECT username FROM users
@@ -764,17 +728,21 @@ def kiosk_dashboard():
             """, params=(branch, org))
 
             if users.empty:
-                st.error(f"❌ No active staff found in '{branch}'")
+                render_note(f"No active staff found in '{branch}'.", kind="err", pin="!")
                 return
 
-            selected_user = st.selectbox("Select Your Name", users["username"], key="kiosk_selected_user")
+            st.markdown('<span class="field-label">Select your name</span>', unsafe_allow_html=True)
+            selected_user = st.selectbox("Select Your Name", users["username"],
+                                         key="kiosk_selected_user", label_visibility="collapsed")
 
-            pin = st.text_input("Enter PIN (admin can use password)", type="password", key="kiosk_pin_input")
+            st.markdown('<span class="field-label">Enter your PIN</span>', unsafe_allow_html=True)
+            pin = st.text_input("Enter PIN", type="password", key="kiosk_pin_input", label_visibility="collapsed")
 
-            if compact_kiosk_button("🔐 Verify & Continue", key="kiosk_verify_continue"):
+            st.markdown('<div class="kiosk-btn-primary-wrap">', unsafe_allow_html=True)
+            if st.button("Verify & Continue →", key="kiosk_verify_continue", use_container_width=True):
                 clear_kiosk_pin_input()
                 if not pin:
-                    st.warning("Please enter your PIN or password.")
+                    render_note("Please enter your PIN or password.", kind="err", pin="!")
                     return
                 check = _safe_read(
                     conn,
@@ -782,7 +750,7 @@ def kiosk_dashboard():
                     params=(selected_user, branch, org),
                 )
                 if check.empty:
-                    st.error("User not found in this branch")
+                    render_note("User not found in this branch.", kind="err", pin="!")
                     return
                 db_pin = str(check.iloc[0]["pin"]).strip()
                 db_password = str(check.iloc[0].get("password", "") or "").strip()
@@ -794,13 +762,14 @@ def kiosk_dashboard():
                 allow_password_login = role_value in admin_roles
 
                 if not (pin_matches or (allow_password_login and password_matches)):
-                    st.error("❌ Invalid PIN or password")
+                    render_note("Invalid PIN or password. Please try again.", kind="err", pin="!")
                     return
                 st.session_state.kiosk_user = selected_user
                 st.session_state.kiosk_user_role = role_value
                 clear_kiosk_photo_state()
-                st.success("✅ Verified")
+                render_note(f"{selected_user} verified. Loading clock-in screen…", kind="ok", pin="✓")
                 refresh()
+            st.markdown('</div>', unsafe_allow_html=True)
 
         else:
             user = st.session_state.kiosk_user
@@ -815,10 +784,11 @@ def kiosk_dashboard():
                 st.session_state.kiosk_user_role = user_role
             is_admin_user = user_role in {"admin", "superadmin", "super_admin", "master", "owner"}
 
+            # Verified header
+            role_badge = "Admin" if is_admin_user else "Employee"
+            render_note(f"Verified: <b>{escape(str(user))}</b> · {role_badge}", kind="ok", pin="✓")
+
             col_user, col_next = st.columns([3, 1])
-            with col_user:
-                role_badge = "Admin" if is_admin_user else "Employee"
-                st.success(f"✅ {user} ({role_badge})")
             with col_next:
                 if st.button("Next User", use_container_width=True):
                     st.session_state.pop("kiosk_user", None)

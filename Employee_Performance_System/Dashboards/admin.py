@@ -4,7 +4,16 @@ import time as pytime
 from datetime import datetime, date, time, timedelta
 from urllib.parse import quote
 from database.db import cached_read_sql, get_connection, get_hr_config, get_kpi_ai_config, hash_password, verify_password, log_action, is_recent_duplicate_message, get_phone_uniqueness_error
-from Dashboards.ui_responsive import apply_responsive_ui, render_dashboard_banner
+from Dashboards.ui_responsive import (
+    apply_responsive_ui,
+    inject_global_css,
+    render_dashboard_banner,
+    render_topbar,
+    render_note,
+    render_sidebar_nav,
+    render_stat_card,
+    render_subtabs,
+)
 try:
     from Dashboards.ui_responsive import is_mobile_device
 except Exception:
@@ -195,44 +204,7 @@ def apply_date_range(df, col, range_sel, start_date, end_date):
 
 
 def admin_dashboard():
-    apply_responsive_ui("default")
-
-    st.markdown(
-        """
-        <style>
-        /* Keep dropdown menus readable even when browser/theme applies dark surfaces. */
-        div[data-baseweb="popover"],
-        div[data-baseweb="popover"] ul,
-        div[role="listbox"],
-        div[role="option"] {
-            background: #ffffff !important;
-            color: #111827 !important;
-            border-color: rgba(15, 23, 42, 0.12) !important;
-        }
-
-        div[role="option"][aria-selected="true"] {
-            background: rgba(0, 113, 227, 0.14) !important;
-            color: #0b4f9c !important;
-        }
-
-        /* Make kiosk links in st.code easy to read on light admin screens. */
-        [data-testid="stCodeBlock"] {
-            background: #f8fafc !important;
-            border: 1px solid rgba(15, 23, 42, 0.12) !important;
-            border-radius: 12px !important;
-        }
-
-        [data-testid="stCodeBlock"] pre,
-        [data-testid="stCodeBlock"] code,
-        .stCodeBlock pre,
-        .stCodeBlock code {
-            background: #f8fafc !important;
-            color: #0f172a !important;
-        }
-        </style>
-        """,
-        unsafe_allow_html=True,
-    )
+    inject_global_css()
 
     conn = get_connection()
     username = st.session_state.get("username")
@@ -291,17 +263,7 @@ def admin_dashboard():
     hr_handles_discipline = hr_mode_enabled and bool(int(hr_config.get("hr_handles_discipline", 1) or 0))
     hr_handles_performance = hr_mode_enabled and bool(int(hr_config.get("hr_handles_performance", 1) or 0))
 
-    st.title("Admin Dashboard")
-    render_dashboard_banner(
-        "Branch leadership",
-        f"{org}, {admin_branch} Management",
-        "Monitor staff, attendance, leaves, alerts, ratings, and branch operations from one clean workspace.",
-        pills=[
-            f"Manager: {username}",           
-            f"Hours {work_start.strftime('%H:%M')} - {work_end.strftime('%H:%M')}",
-        ],
-    )
-    st.caption(f"Manager: {username} | Branch: {admin_branch} | Organization: {org}")
+    is_mobile = is_mobile_device()
     show_flash_message()
 
     if hr_mode_enabled:
@@ -313,73 +275,52 @@ def admin_dashboard():
         if hr_handles_performance:
             delegated.append("performance governance")
         if delegated:
-            st.info("HR mode is ON. HR now manages " + ", ".join(delegated) + ", while branch admin stays focused on daily operations and attendance.")
+            render_note(
+                "HR mode is ON. HR now manages " + ", ".join(delegated) + ".",
+                kind="info", pin="i",
+            )
 
-    is_mobile = is_mobile_device()
+    # ── Build nav items (HR-config-aware) ─────────────────────────────────
+    ALL_MENU_ITEMS = [
+        "Profile", "Users", "Schedules", "Attendance", "Leaves",
+        "Alerts", "Warnings", "Rate", "My Score", "KPI & Service",
+        "Analytics", "Badges", "Topics", "Messages", "Polls",
+        "Staff Check In", "Settings",
+    ]
+    menu_items = [m for m in ALL_MENU_ITEMS
+                  if not (hr_handles_discipline and m == "Warnings")
+                  and not (hr_handles_performance and m == "Rate")]
 
-    def _collapse_admin_mobile_nav():
-        if is_mobile:
-            st.session_state["admin_nav_open"] = False
+    if "admin_menu" not in st.session_state:
+        st.session_state["admin_menu"] = "Profile"
 
-    if "admin_nav_open" not in st.session_state:
-        st.session_state["admin_nav_open"] = True
+    with st.sidebar:
+        date_range = st.date_input(
+            "Select Range",
+            value=(date.today(), date.today()),
+            key="admin_sidebar_date",
+        )
+        nav_html = render_sidebar_nav(
+            f"{org} · {admin_branch}",
+            [{"header": "Admin", "items": [
+                {"label": m, "key": m} for m in menu_items
+            ]},
+             {"header": "Account", "items": [
+                {"label": username, "key": "__profile__"},
+            ]}],
+            st.session_state["admin_menu"],
+        )
+        st.markdown(nav_html, unsafe_allow_html=True)
+        cur_idx = menu_items.index(st.session_state["admin_menu"]) if st.session_state["admin_menu"] in menu_items else 0
+        nav_choice = st.radio("admin_nav", menu_items, index=cur_idx, key="admin_nav_radio", label_visibility="collapsed")
+        if nav_choice != st.session_state["admin_menu"]:
+            st.session_state["admin_menu"] = nav_choice
+            st.rerun()
+
+    menu = st.session_state["admin_menu"]
 
     def nav_selectbox(label, options, key, **kwargs):
-        if is_mobile:
-            return st.selectbox(label, options, key=key, **kwargs)
-        with st.sidebar:
-            return st.selectbox(label, options, key=key, **kwargs)
-
-    menu_items = [
-        "Profile",
-        "Users",
-        "Schedules",
-        "Attendance",
-        "Leaves",
-        "Alerts",
-        "Warnings",
-        "Rate",
-        "My Score",
-        "KPI & Service",
-        "Analytics",
-        "Badges",
-        "Topics",
-        "Messages",
-        "Polls",
-        "Staff Check In",
-        "Settings",
-    ]
-    if hr_handles_discipline:
-        menu_items = [item for item in menu_items if item != "Warnings"]
-    if hr_handles_performance:
-        menu_items = [item for item in menu_items if item != "Rate"]
-
-    if is_mobile:
-        if st.button("Change Menu / Filter", key="admin_reopen_nav", use_container_width=True):
-            st.session_state["admin_nav_open"] = True
-            st.rerun()
-        with st.expander("Navigation and Filter", expanded=bool(st.session_state.get("admin_nav_open", True))):
-            date_range = st.date_input(
-                "Select Range",
-                value=(date.today(), date.today()),
-                key="admin_sidebar_date",
-                on_change=_collapse_admin_mobile_nav,
-            )
-            menu = st.radio(
-                "Menu",
-                menu_items,
-                key="admin_menu",
-                on_change=_collapse_admin_mobile_nav,
-            )
-    else:
-        with st.sidebar:
-            st.markdown("### Navigation")
-            date_range = st.date_input(
-                "Select Range",
-                value=(date.today(), date.today()),
-                key="admin_sidebar_date",
-            )
-            menu = st.radio("Menu", menu_items, key="admin_menu")
+        return st.selectbox(label, options, key=key, **kwargs)
 
     if isinstance(date_range, tuple) and len(date_range) == 2:
         start_date, end_date = date_range
@@ -396,7 +337,16 @@ def admin_dashboard():
     # PROFILE
     # =====================================================
     if menu == "Profile":
-        st.subheader("Profile")
+        render_topbar(
+            ["Admin", "Profile"],
+            chips=[(f"Branch: {admin_branch}", False), ("admin", True)],
+        )
+        st.markdown('<div class="h-row"><h3>Branch profile</h3></div>', unsafe_allow_html=True)
+        col_ep, col_eb = st.columns([5, 1])
+        with col_eb:
+            st.markdown('<div class="btn-primary-wrap">', unsafe_allow_html=True)
+            st.button("Edit profile", key="admin_edit_profile_btn")
+            st.markdown('</div>', unsafe_allow_html=True)
 
         branch_users = safe_read(
             """
@@ -431,17 +381,16 @@ def admin_dashboard():
         pending_lateness_count = int(pending_lateness_requests.iloc[0]["cnt"]) if not pending_lateness_requests.empty else 0
 
         c1, c2, c3, c4 = st.columns(4)
-        c1.metric("Branch", admin_branch)
-        c2.metric("Total Users", len(branch_users))
-        c3.metric("Employees", int((branch_users["role"] == "employee").sum()) if not branch_users.empty else 0)
-        c4.metric("Pending Early Requests", pending_count)
-
-        lc1, lc2 = st.columns(2)
-        lc1.metric("Pending Lateness Requests", pending_lateness_count)
-        lc2.metric("Pending Total", pending_count + pending_lateness_count)
+        c1.markdown(render_stat_card("Branch", admin_branch), unsafe_allow_html=True)
+        c2.markdown(render_stat_card("Headcount", len(branch_users)), unsafe_allow_html=True)
+        c3.markdown(render_stat_card("Employees", int((branch_users["role"] == "employee").sum()) if not branch_users.empty else 0), unsafe_allow_html=True)
+        c4.markdown(render_stat_card("Pending Requests", pending_count + pending_lateness_count), unsafe_allow_html=True)
 
         if pending_count > 0 or pending_lateness_count > 0:
-            st.warning("There are pending early clock-out or lateness requests waiting for your review in Attendance.")
+            render_note(
+                f"There are {pending_count + pending_lateness_count} pending requests waiting for your review in <b>Attendance</b>.",
+                kind="info", pin="i",
+            )
 
         st.markdown("### Branch Team")
         if branch_users.empty:
@@ -812,8 +761,30 @@ def admin_dashboard():
     # ATTENDANCE
     # =====================================================
     elif menu == "Attendance":
-        st.subheader("Attendance")
-        st.caption("Users clock in/out from kiosk. This view monitors lateness, absentism, and early clock-outs.")
+        render_topbar(
+            ["Admin", "Attendance"],
+            chips=[("Select Range: This week", False)],
+        )
+        st.markdown('<div class="h-row"><h3>Attendance</h3></div>', unsafe_allow_html=True)
+
+        # Filter toggle: All Staff / Only Late Staff
+        if "admin_att_filter" not in st.session_state:
+            st.session_state["admin_att_filter"] = "all"
+        fc1, fc2, fc3 = st.columns([2, 2, 4])
+        with fc1:
+            if st.button("Show All Staff", key="admin_att_all",
+                         use_container_width=True,
+                         type="primary" if st.session_state["admin_att_filter"] == "all" else "secondary"):
+                st.session_state["admin_att_filter"] = "all"
+                st.rerun()
+        with fc2:
+            if st.button("Show Only Late Staff", key="admin_att_late",
+                         use_container_width=True,
+                         type="primary" if st.session_state["admin_att_filter"] == "late" else "secondary"):
+                st.session_state["admin_att_filter"] = "late"
+                st.rerun()
+        with fc3:
+            st.download_button("Export CSV", data="", file_name="attendance.csv", disabled=True, key="admin_att_export")
 
         range_sel = nav_selectbox(
             "Range",
@@ -973,22 +944,14 @@ def admin_dashboard():
             no_clock_out_count = len(no_clock_out_df)
 
             c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Records", len(filtered))
-            c2.metric("Late", late_count)
-            c3.metric("Early Clock Out", early_count)
-            c4.metric("Absent Today", absent_count)
+            c1.markdown(render_stat_card("Records", len(filtered)), unsafe_allow_html=True)
+            c2.markdown(render_stat_card("Late Today", late_count), unsafe_allow_html=True)
+            c3.markdown(render_stat_card("No-shows", absent_count), unsafe_allow_html=True)
+            c4.markdown(render_stat_card("Pending Approvals", pending_requests_total + pending_lateness_requests_total), unsafe_allow_html=True)
 
             nco1, nco2 = st.columns(2)
-            nco1.metric("Clocked In, No Clock Out", no_clock_out_count)
-            nco2.metric("Full Clock-Out Logs", full_clock_count)
-
-            pcol1, pcol2 = st.columns(2)
-            pcol1.metric("Pending Early Requests", pending_requests_total)
-            pcol2.metric("Pending Lateness Requests", pending_lateness_requests_total)
-
-            pcol3, pcol4 = st.columns(2)
-            pcol3.metric("Early Approvals Logged", len(approvals_df) if not approvals_df.empty else 0)
-            pcol4.metric("Lateness Approvals Logged", len(lateness_approvals_df) if not lateness_approvals_df.empty else 0)
+            nco1.markdown(render_stat_card("Early Clock Out", early_count), unsafe_allow_html=True)
+            nco2.markdown(render_stat_card("No Clock Out", no_clock_out_count), unsafe_allow_html=True)
 
             branch_fines_df = compute_lateness_fines(conn, org, branch=admin_branch)
             branch_fine_history_df = compute_lateness_fine_history(conn, org, branch=admin_branch, months=6)
