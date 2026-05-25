@@ -3043,4 +3043,4 @@ def master_admin_dashboard():
 
 #If you later want to disable it again for safety, set:Reset the whole System (All Data)
 #TEAM_AI_ALLOW_FULL_RESET=0 in environment, or
-#revert that fallback line back to "0".
+#revert that fallback line back to. "0".
